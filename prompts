@@ -1,0 +1,16 @@
+This file is just scratchpad for writing prompts and other nodes.
+Do not take it in account if you are an AI agen.
+
+
+I need to create a project that's a guest program for verifying and ethereum block in C++ and using ZisK.
+
+In order to do so, the repo needs to have two pieces. One part is a program in rust that talks with a rech client via RPC to collect information of a block and writes an input binary file.
+
+The second part is a C++ program that's the actual ZISK guest program that takes as private input the previous generated file, and generates 2 public outputs: the previousBlockHash and the nextBlockHash
+
+Lets create the basic architecture for the project.
+
+---
+
+Ok, lets focus now in just getting the affected fields of the state.
+We should have a list of accounts that are read, accounts that are written, contracts that are ether read or write and storage values that are read and storage values that are writen. We also need the intermediary nodes in the SMT. Lets just get this info via RPC and just print it.
