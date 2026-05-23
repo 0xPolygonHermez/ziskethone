@@ -12,5 +12,90 @@ Lets create the basic architecture for the project.
 
 ---
 
-Ok, lets focus now in just getting the affected fields of the state.
-We should have a list of accounts that are read, accounts that are written, contracts that are ether read or write and storage values that are read and storage values that are writen. We also need the intermediary nodes in the SMT. Lets just get this info via RPC and just print it.
+Ok, lets focus now focus in just getting the affected fields of the state.
+We should have a list of accounts that are read, accounts that are written, contracts that are ether read or write and storage values that are read and storage values that are writen. We also need the intermediary nodes in the SMT. Lets just get this info via RPC and just print them.
+
+---
+
+Lets go now to the cpp-guest part.
+
+Lets create a class named StateDB.
+
+The constructor must have one parameter thats's a pointer to stream and call this 3 functions with the current pinter
+    parseAccounts
+    parseStorageValues
+    parseContracts
+
+The class must implement evmc::Host that will be used by evmone
+
+It also must implement this two publi functions
+
+calculateOldStateRoot
+calculateNewStateRoot
+
+Both of them have a parameter that points to the stream.
+
+The stream is just a pointer that is incremented. The pointer should be always aligned, so the increments must be multiples of 8.
+
+Lets just create the structure for this class.
+
+--
+
+
+Lets talk now a bit about the main of the cpp-guest
+
+Main should do:
+
+* Read the input file. It will be the stream
+* Create a ZiskStateDB class with the stream from the input file.
+* parse and execute the preBlock from the strean and using evmone
+* parse and execute the transactions
+* parse and execute the postBlock
+
+* call calculateOldStateRoot and check it matches with the stateRoot of the previous block.
+* call calculateNewStateRoot and check it matches with the stateRoot of the current block.
+
+* Parse, check and Emit consensusBlockHash public output
+
+Create the structure for this
+---
+
+We need to create a journal database class to handle the reverts.
+The idea is that every time there is a modification of the state, we add this modification to a stack.
+Modifications can be of:
+nonce, balance, codehash, storage
+I need to keep the account, position, oldValue
+In the stack we also keep checkpoints.
+
+We then have the public functions to log the writes, to set the checkpoints and to rollback until a checkpoint.
+
+Lets just create this module
+
+--
+
+Lests tagle now calculateOldStateRoot
+
+You start reading the stream. The first u64 is a instruction and can be:
+
+* a Hash  -> Follows a hash
+* an extensionHash -> Follows an extension, extension size and a hash
+* empty
+* A Leaf (account if main trea and storageValue if storage tree)
+* Another node -> Follows recursivelly 16 elements (each can be a Hash, extensionHash, Leaf, node)
+
+If it's a node, you recursivelly call a function calculateOldStateRoot_node that returns one of the other 4 options.
+
+The way to process is very logical:
+
+If all empty, return empty
+If only one leaf, return the leaf
+If only one hash, return extensionHash with one extension
+if only one extensionHash, retur nextensionHash adding one extension element
+
+otherwise, return the hash by
+calling packHash for each child that's leaf or extensionHash and compute the patricia tree with 16 nodes
+
+At the root call again packHash if it's an extensionHash or a leaf.
+Return the hash if it's the hash
+Return the hash of an Empty tree if it's empty.
+

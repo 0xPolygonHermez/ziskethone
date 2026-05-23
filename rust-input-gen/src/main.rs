@@ -5,6 +5,7 @@ use clap::Parser;
 use tracing::info;
 
 mod binary;
+mod mpt;
 mod rpc;
 
 use binary::{BinaryWriter, SectionKind};
@@ -42,6 +43,15 @@ async fn main() -> Result<()> {
     info!(block = args.block, rpc = %args.rpc_url, "fetching block bundle");
 
     let client = RpcClient::new(&args.rpc_url);
+
+    // Probe RPC + dump state access summary (no binary write yet for these).
+    let _chain_id = client.chain_id().await?;
+    let witness = client.fetch_execution_witness(args.block).await?;
+    witness.print_summary();
+    let access = client.fetch_state_access(args.block, &witness).await?;
+    access.print_summary();
+    client.print_system_modifications(args.block, &access).await?;
+
     let bundle = client.fetch_block_bundle(args.block).await?;
 
     let mut w = BinaryWriter::new(bundle.chain_id, bundle.block_number);

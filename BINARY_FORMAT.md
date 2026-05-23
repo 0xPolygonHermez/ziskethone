@@ -37,7 +37,7 @@ consumed by the ZisK C++ guest program (`cpp-guest`).
 
 | Offset | Size | Field            | Description                              |
 |-------:|-----:|------------------|------------------------------------------|
-|      0 |    4 | `magic`          | ASCII `"ZEB0"` (Zisk Eth Block, v0)      |
+|      0 |    4 | `magic`          | ASCII `"ZEG0"` (Zisk Eth Guest, v0)      |
 |      4 |    4 | `version`        | `u32` — format version (currently `0`)   |
 |      8 |    4 | `section_count`  | `u32` — number of entries in table       |
 |     12 |    4 | `flags`          | `u32` — reserved, must be `0`            |

@@ -7,7 +7,7 @@ use std::io::{Cursor, Write};
 use anyhow::Result;
 use byteorder::{LittleEndian, WriteBytesExt};
 
-pub const MAGIC: &[u8; 4] = b"ZEB0";
+pub const MAGIC: &[u8; 4] = b"ZEG0";
 pub const VERSION: u32 = 0;
 
 pub const FILE_HEADER_SIZE: usize = 32;

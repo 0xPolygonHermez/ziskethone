@@ -8,9 +8,9 @@
 
 #include <cstdint>
 
-namespace zeb {
+namespace zeg {
 
-constexpr uint32_t kMagic   = 0x3042455Au; // "ZEB0" little-endian
+constexpr uint32_t kMagic   = 0x3047455Au; // "ZEG0" little-endian
 constexpr uint32_t kVersion = 0;
 
 enum class SectionKind : uint32_t {
@@ -27,7 +27,7 @@ enum class SectionKind : uint32_t {
 #pragma pack(push, 1)
 
 struct FileHeader {
-    uint8_t  magic[4];     // "ZEB0"
+    uint8_t  magic[4];     // "ZEG0"
     uint32_t version;
     uint32_t section_count;
     uint32_t flags;
@@ -46,4 +46,4 @@ static_assert(sizeof(SectionEntry) == 16, "SectionEntry must be 16 bytes");
 
 #pragma pack(pop)
 
-} // namespace zeb
+} // namespace zeg
