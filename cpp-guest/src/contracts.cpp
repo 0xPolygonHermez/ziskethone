@@ -9,7 +9,8 @@
 
 namespace zeg {
 
-Contracts::Contracts(uint64_t count, const uint8_t*& cursor) {
+Contracts::Contracts(const uint8_t*& cursor) {
+    const uint64_t count = read_u64_le(cursor);
     contracts_.reserve(count);
     index_.reserve(count);
     for (uint64_t i = 0; i < count; ++i) {

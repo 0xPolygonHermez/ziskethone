@@ -11,7 +11,14 @@
 
 #include <evmc/evmc.hpp>
 
+#include "zeg/accounts.hpp"
+#include "zeg/consensus_info.hpp"
+#include "zeg/contracts.hpp"
 #include "zeg/fatal.hpp"
+#include "zeg/previous_blocks.hpp"
+#include "zeg/state_root.hpp"
+#include "zeg/storages.hpp"
+#include "zeg/transactions.hpp"
 #include "zeg/zisk_state_db.hpp"
 
 namespace {
@@ -24,21 +31,6 @@ const uint8_t* read_input_stream();
 
 // Emit a 32-byte value to ZisK as a public output.
 void emit_public_output(const evmc::bytes32& value);
-
-// ===== Phase handlers =====
-//
-// Each handler parses a self-delimited chunk from the stream and applies it
-// to `state` using evmone. They advance `cursor` past the consumed bytes
-// (multiple of 8) so the caller can chain them.
-
-// Pre-block system calls: EIP-4788 (beacon roots), EIP-2935 (block hashes).
-void execute_pre_block(const uint8_t*& cursor, zeg::ZiskStateDB& state);
-
-// Re-execute every user transaction in the block.
-void execute_transactions(const uint8_t*& cursor, zeg::ZiskStateDB& state);
-
-// Post-block: withdrawal balance credits + EIP-7002 / EIP-7251 system calls.
-void execute_post_block(const uint8_t*& cursor, zeg::ZiskStateDB& state);
 
 // ===== Header / consensus hash handling =====
 
@@ -58,31 +50,61 @@ int main() {
     // 1. Read the entire input stream.
     const uint8_t* cursor = read_input_stream();
 
-    // 2. Construct the state DB. The constructor parses accounts, storage
-    //    values, contracts, and previous-block headers, advancing `cursor`
-    //    past every byte consumed.
-    zeg::ZiskStateDB state(cursor);
+    // 2. Parse the six input-stream collections at main level. Stream-
+    //    order matters and must match the prover's write order:
+    //    contracts → accounts → storages → previous_blocks →
+    //    consensus_info → transactions. Each constructor consumes its
+    //    section and advances `cursor`.
+    zeg::Contracts      contracts       (cursor);
+    zeg::Accounts       accounts        (cursor);
+    zeg::Storages       storages        (cursor);
+    zeg::PreviousBlocks previous_blocks (cursor);
+    zeg::ConsensusInfo  consensus       (cursor);
+    zeg::Transactions   transactions    (cursor);
 
-    // 3. Apply each block-execution phase in protocol order.
-    execute_pre_block(cursor, state);
-    execute_transactions(cursor, state);
-    execute_post_block(cursor, state);
+    // 3. Anchor the ancestor chain to the block being computed.
+    //    PreviousBlocks already verifies block[i].parent_hash ==
+    //    hash(block[i+1]) internally; we still need the chain's tip
+    //    (block[0]) to match the current block's parent_hash. Skipped
+    //    when the prover supplied no ancestors.
+    if (!previous_blocks.empty() &&
+        consensus.parent_hash() != previous_blocks.hash(0)) {
+        zeg::fatal("PreviousBlocks: hash(block[0]) != consensus.parent_hash()");
+    }
 
-    // 4. Verify the pre-execution state root against the parent header.
+    // 4. Construct the state DB. ZiskStateDB borrows the five
+    //    collections by reference for the rest of the run; Host
+    //    callbacks pass data through them (or fatal-stub for overrides
+    //    that need infrastructure not yet built).
+    zeg::ZiskStateDB state(accounts, consensus, contracts, previous_blocks, storages);
+
+    // 5. Run the whole block: pre-block system calls, every tx, then
+    //    post-block side-effects. `state` owns the evmone VM and
+    //    journals every state write so a revert at any depth rolls
+    //    back cleanly.
+    state.execute_block(transactions);
+
+    // 6. Verify the pre-execution state root against the parent header.
+    //    Constructing the StateRoot walks the trie once with the
+    //    original values, caches the result, and records the per-NodeR
+    //    cache entries the new-root pass will reuse. `cursor` is
+    //    advanced past every byte consumed.
     const evmc::bytes32 expected_old = parse_expected_old_state_root(cursor);
-    const evmc::bytes32 computed_old = state.calculateOldStateRoot(cursor);
-    if (computed_old != expected_old) {
+    zeg::StateRoot state_root(cursor, accounts, storages);
+    if (state_root.old_state_root() != expected_old) {
         zeg::fatal("pre-execution state root mismatch");
     }
 
-    // 5. Verify the post-execution state root against the current header.
+    // 7. Verify the post-execution state root against the current
+    //    header. calculate_new_state_root reuses the cache populated
+    //    above — it does not consume from `cursor`.
     const evmc::bytes32 expected_new = parse_expected_new_state_root(cursor);
-    const evmc::bytes32 computed_new = state.calculateNewStateRoot(cursor);
+    const evmc::bytes32 computed_new = state_root.calculate_new_state_root();
     if (computed_new != expected_new) {
         zeg::fatal("post-execution state root mismatch");
     }
 
-    // 6. Parse and verify the consensus block hash, then emit it as the
+    // 8. Parse and verify the consensus block hash, then emit it as the
     //    sole public output of this guest run.
     const evmc::bytes32 consensus_hash = parse_and_check_consensus_block_hash(cursor);
     emit_public_output(consensus_hash);
@@ -101,19 +123,6 @@ const uint8_t* read_input_stream() {
 
 void emit_public_output(const evmc::bytes32&) {
     // TODO: replace with the ZisK public-output API.
-}
-
-void execute_pre_block(const uint8_t*&, zeg::ZiskStateDB&) {
-    // TODO: parse the pre-block descriptor from the stream and use evmone
-    // (via state as the Host) to run the EIP-4788 and EIP-2935 system calls.
-}
-
-void execute_transactions(const uint8_t*&, zeg::ZiskStateDB&) {
-    // TODO: for each tx in the stream, decode + execute under evmone.
-}
-
-void execute_post_block(const uint8_t*&, zeg::ZiskStateDB&) {
-    // TODO: apply withdrawal balance credits, then EIP-7002 / EIP-7251.
 }
 
 evmc::bytes32 parse_expected_old_state_root(const uint8_t*&) {

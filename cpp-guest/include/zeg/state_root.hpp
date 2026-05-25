@@ -1,15 +1,21 @@
 // Merkle Patricia Trie root computation for the ZisK Ethereum guest.
 //
-// Reads a stream-encoded representation of the trie (see Op in the .cpp)
-// and returns the root hash. The stream encoding lets the prover skip
-// over subtrees by sending only their precomputed root hash, and lets
-// the verifier defer per-leaf hashing until a sibling forces it. The
-// same recursive routine handles the state trie and per-account storage
+// `StateRoot` walks the stream-encoded trie twice. The first walk
+// (driven from the constructor) reads the original stream values,
+// produces the pre-execution root, and caches the intermediate result
+// of every NodeR subtree found directly under a NodeRW parent. The
+// second walk (calculate_new_state_root) reads the current values
+// (originals + EVM modifications) and reuses the cached NodeR results
+// so unchanged read-only regions don't get re-hashed. The same
+// recursive routine handles the state trie and per-account storage
 // tries (a state-trie leaf carries the storage subtree inline).
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <variant>
+#include <vector>
 
 #include <evmc/evmc.hpp>
 
@@ -18,16 +24,66 @@ namespace zeg {
 class Accounts;
 class Storages;
 
-// Walk the stream-encoded trie starting at `cursor` and return its root
-// hash. `cursor` is advanced past every byte consumed. `accounts` and
-// `storages` supply the per-leaf payloads (addresses / positions /
-// account fields / slot values); whether a leaf hash is computed from
-// the "original" or "current" values is decided by the dirty-aware
-// accessors on those classes, so the same function computes both the
-// pre-execution and post-execution roots.
-evmc::bytes32 calculate_state_root(
-    const uint8_t*& cursor,
-    const Accounts& accounts,
-    const Storages& storages);
+class StateRoot {
+public:
+    // ----- internal node-result types ---------------------------------------
+    //
+    // These are exposed here only because StateRoot stores a
+    // `std::vector<CacheEntry>` as a member, and the compiler needs the
+    // complete type of CacheEntry (and transitively NodeR) to lay out
+    // the class. They are implementation detail of state_root.cpp —
+    // treat as opaque from outside the implementation TU.
+
+    struct EmptyR {};
+    struct HashR  { evmc::bytes32 hash; };
+    struct ExtR   {
+        std::vector<uint8_t> ext_nibbles;  // one nibble per byte
+        evmc::bytes32        hash;
+    };
+    struct AccountLeafR {
+        std::vector<uint8_t> path_nibbles;
+        std::size_t          account_idx;
+        evmc::bytes32        storage_root;
+    };
+    struct StorageLeafR {
+        std::vector<uint8_t> path_nibbles;
+        std::size_t          storage_idx;
+    };
+
+    using NodeR = std::variant<EmptyR, HashR, ExtR, AccountLeafR, StorageLeafR>;
+
+    struct CacheEntry {
+        NodeR       result;
+        std::size_t bytes_consumed;
+    };
+
+    // ----- public API -------------------------------------------------------
+
+    // Walks the stream once with the original values, computes and
+    // caches the old state root, and records one cache entry per NodeR
+    // subtree found directly under a NodeRW parent. `cursor` is
+    // advanced past every byte consumed during this walk.
+    StateRoot(const uint8_t*& cursor,
+              const Accounts& accounts,
+              const Storages& storages);
+
+    // O(1) — the value computed in the constructor.
+    const evmc::bytes32& old_state_root() const noexcept { return old_root_; }
+
+    // Re-walks from the remembered start cursor with the current
+    // values, substituting the cached results for every
+    // NodeR-under-NodeRW subtree. Skips path-prefix / owner /
+    // NodeRW-under-NodeR checks already validated during the old-root
+    // pass.
+    evmc::bytes32 calculate_new_state_root();
+
+private:
+    const Accounts& accounts_;
+    const Storages& storages_;
+    const uint8_t*  start_cursor_ = nullptr;
+    evmc::bytes32   old_root_{};
+    std::vector<CacheEntry> cache_;
+    std::size_t cache_read_pos_ = 0;
+};
 
 } // namespace zeg

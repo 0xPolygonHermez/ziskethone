@@ -1,17 +1,16 @@
 #include "zeg/state_root.hpp"
 
 #include <array>
+#include <cstdint>
 #include <cstring>
 #include <type_traits>
 #include <utility>
-#include <variant>
 #include <vector>
-
-#include <evmone_precompiles/keccak.hpp>
 
 #include "zeg/accounts.hpp"
 #include "zeg/fatal.hpp"
 #include "zeg/hex_prefix.hpp"
+#include "zeg/keccak.hpp"
 #include "zeg/rlp.hpp"
 #include "zeg/storages.hpp"
 #include "zeg/stream.hpp"
@@ -20,46 +19,51 @@ namespace zeg {
 
 namespace {
 
+// Pull the StateRoot-nested variant types into local names so the rest
+// of this TU reads exactly like before the flatten.
+using EmptyR       = StateRoot::EmptyR;
+using HashR        = StateRoot::HashR;
+using ExtR         = StateRoot::ExtR;
+using AccountLeafR = StateRoot::AccountLeafR;
+using StorageLeafR = StateRoot::StorageLeafR;
+using NodeR        = StateRoot::NodeR;
+using CacheEntry   = StateRoot::CacheEntry;
+
+// ===== enums & opcodes ======================================================
+
+// Which pass of the trie we're running: the old-root pass writes cache
+// entries and runs full validation; the new-root pass reads from the
+// cache and skips checks already done during the old-root pass.
+enum class WalkPass : uint8_t { OldRoot, NewRoot };
+
+// Which set of values the leaf-packing helpers should fetch from
+// Accounts/Storages.
+enum class ValueSet : uint8_t { Original, Current };
+
+enum class TreeKind : uint8_t { State, Storage };
+
 // Stream-encoded node opcodes (u64 each, 8-byte aligned).
+//
+// `NodeRW` and `NodeR` are two flavours of branch node:
+//   * `NodeRW` — a normal read/write branch.
+//   * `NodeR`  — a read-only branch. Every leaf in this subtree must
+//     have `is_read_only == true`, and every nested branch opcode must
+//     also be `NodeR` (checked only during the old-root pass).
 enum class Op : uint64_t {
     Empty         = 0,
     Hash          = 1,
     ExtensionHash = 2,
     Leaf          = 3,
-    Node          = 4,
+    NodeRW        = 4,
+    NodeR         = 5,
 };
-
-enum class TreeKind : uint8_t { State, Storage };
-
-// ----- result of one recursive node evaluation -----
-//
-// A Node never escapes the recursion: the reduction step always collapses
-// 16 children into one of the four other shapes (Empty / Hash / Ext / Leaf).
-
-struct EmptyR {};
-struct HashR  { evmc::bytes32 hash; };
-struct ExtR   {
-    std::vector<uint8_t> ext_nibbles;  // unpacked, one nibble per byte
-    evmc::bytes32 hash;
-};
-struct AccountLeafR {
-    std::vector<uint8_t> path_nibbles;
-    size_t        account_idx;
-    evmc::bytes32 storage_root;  // computed from the embedded storage subtree
-};
-struct StorageLeafR {
-    std::vector<uint8_t> path_nibbles;
-    size_t storage_idx;
-};
-
-using NodeR = std::variant<EmptyR, HashR, ExtR, AccountLeafR, StorageLeafR>;
 
 // Helper: construct a NodeR holding alternative `T`. We default-construct
-// the variant and then `.emplace<T>(...)` rather than relying on variant's
-// converting constructor or its `in_place_type` constructor — VS Code's
-// IntelliSense parser (a Microsoft EDG fork) does not recognise either
-// of those for our variant, even though every real compiler does. The
-// emplace member template parses cleanly in IntelliSense too.
+// the variant and then `.emplace<T>(...)` rather than relying on
+// variant's converting constructor or its `in_place_type` constructor —
+// VS Code's IntelliSense parser (a Microsoft EDG fork) does not
+// recognise either of those for our variant, even though every real
+// compiler does. The emplace member template parses cleanly there.
 template <typename T, typename... Args>
 NodeR mk_node(Args&&... args) {
     NodeR n;
@@ -67,7 +71,9 @@ NodeR mk_node(Args&&... args) {
     return n;
 }
 
-// keccak256(rlp("")) — empty-trie root. Constant from the yellow paper.
+// ===== constants ============================================================
+
+// keccak256(rlp("")) — empty-trie root.
 constexpr evmc::bytes32 kEmptyTrieRoot{{
     0x56,0xe8,0x1f,0x17,0x1b,0xcc,0x55,0xa6,
     0xff,0x83,0x45,0xe6,0x92,0xc0,0xf8,0x6e,
@@ -75,17 +81,31 @@ constexpr evmc::bytes32 kEmptyTrieRoot{{
     0x01,0x62,0x2f,0xb5,0xe3,0x63,0xb4,0x21,
 }};
 
-// ----- helpers -----
+// keccak256("") — code hash of an account with no code.
+constexpr evmc::bytes32 kEmptyCodeHash{{
+    0xc5,0xd2,0x46,0x01,0x86,0xf7,0x23,0x3c,
+    0x92,0x7e,0x7d,0xb2,0xdc,0xc7,0x03,0xc0,
+    0xe5,0x00,0xb6,0x53,0xca,0x82,0x27,0x3b,
+    0x7b,0xfa,0xd8,0x04,0x5d,0x85,0xa4,0x70,
+}};
 
-evmc::bytes32 keccak_bytes32(const uint8_t* data, size_t size) {
-    const auto digest = ethash::keccak256(data, size);
-    evmc::bytes32 h;
-    std::memcpy(h.bytes, digest.bytes, sizeof(h.bytes));
-    return h;
+// ===== helpers ==============================================================
+
+bool is_empty_account(uint64_t nonce,
+                      const evmc::uint256be& balance,
+                      const evmc::bytes32& code_hash) {
+    if (nonce != 0) return false;
+    static constexpr evmc::uint256be kZeroBalance{};
+    if (std::memcmp(&balance, &kZeroBalance, sizeof(balance)) != 0) return false;
+    if (std::memcmp(&code_hash, &kEmptyCodeHash, sizeof(code_hash)) != 0) return false;
+    return true;
 }
 
-// Convert a 32-byte hash to 64 unpacked nibbles starting from offset
-// `start_nibble`. Used to build a leaf's remaining-path at its depth.
+bool is_zero_value(const evmc::bytes32& v) {
+    static constexpr evmc::bytes32 kZero{};
+    return std::memcmp(&v, &kZero, sizeof(v)) == 0;
+}
+
 std::vector<uint8_t> nibbles_from(const evmc::bytes32& hash, size_t start_nibble) {
     std::vector<uint8_t> out;
     out.reserve(64 - start_nibble);
@@ -96,21 +116,43 @@ std::vector<uint8_t> nibbles_from(const evmc::bytes32& hash, size_t start_nibble
     return out;
 }
 
-// ----- pack* (RLP + HP + keccak) -----
+void verify_path_prefix(const std::vector<uint8_t>& walked,
+                        const evmc::bytes32& hash) {
+    for (size_t i = 0; i < walked.size(); ++i) {
+        const uint8_t b = hash.bytes[i / 2];
+        const uint8_t expected = (i % 2 == 0) ? (b >> 4) : (b & 0x0f);
+        if (walked[i] != expected) {
+            fatal("state_root: leaf hash prefix doesn't match walked path");
+        }
+    }
+}
 
-// Leaf node = [HP(path, leaf=true), value_bytes]. For the state trie the
-// value_bytes is the RLP-encoded 4-field account record.
-evmc::bytes32 pack_account_leaf(
+// ===== pack* (RLP + HP + keccak) ============================================
+//
+// Each node type has a `build_*_rlp` helper that produces the node's full
+// RLP encoding (no hashing) and a thin `pack_*` wrapper that returns its
+// keccak256. The split lets `pack_to_child_ref` apply the Yellow-Paper
+// cap function: if the node's RLP is < 32 bytes embed it inline into the
+// parent slot, otherwise reference it by its 32-byte hash.
+
+rlp::Bytes build_account_leaf_rlp(
     const std::vector<uint8_t>& path_nibbles,
     const Accounts& accounts,
     size_t account_idx,
-    const evmc::bytes32& storage_root)
+    const evmc::bytes32& storage_root,
+    ValueSet which)
 {
     using rlp::BytesView;
 
-    const uint64_t          nonce     = accounts.nonce_at    (account_idx);
-    const evmc::uint256be   balance   = accounts.balance_at  (account_idx);
-    const evmc::bytes32     code_hash = accounts.code_hash_at(account_idx);
+    const uint64_t        nonce =
+        (which == ValueSet::Original) ? accounts.nonce_orig_at(account_idx)
+                                      : accounts.nonce_at     (account_idx);
+    const evmc::uint256be balance =
+        (which == ValueSet::Original) ? accounts.balance_orig_at(account_idx)
+                                      : accounts.balance_at     (account_idx);
+    const evmc::bytes32   code_hash =
+        (which == ValueSet::Original) ? accounts.code_hash_orig_at(account_idx)
+                                      : accounts.code_hash_at     (account_idx);
 
     const auto nonce_rlp   = rlp::encode_u64(nonce);
     const auto balance_rlp = rlp::encode_u256(balance);
@@ -123,23 +165,20 @@ evmc::bytes32 pack_account_leaf(
     const auto hp_bytes = hex_prefix(path_nibbles, /*leaf=*/true);
     const auto hp_rlp   = rlp::encode(BytesView{hp_bytes});
     const auto val_rlp  = rlp::encode(BytesView{account_rlp});
-    const auto leaf_rlp = rlp::encode_list({hp_rlp, val_rlp});
-
-    return keccak_bytes32(leaf_rlp.data(), leaf_rlp.size());
+    return rlp::encode_list({hp_rlp, val_rlp});
 }
 
-// Storage leaf = [HP(path, leaf=true), RLP(slot_value)].
-evmc::bytes32 pack_storage_leaf(
+rlp::Bytes build_storage_leaf_rlp(
     const std::vector<uint8_t>& path_nibbles,
     const Storages& storages,
-    size_t storage_idx)
+    size_t storage_idx,
+    ValueSet which)
 {
     using rlp::BytesView;
 
-    const evmc::bytes32 raw = storages.value_at(storage_idx);
-    // The slot value is a 256-bit big-endian integer — RLP-encode with
-    // leading zeros trimmed. Reuse encode_u256 by treating bytes32 as
-    // uint256be (same layout).
+    const evmc::bytes32 raw =
+        (which == ValueSet::Original) ? storages.value_orig_at(storage_idx)
+                                      : storages.value_at     (storage_idx);
     evmc::uint256be as_u256;
     std::memcpy(as_u256.bytes, raw.bytes, sizeof(raw.bytes));
     const auto value_rlp = rlp::encode_u256(as_u256);
@@ -147,13 +186,10 @@ evmc::bytes32 pack_storage_leaf(
     const auto hp_bytes = hex_prefix(path_nibbles, /*leaf=*/true);
     const auto hp_rlp   = rlp::encode(BytesView{hp_bytes});
     const auto val_rlp  = rlp::encode(BytesView{value_rlp});
-    const auto leaf_rlp = rlp::encode_list({hp_rlp, val_rlp});
-
-    return keccak_bytes32(leaf_rlp.data(), leaf_rlp.size());
+    return rlp::encode_list({hp_rlp, val_rlp});
 }
 
-// Extension node = [HP(ext, leaf=false), child_hash].
-evmc::bytes32 pack_extension(
+rlp::Bytes build_extension_rlp(
     const std::vector<uint8_t>& ext_nibbles,
     const evmc::bytes32& child_hash)
 {
@@ -163,88 +199,144 @@ evmc::bytes32 pack_extension(
     const auto hp_rlp    = rlp::encode(BytesView{hp_bytes});
     const auto child_rlp = rlp::encode(BytesView{child_hash.bytes,
                                                   sizeof(child_hash.bytes)});
-    const auto ext_rlp = rlp::encode_list({hp_rlp, child_rlp});
-
-    return keccak_bytes32(ext_rlp.data(), ext_rlp.size());
+    return rlp::encode_list({hp_rlp, child_rlp});
 }
 
-// Branch node = [c0, c1, …, c15, ""] — 17 elements, last is the unused
-// branch-value slot (always empty in modern Ethereum tries).
-// An all-zero child encodes as the RLP empty string; otherwise as a
-// 32-byte hash string.
-evmc::bytes32 pack_branch(const std::array<evmc::bytes32, 16>& children) {
+evmc::bytes32 pack_account_leaf(
+    const std::vector<uint8_t>& path_nibbles,
+    const Accounts& accounts,
+    size_t account_idx,
+    const evmc::bytes32& storage_root,
+    ValueSet which)
+{
+    const auto rlp = build_account_leaf_rlp(path_nibbles, accounts, account_idx,
+                                            storage_root, which);
+    return keccak256_bytes32(rlp.data(), rlp.size());
+}
+
+evmc::bytes32 pack_storage_leaf(
+    const std::vector<uint8_t>& path_nibbles,
+    const Storages& storages,
+    size_t storage_idx,
+    ValueSet which)
+{
+    const auto rlp = build_storage_leaf_rlp(path_nibbles, storages, storage_idx, which);
+    return keccak256_bytes32(rlp.data(), rlp.size());
+}
+
+evmc::bytes32 pack_extension(
+    const std::vector<uint8_t>& ext_nibbles,
+    const evmc::bytes32& child_hash)
+{
+    const auto rlp = build_extension_rlp(ext_nibbles, child_hash);
+    return keccak256_bytes32(rlp.data(), rlp.size());
+}
+
+// Return the bytes that should occupy this child's slot inside a parent
+// branch node. Implements the MPT cap function (Yellow Paper App. D):
+//   * EmptyR → RLP empty string (`{0x80}`).
+//   * HashR / ExtR → 33-byte RLP-encoded 32-byte hash (the prover sent
+//     us a hash already, so the subtree's RLP size is either unknown
+//     or guaranteed ≥ 32; embed it as a hash reference).
+//   * AccountLeafR / StorageLeafR → compute the leaf's full RLP; if it
+//     is < 32 bytes embed it inline (it's a 2-element list, which is a
+//     valid RLP list element on its own), otherwise hash it and embed
+//     the hash reference.
+rlp::Bytes pack_to_child_ref(const NodeR& r,
+                             const Accounts& accounts,
+                             const Storages& storages,
+                             ValueSet which)
+{
     using rlp::BytesView;
 
-    static constexpr evmc::bytes32 kZero{};
-
-    std::array<rlp::Bytes, 17> slots;
-    for (size_t k = 0; k < 16; ++k) {
-        if (std::memcmp(&children[k], &kZero, sizeof(kZero)) == 0) {
-            slots[k] = rlp::encode(BytesView{});  // RLP empty string = 0x80
-        } else {
-            slots[k] = rlp::encode(BytesView{children[k].bytes,
-                                              sizeof(children[k].bytes)});
+    return std::visit([&](const auto& x) -> rlp::Bytes {
+        using T = std::decay_t<decltype(x)>;
+        if constexpr (std::is_same_v<T, EmptyR>) {
+            return rlp::Bytes{0x80};
+        } else if constexpr (std::is_same_v<T, HashR>) {
+            return rlp::encode(BytesView{x.hash.bytes, sizeof(x.hash.bytes)});
+        } else if constexpr (std::is_same_v<T, ExtR>) {
+            const auto node_rlp = build_extension_rlp(x.ext_nibbles, x.hash);
+            // Extension wrapping a 32-byte hash is always ≥ 35 bytes,
+            // so the inline branch is unreachable in practice — but the
+            // check stays so the rule is stated in one place.
+            if (node_rlp.size() < 32) return node_rlp;
+            const auto h = keccak256_bytes32(node_rlp.data(), node_rlp.size());
+            return rlp::encode(BytesView{h.bytes, sizeof(h.bytes)});
+        } else if constexpr (std::is_same_v<T, AccountLeafR>) {
+            const auto node_rlp = build_account_leaf_rlp(
+                x.path_nibbles, accounts, x.account_idx, x.storage_root, which);
+            if (node_rlp.size() < 32) return node_rlp;
+            const auto h = keccak256_bytes32(node_rlp.data(), node_rlp.size());
+            return rlp::encode(BytesView{h.bytes, sizeof(h.bytes)});
+        } else if constexpr (std::is_same_v<T, StorageLeafR>) {
+            const auto node_rlp = build_storage_leaf_rlp(
+                x.path_nibbles, storages, x.storage_idx, which);
+            if (node_rlp.size() < 32) return node_rlp;
+            const auto h = keccak256_bytes32(node_rlp.data(), node_rlp.size());
+            return rlp::encode(BytesView{h.bytes, sizeof(h.bytes)});
         }
-    }
-    slots[16] = rlp::encode(BytesView{});  // branch value: always empty
+    }, r);
+}
+
+// Assemble a branch node from 16 pre-computed child slot byte-blobs
+// (each is either a 1-byte 0x80, an inline RLP list, or a 33-byte
+// RLP-encoded hash). The 17th slot is the always-empty branch value.
+evmc::bytes32 pack_branch(const std::array<rlp::Bytes, 16>& child_refs) {
+    using rlp::BytesView;
+
+    static const rlp::Bytes kEmptyValueSlot{0x80};
 
     const auto branch_rlp = rlp::encode_list({
-        slots[0],  slots[1],  slots[2],  slots[3],
-        slots[4],  slots[5],  slots[6],  slots[7],
-        slots[8],  slots[9],  slots[10], slots[11],
-        slots[12], slots[13], slots[14], slots[15],
-        slots[16],
+        BytesView{child_refs[0]},  BytesView{child_refs[1]},
+        BytesView{child_refs[2]},  BytesView{child_refs[3]},
+        BytesView{child_refs[4]},  BytesView{child_refs[5]},
+        BytesView{child_refs[6]},  BytesView{child_refs[7]},
+        BytesView{child_refs[8]},  BytesView{child_refs[9]},
+        BytesView{child_refs[10]}, BytesView{child_refs[11]},
+        BytesView{child_refs[12]}, BytesView{child_refs[13]},
+        BytesView{child_refs[14]}, BytesView{child_refs[15]},
+        BytesView{kEmptyValueSlot},
     });
 
-    return keccak_bytes32(branch_rlp.data(), branch_rlp.size());
+    return keccak256_bytes32(branch_rlp.data(), branch_rlp.size());
 }
 
-bool is_empty_hash(const evmc::bytes32& h) {
-    static constexpr evmc::bytes32 zero{};
-    return std::memcmp(&h, &zero, sizeof(h)) == 0;
-}
+// ===== walk context =========================================================
 
-// Abort if the first `walked.size()` nibbles of `hash` don't match the
-// nibbles we actually walked to reach the leaf.
-void verify_path_prefix(const std::vector<uint8_t>& walked,
-                        const evmc::bytes32& hash) {
-    for (size_t i = 0; i < walked.size(); ++i) {
-        const uint8_t b = hash.bytes[i / 2];
-        const uint8_t expected = (i % 2 == 0) ? (b >> 4) : (b & 0x0f);
-        if (walked[i] != expected) {
-            fatal("state_root: leaf hash prefix doesn't match walked path");
-        }
-    }
-}
+// All state the walker / reduce_branch need, borrowed by reference
+// from the StateRoot that drives them. The walker uses ctx.cache /
+// ctx.cache_read_pos to write or read cache entries; the StateRoot
+// member functions set up the right pass / ValueSet before calling.
+struct WalkContext {
+    const Accounts&            accounts;
+    const Storages&            storages;
+    std::vector<CacheEntry>&   cache;
+    std::size_t&               cache_read_pos;
+    WalkPass                   pass;
+    ValueSet                   which;
+};
 
-// ----- recursive walker -----
-//
-// `nibbles_walked` is the actual path of nibbles we've taken down the trie
-// so far (one byte per nibble, 0..15). It's mutated in-place: pushed
-// before recursing into a Node child and popped after. At every Leaf we
-// use it to verify that keccak256(address) or keccak256(position) starts
-// with exactly those nibbles — catches mis-positioned leaves at parse
-// time instead of waiting for the root hash to mismatch.
-//
-// `owning_address` is non-null only when `kind == Storage` (i.e. we're
-// inside the per-account storage subtree pulled in by a state leaf). It
-// lets us verify that every storage leaf we see actually belongs to that
-// account — the Storages table is shared across the whole block, so a
-// malicious or buggy stream could otherwise smuggle in another account's
-// slot.
+// Forward declarations.
 NodeR walk_node(
     const uint8_t*& cursor,
-    const Accounts& accounts,
-    const Storages& storages,
+    WalkContext& ctx,
     TreeKind kind,
     std::vector<uint8_t>& nibbles_walked,
-    const evmc::address* owning_address);
+    const evmc::address* owning_address,
+    bool readonly_mode);
 
-// Finalize a top-level NodeR into the trie root hash.
-evmc::bytes32 finalize(
-    const NodeR& r,
-    const Accounts& accounts,
-    const Storages& storages)
+evmc::bytes32 finalize(const NodeR& r,
+                       const Accounts& accounts,
+                       const Storages& storages,
+                       ValueSet which);
+
+// ===== walker + reduction + finalize ========================================
+
+evmc::bytes32 finalize(const NodeR& r,
+                       const Accounts& accounts,
+                       const Storages& storages,
+                       ValueSet which)
 {
     return std::visit([&](const auto& x) -> evmc::bytes32 {
         using T = std::decay_t<decltype(x)>;
@@ -255,48 +347,68 @@ evmc::bytes32 finalize(
         } else if constexpr (std::is_same_v<T, ExtR>) {
             return pack_extension(x.ext_nibbles, x.hash);
         } else if constexpr (std::is_same_v<T, AccountLeafR>) {
-            return pack_account_leaf(x.path_nibbles, accounts, x.account_idx, x.storage_root);
+            return pack_account_leaf(x.path_nibbles, accounts, x.account_idx,
+                                     x.storage_root, which);
         } else if constexpr (std::is_same_v<T, StorageLeafR>) {
-            return pack_storage_leaf(x.path_nibbles, storages, x.storage_idx);
+            return pack_storage_leaf(x.path_nibbles, storages, x.storage_idx, which);
         }
     }, r);
 }
 
-// Pack any non-Hash leaf/extension into its hash (for branch construction).
-evmc::bytes32 pack_to_hash(
-    const NodeR& r,
-    const Accounts& accounts,
-    const Storages& storages)
-{
-    return std::visit([&](const auto& x) -> evmc::bytes32 {
-        using T = std::decay_t<decltype(x)>;
-        if constexpr (std::is_same_v<T, EmptyR>) {
-            return evmc::bytes32{};  // sentinel "empty slot" — caller handles
-        } else if constexpr (std::is_same_v<T, HashR>) {
-            return x.hash;
-        } else if constexpr (std::is_same_v<T, ExtR>) {
-            return pack_extension(x.ext_nibbles, x.hash);
-        } else if constexpr (std::is_same_v<T, AccountLeafR>) {
-            return pack_account_leaf(x.path_nibbles, accounts, x.account_idx, x.storage_root);
-        } else if constexpr (std::is_same_v<T, StorageLeafR>) {
-            return pack_storage_leaf(x.path_nibbles, storages, x.storage_idx);
+NodeR reduce_branch(std::array<NodeR, 16> children, WalkContext& ctx) {
+    int count = 0;
+    int single = -1;
+    for (int k = 0; k < 16; ++k) {
+        if (!std::holds_alternative<EmptyR>(children[k])) {
+            ++count;
+            single = k;
         }
-    }, r);
+    }
+
+    if (count == 0) {
+        return mk_node<EmptyR>();
+    }
+
+    if (count == 1) {
+        const uint8_t nibble = static_cast<uint8_t>(single);
+        NodeR& only = children[single];
+        if (auto* leaf = std::get_if<AccountLeafR>(&only)) {
+            AccountLeafR moved = std::move(*leaf);
+            moved.path_nibbles.insert(moved.path_nibbles.begin(), nibble);
+            return mk_node<AccountLeafR>(std::move(moved));
+        }
+        if (auto* leaf = std::get_if<StorageLeafR>(&only)) {
+            StorageLeafR moved = std::move(*leaf);
+            moved.path_nibbles.insert(moved.path_nibbles.begin(), nibble);
+            return mk_node<StorageLeafR>(std::move(moved));
+        }
+        if (auto* h = std::get_if<HashR>(&only)) {
+            return mk_node<ExtR>(std::vector<uint8_t>{nibble}, h->hash);
+        }
+        if (auto* e = std::get_if<ExtR>(&only)) {
+            ExtR moved = std::move(*e);
+            moved.ext_nibbles.insert(moved.ext_nibbles.begin(), nibble);
+            return mk_node<ExtR>(std::move(moved));
+        }
+    }
+
+    std::array<rlp::Bytes, 16> child_refs;
+    for (int k = 0; k < 16; ++k) {
+        child_refs[k] = pack_to_child_ref(children[k], ctx.accounts,
+                                          ctx.storages, ctx.which);
+    }
+    return mk_node<HashR>(pack_branch(child_refs));
 }
 
 NodeR walk_node(
     const uint8_t*& cursor,
-    const Accounts& accounts,
-    const Storages& storages,
+    WalkContext& ctx,
     TreeKind kind,
     std::vector<uint8_t>& nibbles_walked,
-    const evmc::address* owning_address)
+    const evmc::address* owning_address,
+    bool readonly_mode)
 {
     const Op op = static_cast<Op>(read_u64_le(cursor));
-
-    // All returns go through the `mk_node<T>(...)` helper above, which
-    // uses `variant::emplace<T>` internally. See the helper's comment for
-    // the IntelliSense rationale.
 
     switch (op) {
         case Op::Empty:
@@ -314,8 +426,6 @@ NodeR walk_node(
             std::vector<uint8_t> ext;
             ext.reserve(n);
             for (uint64_t i = 0; i < n; ++i) {
-                // Each nibble occupies one full u64 slot in the stream —
-                // wasteful but trivially 8-aligned.
                 ext.push_back(static_cast<uint8_t>(read_u64_le(cursor) & 0x0f));
             }
             evmc::bytes32 h;
@@ -327,22 +437,40 @@ NodeR walk_node(
         case Op::Leaf: {
             if (kind == TreeKind::State) {
                 const uint64_t idx = read_u64_le(cursor);
-                const evmc::address& addr = accounts.address_at(idx);
+
+                if (ctx.pass == WalkPass::OldRoot
+                    && readonly_mode
+                    && !ctx.accounts.is_read_only_at(idx)) {
+                    fatal("state_root: read-write account leaf under a NodeR subtree");
+                }
+
+                const evmc::address& addr = ctx.accounts.address_at(idx);
                 const evmc::bytes32 addr_hash =
-                    keccak_bytes32(addr.bytes, sizeof(addr.bytes));
+                    keccak256_bytes32(addr.bytes, sizeof(addr.bytes));
 
-                // Check 1: the nibbles we walked match keccak(address)'s prefix.
-                verify_path_prefix(nibbles_walked, addr_hash);
+                if (ctx.pass == WalkPass::OldRoot) {
+                    verify_path_prefix(nibbles_walked, addr_hash);
+                }
 
-                // Recurse into the embedded storage subtree from a fresh
-                // empty path; pass the owning address so storage leaves
-                // can verify ownership.
                 std::vector<uint8_t> storage_walked;
                 NodeR storage_subtree = walk_node(
-                    cursor, accounts, storages,
-                    TreeKind::Storage, storage_walked, &addr);
+                    cursor, ctx, TreeKind::Storage, storage_walked,
+                    &addr, readonly_mode);
                 const evmc::bytes32 storage_root =
-                    finalize(storage_subtree, accounts, storages);
+                    finalize(storage_subtree, ctx.accounts, ctx.storages, ctx.which);
+
+                const uint64_t nonce =
+                    (ctx.which == ValueSet::Original) ? ctx.accounts.nonce_orig_at(idx)
+                                                      : ctx.accounts.nonce_at     (idx);
+                const evmc::uint256be balance =
+                    (ctx.which == ValueSet::Original) ? ctx.accounts.balance_orig_at(idx)
+                                                      : ctx.accounts.balance_at     (idx);
+                const evmc::bytes32 code_hash =
+                    (ctx.which == ValueSet::Original) ? ctx.accounts.code_hash_orig_at(idx)
+                                                      : ctx.accounts.code_hash_at     (idx);
+                if (is_empty_account(nonce, balance, code_hash)) {
+                    return mk_node<EmptyR>();
+                }
 
                 auto path = nibbles_from(addr_hash, nibbles_walked.size());
                 return mk_node<AccountLeafR>(std::move(path),
@@ -350,22 +478,37 @@ NodeR walk_node(
                                              storage_root);
             } else {
                 const uint64_t idx = read_u64_le(cursor);
-                const evmc::address& storage_addr = storages.address_at(idx);
-                const evmc::bytes32& pos = storages.position_at(idx);
 
-                // Check 2: this storage slot really belongs to the account
-                // whose subtree we're walking.
-                if (owning_address == nullptr
-                    || std::memcmp(&storage_addr, owning_address,
-                                   sizeof(evmc::address)) != 0) {
-                    fatal("state_root: storage leaf address does not match owning account");
+                if (ctx.pass == WalkPass::OldRoot
+                    && readonly_mode
+                    && !ctx.storages.is_read_only_at(idx)) {
+                    fatal("state_root: read-write storage leaf under a NodeR subtree");
+                }
+
+                const evmc::address& storage_addr = ctx.storages.address_at(idx);
+                const evmc::bytes32& pos = ctx.storages.position_at(idx);
+
+                if (ctx.pass == WalkPass::OldRoot) {
+                    if (owning_address == nullptr
+                        || std::memcmp(&storage_addr, owning_address,
+                                       sizeof(evmc::address)) != 0) {
+                        fatal("state_root: storage leaf address does not match owning account");
+                    }
                 }
 
                 const evmc::bytes32 pos_hash =
-                    keccak_bytes32(pos.bytes, sizeof(pos.bytes));
+                    keccak256_bytes32(pos.bytes, sizeof(pos.bytes));
 
-                // Check 1: the nibbles we walked match keccak(position)'s prefix.
-                verify_path_prefix(nibbles_walked, pos_hash);
+                if (ctx.pass == WalkPass::OldRoot) {
+                    verify_path_prefix(nibbles_walked, pos_hash);
+                }
+
+                const evmc::bytes32 value =
+                    (ctx.which == ValueSet::Original) ? ctx.storages.value_orig_at(idx)
+                                                      : ctx.storages.value_at     (idx);
+                if (is_zero_value(value)) {
+                    return mk_node<EmptyR>();
+                }
 
                 auto path = nibbles_from(pos_hash, nibbles_walked.size());
                 return mk_node<StorageLeafR>(std::move(path),
@@ -373,82 +516,92 @@ NodeR walk_node(
             }
         }
 
-        case Op::Node: {
+        case Op::NodeR: {
+            // NodeR is only a cache *point* when it's the child of a
+            // NodeRW (handled in the NodeRW arm). Reaching this arm
+            // means we're either inside a NodeR already or the trie
+            // root itself is NodeR — either way, just walk normally
+            // with readonly_mode = true.
             std::array<NodeR, 16> children;
             for (uint8_t k = 0; k < 16; ++k) {
                 nibbles_walked.push_back(k);
-                children[k] = walk_node(cursor, accounts, storages, kind,
-                                        nibbles_walked, owning_address);
+                children[k] = walk_node(cursor, ctx, kind, nibbles_walked,
+                                        owning_address, /*readonly=*/true);
                 nibbles_walked.pop_back();
             }
+            return reduce_branch(std::move(children), ctx);
+        }
 
-            // Reduction: count non-empty children + locate the single one.
-            int count = 0;
-            int single = -1;
-            for (int k = 0; k < 16; ++k) {
-                if (!std::holds_alternative<EmptyR>(children[k])) {
-                    ++count;
-                    single = k;
-                }
+        case Op::NodeRW: {
+            if (ctx.pass == WalkPass::OldRoot && readonly_mode) {
+                fatal("state_root: NodeRW found inside a NodeR subtree");
             }
 
-            if (count == 0) {
-                return mk_node<EmptyR>();
-            }
+            std::array<NodeR, 16> children;
+            for (uint8_t k = 0; k < 16; ++k) {
+                nibbles_walked.push_back(k);
 
-            if (count == 1) {
-                const uint8_t nibble = static_cast<uint8_t>(single);
-                NodeR& only = children[single];
-                if (auto* leaf = std::get_if<AccountLeafR>(&only)) {
-                    AccountLeafR moved = std::move(*leaf);
-                    moved.path_nibbles.insert(moved.path_nibbles.begin(), nibble);
-                    return mk_node<AccountLeafR>(std::move(moved));
+                // Cache point: peek at the child's opcode. If it's a
+                // NodeR, write a cache entry (old-root) or replay one
+                // (new-root) instead of recursing every time.
+                if (peek_u64_le(cursor) == static_cast<uint64_t>(Op::NodeR)) {
+                    if (ctx.pass == WalkPass::OldRoot) {
+                        const uint8_t* before = cursor;
+                        children[k] = walk_node(cursor, ctx, kind, nibbles_walked,
+                                                owning_address, /*readonly=*/true);
+                        ctx.cache.push_back(
+                            {children[k], static_cast<size_t>(cursor - before)});
+                    } else {
+                        const auto& entry = ctx.cache[ctx.cache_read_pos++];
+                        cursor += entry.bytes_consumed;
+                        children[k] = entry.result;
+                    }
+                } else {
+                    children[k] = walk_node(cursor, ctx, kind, nibbles_walked,
+                                            owning_address, /*readonly=*/false);
                 }
-                if (auto* leaf = std::get_if<StorageLeafR>(&only)) {
-                    StorageLeafR moved = std::move(*leaf);
-                    moved.path_nibbles.insert(moved.path_nibbles.begin(), nibble);
-                    return mk_node<StorageLeafR>(std::move(moved));
-                }
-                if (auto* h = std::get_if<HashR>(&only)) {
-                    return mk_node<ExtR>(std::vector<uint8_t>{nibble}, h->hash);
-                }
-                if (auto* e = std::get_if<ExtR>(&only)) {
-                    ExtR moved = std::move(*e);
-                    moved.ext_nibbles.insert(moved.ext_nibbles.begin(), nibble);
-                    return mk_node<ExtR>(std::move(moved));
-                }
-                // EmptyR ruled out by count > 0.
-            }
 
-            // count >= 2: pack each child to a hash and build a branch.
-            std::array<evmc::bytes32, 16> child_hashes{};
-            for (int k = 0; k < 16; ++k) {
-                child_hashes[k] = pack_to_hash(children[k], accounts, storages);
+                nibbles_walked.pop_back();
             }
-            return mk_node<HashR>(pack_branch(child_hashes));
+            return reduce_branch(std::move(children), ctx);
         }
     }
 
-    fatal("calculate_state_root: invalid opcode in stream");
+    fatal("state_root: invalid opcode in stream");
 }
-
-// Silence -Wunused-function for is_empty_hash on builds that may not
-// reach pack_branch's eventual real implementation.
-[[maybe_unused]] auto _unused_is_empty_hash = is_empty_hash;
 
 } // namespace
 
-evmc::bytes32 calculate_state_root(
-    const uint8_t*& cursor,
-    const Accounts& accounts,
-    const Storages& storages)
+// ============================================================================
+// StateRoot — public methods
+// ============================================================================
+
+StateRoot::StateRoot(const uint8_t*& cursor,
+                     const Accounts& accounts,
+                     const Storages& storages)
+    : accounts_(accounts),
+      storages_(storages),
+      start_cursor_(cursor)
 {
+    WalkContext ctx{accounts_, storages_, cache_, cache_read_pos_,
+                    WalkPass::OldRoot, ValueSet::Original};
     std::vector<uint8_t> nibbles_walked;
     nibbles_walked.reserve(64);  // max trie depth
-    NodeR root = walk_node(cursor, accounts, storages,
-                           TreeKind::State, nibbles_walked,
-                           /*owning_address=*/nullptr);
-    return finalize(root, accounts, storages);
+    NodeR root = walk_node(cursor, ctx, TreeKind::State, nibbles_walked,
+                           /*owning_address=*/nullptr, /*readonly_mode=*/false);
+    old_root_ = finalize(root, accounts_, storages_, ValueSet::Original);
+}
+
+evmc::bytes32 StateRoot::calculate_new_state_root() {
+    cache_read_pos_ = 0;
+    const uint8_t* cursor = start_cursor_;
+    WalkContext ctx{accounts_, storages_, cache_, cache_read_pos_,
+                    WalkPass::NewRoot, ValueSet::Current};
+    std::vector<uint8_t> nibbles_walked;
+    nibbles_walked.reserve(64);
+    NodeR root = walk_node(cursor, ctx, TreeKind::State, nibbles_walked,
+                           /*owning_address=*/nullptr, /*readonly_mode=*/false);
+    return finalize(root, accounts_, storages_, ValueSet::Current);
 }
 
 } // namespace zeg

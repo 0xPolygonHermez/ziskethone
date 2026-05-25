@@ -1,5 +1,9 @@
 #include "zeg/rlp.hpp"
 
+#include <cstring>
+
+#include "zeg/fatal.hpp"
+
 namespace zeg::rlp {
 
 namespace {
@@ -76,6 +80,121 @@ Bytes encode_list(std::initializer_list<BytesView> items) {
         out.insert(out.end(), it.begin(), it.end());
     }
     return out;
+}
+
+// ----- decoder -------------------------------------------------------------
+
+namespace {
+
+// Read `n` big-endian bytes starting at `p` into a size_t.
+size_t read_be(const uint8_t* p, size_t n) {
+    size_t v = 0;
+    for (size_t i = 0; i < n; ++i) {
+        v = (v << 8) | p[i];
+    }
+    return v;
+}
+
+} // namespace
+
+Item decode_item(BytesView data) {
+    if (data.empty()) {
+        fatal("rlp::decode_item: empty input");
+    }
+    const uint8_t b = data[0];
+
+    if (b < 0x80) {
+        // Single-byte string whose value is the byte itself. Raw and
+        // payload both point at that one byte (no separate header).
+        return Item{ItemKind::String,
+                    BytesView{data.data(), 1},
+                    BytesView{data.data(), 1}};
+    }
+    if (b <= 0xb7) {
+        const size_t payload_len = static_cast<size_t>(b - 0x80);
+        const size_t total       = 1 + payload_len;
+        if (data.size() < total) {
+            fatal("rlp::decode_item: short string truncated");
+        }
+        return Item{ItemKind::String,
+                    BytesView{data.data(), total},
+                    BytesView{data.data() + 1, payload_len}};
+    }
+    if (b <= 0xbf) {
+        const size_t len_of_len = static_cast<size_t>(b - 0xb7);
+        if (data.size() < 1 + len_of_len) {
+            fatal("rlp::decode_item: long string length truncated");
+        }
+        const size_t payload_len = read_be(data.data() + 1, len_of_len);
+        const size_t total       = 1 + len_of_len + payload_len;
+        if (data.size() < total) {
+            fatal("rlp::decode_item: long string body truncated");
+        }
+        return Item{ItemKind::String,
+                    BytesView{data.data(), total},
+                    BytesView{data.data() + 1 + len_of_len, payload_len}};
+    }
+    if (b <= 0xf7) {
+        const size_t payload_len = static_cast<size_t>(b - 0xc0);
+        const size_t total       = 1 + payload_len;
+        if (data.size() < total) {
+            fatal("rlp::decode_item: short list truncated");
+        }
+        return Item{ItemKind::List,
+                    BytesView{data.data(), total},
+                    BytesView{data.data() + 1, payload_len}};
+    }
+    // 0xf8..0xff: long list.
+    const size_t len_of_len = static_cast<size_t>(b - 0xf7);
+    if (data.size() < 1 + len_of_len) {
+        fatal("rlp::decode_item: long list length truncated");
+    }
+    const size_t payload_len = read_be(data.data() + 1, len_of_len);
+    const size_t total       = 1 + len_of_len + payload_len;
+    if (data.size() < total) {
+        fatal("rlp::decode_item: long list body truncated");
+    }
+    return Item{ItemKind::List,
+                BytesView{data.data(), total},
+                BytesView{data.data() + 1 + len_of_len, payload_len}};
+}
+
+Item ListIter::next() {
+    if (remaining_.empty()) {
+        fatal("rlp::ListIter::next: payload exhausted");
+    }
+    const Item it = decode_item(remaining_);
+    const size_t adv = it.raw.size();
+    remaining_    = BytesView{remaining_.data() + adv,
+                              remaining_.size() - adv};
+    return it;
+}
+
+evmc::uint256be as_u256(const Item& it) {
+    if (it.kind != ItemKind::String) {
+        fatal("rlp::as_u256: expected RLP string");
+    }
+    if (it.payload.size() > 32) {
+        fatal("rlp::as_u256: payload > 32 bytes");
+    }
+    evmc::uint256be out{};
+    const size_t off = 32 - it.payload.size();
+    std::memcpy(out.bytes + off, it.payload.data(), it.payload.size());
+    return out;
+}
+
+uint64_t as_u64(const Item& it) {
+    if (it.kind != ItemKind::String) {
+        fatal("rlp::as_u64: expected RLP string");
+    }
+    if (it.payload.size() > 8) {
+        fatal("rlp::as_u64: payload > 8 bytes");
+    }
+    uint64_t v = 0;
+    for (size_t i = 0; i < it.payload.size(); ++i) {
+        v = (v << 8) | it.payload[i];
+    }
+    return v;
 }
 
 } // namespace zeg::rlp

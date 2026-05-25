@@ -1,43 +1,41 @@
 // ZiskStateDB — evmc::Host implementation for the ZisK Ethereum guest.
 //
-// Owns the entire state needed to statelessly re-execute a block: accounts
-// (balance, nonce, codeHash), storage values, and contract bytecodes, all
-// parsed from a single input stream in the constructor.
+// Owns nothing — borrows the five input-stream collections by
+// reference from their lifetime-owners (typically constructed at
+// main() scope and outliving this object). `Accounts` / `Storages`
+// are mutable refs because EVM host setters mutate them;
+// `ConsensusInfo` / `Contracts` / `PreviousBlocks` are read-only.
 //
-// The public API takes a `const uint8_t*& cursor` (reference to a pointer
-// into the input buffer) and advances it past every byte consumed, so the
-// caller can chain calls without tracking offsets manually. Every advance
-// is a multiple of 8 bytes so the cursor stays 8-byte aligned and typed
-// pointer casts on the input buffer remain valid.
+// Most Host overrides are direct pass-throughs to the corresponding
+// collection's accessors. A handful of methods that depend on
+// infrastructure not yet built (transient storage, EVM call re-entry,
+// log collector, EIP-2929 access list) abort via zeg::fatal — making
+// the gap loud the first time the EVM exercises them.
 
 #pragma once
 
 #include <cstdint>
-#include <optional>
+#include <span>
 
 #include <evmc/evmc.hpp>
 
 #include "zeg/accounts.hpp"
+#include "zeg/consensus_info.hpp"
 #include "zeg/contracts.hpp"
+#include "zeg/journal.hpp"
+#include "zeg/previous_blocks.hpp"
 #include "zeg/storages.hpp"
+#include "zeg/transactions.hpp"
 
 namespace zeg {
 
 class ZiskStateDB final : public evmc::Host {
 public:
-    // Parse accounts, storage values, contract bytecodes, and previous-block
-    // headers from the stream in that order. `cursor` is advanced past every
-    // byte consumed.
-    explicit ZiskStateDB(const uint8_t*& cursor);
-
-    // Walk the proof bytes from `cursor` and compute the parent block's
-    // (pre-execution) state root. `cursor` is advanced past the consumed
-    // proof bytes.
-    evmc::bytes32 calculateOldStateRoot(const uint8_t*& cursor);
-
-    // Walk the proof bytes from `cursor` and compute the post-execution
-    // state root. `cursor` is advanced past the consumed proof bytes.
-    evmc::bytes32 calculateNewStateRoot(const uint8_t*& cursor);
+    ZiskStateDB(Accounts&             accounts,
+                const ConsensusInfo&  consensus,
+                const Contracts&      contracts,
+                const PreviousBlocks& previous_blocks,
+                Storages&             storages);
 
     // ===== evmc::Host interface (evmone re-execution callbacks) =====
     bool account_exists(const evmc::address& addr) const noexcept override;
@@ -72,16 +70,78 @@ public:
     evmc_access_status access_storage(const evmc::address& addr,
                                       const evmc::bytes32& key) noexcept override;
 
-private:
-    std::optional<Contracts> contracts_;
-    std::optional<Accounts>  accounts_;
-    std::optional<Storages>  storages_;
+    // Bytecode slice for `addr`. Empty span when the account has no
+    // code (code_hash == keccak256("")). Used by the execute layer to
+    // feed evmone the top-level call's code; not part of the evmc::Host
+    // interface (callers below the top level use copy_code instead).
+    std::span<const uint8_t> code(const evmc::address& addr) const noexcept;
 
-    // Each parser advances `cursor` past the bytes it consumed (multiple of 8).
-    void parseContracts(const uint8_t*& cursor);
-    void parseAccounts(const uint8_t*& cursor);
-    void parseStorageValues(const uint8_t*& cursor);
-    void parsePrevBlocks(const uint8_t*& cursor);
+    // The evmone VM instance ZiskStateDB owns and re-uses for both
+    // top-level execution (from main()) and nested calls (from the
+    // `call()` override below). Exposed so the executor can run the
+    // top-level frame against the same VM the Host dispatches against.
+    evmc::VM& vm() noexcept { return vm_; }
+
+    // ===== tx_context plumbing =====
+    //
+    // The Host's `get_tx_context()` returns a stored snapshot rather
+    // than rebuilding from ConsensusInfo on every call. The execute
+    // layer populates it: `execute_pre_block` writes the block-level
+    // fields once; `execute_transactions` updates the per-tx fields
+    // (tx_origin, tx_gas_price, …) before each tx.
+    void set_tx_context(const evmc_tx_context& ctx) noexcept;
+
+    // ===== journal =====
+    //
+    // Internal undo log driving `checkpoint()` / `rollback()`. The
+    // mutating Host overrides (`set_storage`, `selfdestruct`) log the
+    // pre-write value here before touching Accounts/Storages, so a
+    // failed call frame can be reverted cleanly.
+    Journal::Checkpoint checkpoint() noexcept;
+    void                rollback(Journal::Checkpoint cp) noexcept;
+
+    // ===== block execution =====
+    //
+    // One-shot driver for the whole block: sets the block-level
+    // tx_context, runs pre-block system calls, re-executes every tx
+    // against evmone, then applies post-block side-effects.
+    // `transactions` was already parsed up front.
+    void execute_block(const Transactions& transactions) noexcept;
+
+private:
+    // Move `value` ether from `from` to `to`, logging both pre-write
+    // balances to the journal first so a later rollback restores them.
+    // No balance check — the EVM has already gated the call on it.
+    void transfer_value(const evmc::address& from,
+                        const evmc::address& to,
+                        const evmc::uint256be& value) noexcept;
+
+    // CREATE-family handler used by `call()` for EVMC_CREATE /
+    // EVMC_CREATE2 / EVMC_EOFCREATE. Owns the new-address derivation,
+    // sender-nonce bump, EIP-684 collision check, value transfer,
+    // init-code execution, and code-hash registration. `cp` is the
+    // checkpoint already taken by `call()` so we can roll back on
+    // failure of any step.
+    evmc::Result call_create(const evmc_message& msg,
+                             Journal::Checkpoint cp) noexcept;
+
+    // Block-execution phase helpers — split out so `execute_block`
+    // reads as three clear steps. Pre/post will eventually run system
+    // contracts (EIP-4788 / 2935 / 7002 / 7251); transactions feeds
+    // each parsed envelope into evmone against `*this` as the Host.
+    void pre_execute_block ()                                      noexcept;
+    void process_transactions(const Transactions& transactions)    noexcept;
+    void post_execute_block()                                      noexcept;
+
+    Accounts&             accounts_;
+    const ConsensusInfo&  consensus_;
+    const Contracts&      contracts_;
+    const PreviousBlocks& previous_blocks_;
+    Storages&             storages_;
+
+    evmc_tx_context       tx_context_{};
+    Journal               journal_{};
+    evmc::VM              vm_;
 };
 
 } // namespace zeg

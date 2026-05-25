@@ -70,12 +70,16 @@ add_executable(zisk_eth_guest
     src/main.cpp
     src/fatal.cpp
     src/accounts.cpp
+    src/consensus_info.cpp
     src/contracts.cpp
     src/hex_prefix.cpp
     src/journal.cpp
+    src/previous_blocks.cpp
     src/rlp.cpp
     src/state_root.cpp
     src/storages.cpp
+    src/transactions.cpp
+    src/zisk_crypto_host_stub.cpp
     src/zisk_state_db.cpp
 )
 

@@ -99,3 +99,47 @@ At the root call again packHash if it's an extensionHash or a leaf.
 Return the hash if it's the hash
 Return the hash of an Empty tree if it's empty.
 
+---
+
+Lets now implement ZiskStateDB::calculateNewStateRoot
+
+In order to do we can reuse state_root module. But I'd do some things:
+
+I'd convert state_root into a class.
+As a parameter in the constructor I'd pass the cursor to the stream. together with accounts and storages
+
+The constructor should:
+* Store the starting cursor, the accounts and the storages.
+* Calculate the state root with the original values.
+* cache the calculated oldStateRoot
+
+When called from ZiskStateDB::calculateOldStateRoot it should return just the cached oldStateRoot
+
+During the oldStateRoot calculation, when a NodeR is found just under a NodeRW, a cache entry needs to be added.
+This cache entry should include the result and how much the cursor is advanced.
+
+During the newStateRoot calculation, the cache should be used instead of do the caculus od all the readOnly subtree.
+
+Note that this cache is written and read in the same order, so it can bu just a single list.
+
+During newStateRoot calculation there are also some checks that are not required, because they aready where done during the oldState root calculation.
+This checks includes:
+* The accumulated nibble in the leafs
+* The account in the storageValue leafs.
+* The no nodeRW allowed under nodeR nodes.
+
+--
+
+I need to create an object that collects all the consensus information needed to validate a block.
+
+This is are the fields that I'm thinking:
+
+parentHash
+beneficiary
+number
+gasLimit
+timestamp
+extraData
+prevRandao
+parentBeaconBlockRoot
+withdrawals[]

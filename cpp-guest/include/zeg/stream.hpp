@@ -28,6 +28,17 @@ inline uint64_t read_u64_le(const uint8_t*& cursor) {
     return v;
 }
 
+// Read the next u64 without advancing the cursor — used at dispatch
+// sites where the decision (e.g. "is the next opcode a NodeR?") depends
+// on the value but we may still hand the un-advanced cursor to a child
+// routine that re-reads and consumes it.
+inline uint64_t peek_u64_le(const uint8_t* cursor) {
+    const auto* aligned = std::assume_aligned<8>(cursor);
+    uint64_t v;
+    std::memcpy(&v, aligned, sizeof(v));
+    return v;
+}
+
 // Advance `cursor` to the next 8-byte boundary if the previous chunk's
 // `consumed` byte count was not already a multiple of 8.
 inline void align_to_u64(const uint8_t*& cursor, uint64_t consumed) {

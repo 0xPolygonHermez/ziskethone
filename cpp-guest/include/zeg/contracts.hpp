@@ -27,13 +27,13 @@ public:
         uint64_t       code_size;
     };
 
-    // Parse `count` variable-length contract records from `cursor` and
-    // build the hash→index lookup. Each record is:
+    // Build the table by reading a `u64` count from `cursor` followed
+    // by `count` variable-length contract records. Each record is:
     //   u64       code_size
     //   uint8[]   code
     //   pad       zeros up to the next 8-byte boundary
     // `cursor` is advanced past all bytes consumed (multiple of 8).
-    Contracts(uint64_t count, const uint8_t*& cursor);
+    explicit Contracts(const uint8_t*& cursor);
 
     // Look up the index of a contract by its keccak code hash. Aborts
     // via zeg::fatal if the hash isn't present (every code the block

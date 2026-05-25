@@ -1,19 +1,23 @@
 #include "zeg/storages.hpp"
 
 #include "zeg/fatal.hpp"
+#include "zeg/stream.hpp"
 
 namespace zeg {
 
-Storages::Storages(uint64_t count, const uint8_t* data) {
+Storages::Storages(const uint8_t*& cursor) {
+    const uint64_t count   = read_u64_le(cursor);
+    const uint8_t* records = cursor;
     originals_.reserve(count);
     mods_.resize(count);
     index_.reserve(count);
     for (uint64_t i = 0; i < count; ++i) {
-        const uint8_t* record = data + i * kRecordSize;
+        const uint8_t* record = records + i * kRecordSize;
         originals_.push_back(View{record});
         const View& v = originals_.back();
         index_.emplace(Key{v.address(), v.position()}, i);
     }
+    cursor += count * kRecordSize;
 }
 
 size_t Storages::index_of(const evmc::address& addr,
@@ -52,6 +56,14 @@ const evmc::bytes32& Storages::position_at(size_t idx) const noexcept {
 
 evmc::bytes32 Storages::value_at(size_t idx) const noexcept {
     return mods_[idx].dirty ? mods_[idx].value : originals_[idx].value();
+}
+
+const evmc::bytes32& Storages::value_orig_at(size_t idx) const noexcept {
+    return originals_[idx].value();
+}
+
+bool Storages::is_read_only_at(size_t idx) const noexcept {
+    return originals_[idx].is_read_only();
 }
 
 } // namespace zeg
