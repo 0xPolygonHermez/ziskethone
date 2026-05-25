@@ -63,18 +63,64 @@ evmc::address compute_create2_address(const evmc::address&    sender,
 }
 
 // Tx intrinsic gas (Yellow Paper §6.2):
-//   base + sum over calldata: 4 (zero byte) or 16 (non-zero, EIP-2028)
+//   base
+//   + sum over calldata: 4 (zero byte) or 16 (non-zero, EIP-2028)
 //   + EIP-3860 initcode word cost for creates
-// TODO: EIP-2930 access list (2400/addr + 1900/key) and EIP-7702
-// authorization list (25k/auth) extras are not folded in yet.
+//   + EIP-2930 access-list cost: 2400/addr + 1900/storage-key
+//   + EIP-7702 auth-list cost: PER_EMPTY_ACCOUNT_COST per auth.
+//     Slight over-charge for auths whose signer already had a
+//     delegation (spec allows a 12500 refund per such auth); we don't
+//     compute the refund — would require running the per-auth recovery
+//     here just to check signer state, doubling that work.
 int64_t compute_intrinsic_gas(const Transactions::View& tx) {
+    using TxType = Transactions::Type;
+
     int64_t gas = (tx.to() == nullptr) ? 53000 : 21000;
+
     for (uint8_t b : tx.data()) {
         gas += (b == 0) ? 4 : 16;
     }
     if (tx.to() == nullptr) {
         gas += static_cast<int64_t>((tx.data().size() + 31) / 32) * 2;
     }
+
+    // EIP-2930 access list. Typed txs always carry one (possibly
+    // empty, i.e. just `0xc0`); legacy txs don't.
+    if (tx.type() != TxType::Legacy) {
+        const auto outer = rlp::decode_item(tx.access_list_rlp());
+        if (outer.kind != rlp::ItemKind::List) {
+            fatal("access_list is not an RLP list");
+        }
+        rlp::ListIter it{outer.payload};
+        while (it.has_next()) {
+            const auto entry = it.next();
+            if (entry.kind != rlp::ItemKind::List) {
+                fatal("access_list entry is not an RLP list");
+            }
+            rlp::ListIter eit{entry.payload};
+            if (!eit.has_next()) fatal("access_list entry missing address");
+            (void)eit.next();
+            gas += 2400;  // ACCESS_LIST_ADDRESS_COST
+            if (!eit.has_next()) fatal("access_list entry missing keys");
+            const auto keys = eit.next();
+            if (keys.kind != rlp::ItemKind::List) {
+                fatal("access_list storage-keys field is not an RLP list");
+            }
+            rlp::ListIter kit{keys.payload};
+            while (kit.has_next()) {
+                (void)kit.next();
+                gas += 1900;  // ACCESS_LIST_STORAGE_KEY_COST
+            }
+        }
+    }
+
+    // EIP-7702 authorization list. View already counted entries while
+    // reading the prover-supplied auth pubkeys — reuse that count
+    // instead of re-walking the RLP.
+    if (tx.type() == TxType::SetCode) {
+        gas += 25000 * static_cast<int64_t>(tx.num_auth_pubkeys());
+    }
+
     return gas;
 }
 
@@ -111,6 +157,111 @@ intx::uint256 fake_exponential(uint64_t factor,
 constexpr uint64_t kMinBaseFeePerBlobGas      = 1;
 constexpr uint64_t kBlobBaseFeeUpdateFraction = 3338477;
 constexpr uint64_t kGasPerBlob                = 131072;
+
+// Pre/post-block system-call constants. The synthetic system address
+// is the caller for every system call (EIP-4788, EIP-2935, EIP-7002,
+// EIP-7251); each predeploy contract has a Pectra-mandated fixed
+// address. The 30M gas limit comes from EIP-4788 §4.
+constexpr evmc::address kSystemAddress{{
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xfe,
+}};
+constexpr evmc::address kBeaconRootsAddress{{
+    0x00, 0x0F, 0x3d, 0xf6, 0xD7, 0x32, 0x80, 0x7E,
+    0xf1, 0x31, 0x9f, 0xB7, 0xB8, 0xbB, 0x85, 0x22,
+    0xd0, 0xBe, 0xac, 0x02,
+}};
+constexpr evmc::address kHistoryStorageAddress{{
+    0x00, 0x00, 0xF9, 0x08, 0x27, 0xF1, 0xC5, 0x3a,
+    0x10, 0xcb, 0x7A, 0x02, 0x33, 0x5B, 0x17, 0x53,
+    0x20, 0x00, 0x29, 0x35,
+}};
+// EIP-7002: withdrawal-requests predeploy. Dequeues pending withdrawal
+// requests when called with empty calldata. Each record is 76 bytes:
+// 20 source_address || 48 validator_pubkey || 8 amount_gwei (BE).
+constexpr evmc::address kWithdrawalRequestsAddress{{
+    0x00, 0x00, 0x09, 0x61, 0xEf, 0x48, 0x0E, 0xb5,
+    0x5e, 0x80, 0xD1, 0x9a, 0xd8, 0x35, 0x79, 0xA6,
+    0x4c, 0x00, 0x70, 0x02,
+}};
+// EIP-7251: consolidation-requests predeploy. Same shape as 7002;
+// each record is 116 bytes: 20 source_address || 48 source_pubkey ||
+// 48 target_pubkey.
+constexpr evmc::address kConsolidationRequestsAddress{{
+    0x00, 0x00, 0xBB, 0xdD, 0xc7, 0xCE, 0x48, 0x86,
+    0x42, 0xfb, 0x57, 0x9F, 0x8B, 0x00, 0xf3, 0xa5,
+    0x90, 0x00, 0x72, 0x51,
+}};
+constexpr int64_t kSystemCallGas = 30'000'000;
+
+// EIP-6110: deposits are extracted from event logs emitted by the
+// beacon-deposit contract during regular tx execution (no system
+// call). Address is the canonical mainnet value; testnets that use a
+// different deposit contract will need this configurable.
+constexpr evmc::address kDepositContractAddress{{
+    0x00, 0x00, 0x00, 0x00, 0x21, 0x9a, 0xb5, 0x40,
+    0x35, 0x6c, 0xBB, 0x83, 0x9C, 0xbe, 0x05, 0x30,
+    0x3d, 0x77, 0x05, 0xFa,
+}};
+
+// EIP-7685 request type bytes.
+constexpr uint8_t kRequestTypeDeposit       = 0x00;
+constexpr uint8_t kRequestTypeWithdrawal    = 0x01;
+constexpr uint8_t kRequestTypeConsolidation = 0x02;
+
+// Read a 32-byte big-endian uint at `p` as a size_t. Aborts via fatal
+// if the value doesn't fit (upper 24 bytes non-zero). Used for ABI
+// offsets/lengths.
+size_t read_abi_uint32be_as_size(const uint8_t* p) {
+    for (size_t i = 0; i < 24; ++i) {
+        if (p[i] != 0) {
+            fatal("DepositEvent ABI: integer field overflows size_t");
+        }
+    }
+    size_t v = 0;
+    for (size_t i = 24; i < 32; ++i) {
+        v = (v << 8) | p[i];
+    }
+    return v;
+}
+
+// Read the i-th dynamic-`bytes` field from a Solidity-encoded event
+// payload that consists entirely of `bytes` parameters. Returns
+// (data_ptr, length). Aborts via fatal on truncation / corruption.
+struct AbiBytesField { const uint8_t* data; size_t length; };
+AbiBytesField abi_read_bytes_field(const uint8_t* data, size_t data_size,
+                                   size_t field_index) {
+    const size_t off_pos = field_index * 32;
+    if (off_pos + 32 > data_size) {
+        fatal("DepositEvent ABI: offset slot out of bounds");
+    }
+    const size_t offset = read_abi_uint32be_as_size(data + off_pos);
+    if (offset + 32 > data_size) {
+        fatal("DepositEvent ABI: length slot out of bounds");
+    }
+    const size_t length = read_abi_uint32be_as_size(data + offset);
+    if (offset + 32 + length > data_size) {
+        fatal("DepositEvent ABI: bytes payload out of bounds");
+    }
+    return AbiBytesField{data + offset + 32, length};
+}
+
+// Add `data[0..size]` to a 2048-bit bloom filter per Yellow Paper
+// §4.4.2: three 11-bit indices come from byte-pairs of keccak256(data),
+// bits packed big-endian inside the 256-byte buffer.
+void bloom_add(std::array<uint8_t, 256>& bloom,
+               const uint8_t* data, size_t size) {
+    const evmc::bytes32 h = keccak256_bytes32(data, size);
+    for (int i = 0; i < 3; ++i) {
+        const uint16_t pair     =
+            (uint16_t(h.bytes[i * 2]) << 8) | h.bytes[i * 2 + 1];
+        const uint16_t p        = pair & 0x07FF;            // [0, 2047]
+        const size_t   byte_idx = 256 - 1 - (p >> 3);
+        const uint8_t  bit_mask = uint8_t(1) << (p & 0x07);
+        bloom[byte_idx] |= bit_mask;
+    }
+}
 
 // ---------- secp256k1 verify+recover (used by EIP-7702 auth list) ----------
 
@@ -313,12 +464,20 @@ void ZiskStateDB::set_tx_context(const evmc_tx_context& ctx) noexcept {
     tx_context_ = ctx;
 }
 
-Journal::Checkpoint ZiskStateDB::checkpoint() noexcept {
-    return journal_.checkpoint();
+ZiskStateDB::Checkpoint ZiskStateDB::checkpoint() noexcept {
+    // Snapshot the current tx's logs size alongside the journal cp so
+    // a reverted frame drops its emissions too.
+    return Checkpoint{
+        journal_.checkpoint(),
+        tx_receipts_.empty() ? size_t{0} : tx_receipts_.back().logs.size(),
+    };
 }
 
-void ZiskStateDB::rollback(Journal::Checkpoint cp) noexcept {
-    journal_.rollback(cp, accounts_, storages_);
+void ZiskStateDB::rollback(Checkpoint cp) noexcept {
+    journal_.rollback(cp.journal_cp, accounts_, storages_);
+    if (!tx_receipts_.empty()) {
+        tx_receipts_.back().logs.resize(cp.log_count);
+    }
 }
 
 evmc::bytes32 ZiskStateDB::get_block_hash(int64_t block_number) const noexcept {
@@ -386,7 +545,7 @@ void ZiskStateDB::set_transient_storage(const evmc::address&,
 }
 
 evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
-                                      Journal::Checkpoint cp) noexcept {
+                                      Checkpoint cp) noexcept {
     // The EVM hands us the init code either via msg.code (modern evmc
     // convention for nested calls) or via msg.input_data (the legacy
     // convention some flows still use). Use whichever is set.
@@ -499,12 +658,20 @@ evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
     return result;
 }
 
-void ZiskStateDB::emit_log(const evmc::address&,
-                           const uint8_t*,
-                           size_t,
-                           const evmc::bytes32[],
-                           size_t) noexcept {
-    fatal("ZiskStateDB::emit_log: log collector not yet implemented");
+void ZiskStateDB::emit_log(const evmc::address& addr,
+                           const uint8_t* data,
+                           size_t data_size,
+                           const evmc::bytes32 topics[],
+                           size_t topics_count) noexcept {
+    // The current tx's receipt was pushed onto tx_receipts_ at the
+    // start of the iteration in process_transactions; we just append
+    // the log here. Owned copies so the EVM is free to release its
+    // buffers after this returns.
+    LogEntry entry;
+    entry.address = addr;
+    entry.topics.assign(topics, topics + topics_count);
+    entry.data.assign  (data,   data   + data_size);
+    tx_receipts_.back().logs.push_back(std::move(entry));
 }
 
 evmc_access_status ZiskStateDB::access_account(const evmc::address&) noexcept {
@@ -529,6 +696,34 @@ void ZiskStateDB::execute_block(const Transactions& transactions) noexcept {
     post_execute_block();
 }
 
+evmc::Result ZiskStateDB::system_call(const evmc::address&     target,
+                                      std::span<const uint8_t> calldata) noexcept {
+    evmc_message msg{};
+    msg.kind         = EVMC_CALL;
+    msg.sender       = kSystemAddress;
+    msg.recipient    = target;
+    msg.code_address = target;
+    msg.input_data   = calldata.data();
+    msg.input_size   = calldata.size();
+    msg.gas          = kSystemCallGas;
+    msg.value        = evmc::uint256be{};       // 0
+    msg.depth        = 0;
+
+    // Standard checkpoint+rollback discipline so a reverted system
+    // frame doesn't leave half-written state behind. No gas
+    // accounting (system calls have no sender to debit / coinbase to
+    // pay); the caller may consume the result's output_data (e.g.
+    // for EIP-7002 / EIP-7251 request dequeue).
+    const auto cp = checkpoint();
+    const auto entry_code = code(target);
+    auto result = vm_.execute(*this, EVMC_OSAKA, msg,
+                              entry_code.data(), entry_code.size());
+    if (result.status_code != EVMC_SUCCESS) {
+        rollback(cp);
+    }
+    return result;
+}
+
 void ZiskStateDB::pre_execute_block() noexcept {
     // Block-level tx_context: persists across every tx in this block.
     // process_transactions later overwrites the per-tx fields
@@ -550,9 +745,25 @@ void ZiskStateDB::pre_execute_block() noexcept {
                          kBlobBaseFeeUpdateFraction));
     set_tx_context(ctx);
 
-    // TODO: parse the pre-block descriptor from the stream and use
-    // evmone (via `*this` as the Host) to run the EIP-4788 and
-    // EIP-2935 system calls.
+    // EIP-4788: write the parent's beacon block root into the beacon
+    // roots predeploy. The contract's storage maps timestamp →
+    // parent_beacon_block_root in a 8191-slot ring buffer so the
+    // CL/EL can prove past beacon roots.
+    {
+        const auto& root = consensus_.parent_beacon_block_root();
+        (void)system_call(kBeaconRootsAddress,
+                          std::span<const uint8_t>{root.bytes, 32});
+    }
+
+    // EIP-2935: write the parent's block hash into the history
+    // storage contract. The contract stores hashes indexed by
+    // (block_number) so BLOCKHASH can reach further back than the
+    // opcode's 256-block window via the predeploy.
+    {
+        const auto& parent = consensus_.parent_hash();
+        (void)system_call(kHistoryStorageAddress,
+                          std::span<const uint8_t>{parent.bytes, 32});
+    }
 }
 
 void ZiskStateDB::process_transactions(const Transactions& transactions) noexcept {
@@ -560,6 +771,14 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
 
     for (size_t i = 0; i < transactions.size(); ++i) {
         const auto& tx = transactions.at(i);
+
+        // Push the receipt for this tx up front. emit_log appends to
+        // tx_receipts_.back().logs during execution; we finalize
+        // status / bloom / cumGas at the end of the iteration.
+        {
+            auto& rcpt   = tx_receipts_.emplace_back();
+            rcpt.tx_type = tx.type();
+        }
 
         // Backing storage for the blob-hashes and initcodes arrays we
         // point ctx at. Both must outlive vm_.execute below since the
@@ -668,14 +887,25 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         {
             const auto bal_u =
                 intx::be::load<intx::uint256>(accounts_.balance_at(sender_idx));
-            // Sender-balance check is the EVM's responsibility upstream
-            // (tx validity). We don't re-check; underflow here would
-            // surface as a fatal in any later balance-reading opcode.
+            // Tx validity: sender must be able to cover the entire
+            // upfront cost (execution gas + blob fee + value would
+            // also count if not transferred separately by the EVM
+            // frame — here just upfront gas + blob, since value
+            // transfer is journaled inside the checkpoint below).
+            if (bal_u < upfront_u) {
+                fatal("tx sender balance below upfront cost");
+            }
             accounts_.set_balance_at(sender_idx,
                 intx::be::store<evmc::uint256be>(bal_u - upfront_u));
         }
 
         // ===== EIP-7702 authorization list (Type-4 only) =====
+        //
+        // Per-tx refund accumulator: PER_EMPTY_ACCOUNT_COST −
+        // PER_AUTH_BASE_COST = 12500 gas per auth whose signer's
+        // account already existed (non-empty) before this tx. Folded
+        // into the post-EVM refund total below.
+        int64_t auth_refund = 0;
         //
         // Per the EIP, authorizations are applied at the START of the
         // tx (before EVM execution), so the EVM sees the resulting
@@ -683,8 +913,10 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         // tx-level nonce bump — so we apply them here (before the
         // checkpoint) using raw setters (no journaling). Each auth
         // that fails its validity checks is silently skipped per the
-        // EIP. (TODO: fold the 25k-per-auth intrinsic-gas cost into
-        // compute_intrinsic_gas.)
+        // EIP. The 25k-per-auth intrinsic-gas cost is already
+        // included via compute_intrinsic_gas above; the 12500 refund
+        // per pre-existing delegation accumulates in `auth_refund`
+        // below and folds into the post-EVM refund total.
         if (tx.type() == TxType::SetCode) {
             const auto auth_outer = rlp::decode_item(tx.authorization_list_rlp());
             if (auth_outer.kind != rlp::ItemKind::List) {
@@ -756,6 +988,17 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
                 if (accounts_.nonce_at(signer_idx) != a_nonce) {
                     ++auth_idx;
                     continue;
+                }
+
+                // EIP-7702 refund: PER_EMPTY_ACCOUNT_COST minus
+                // PER_AUTH_BASE_COST (25000 − 12500 = 12500) per auth
+                // whose signer's account already had state. Read
+                // BEFORE we mutate the signer's nonce/code below.
+                const bool signer_was_non_empty =
+                    accounts_.nonce_at(signer_idx) != 0 ||
+                    accounts_.code_hash_at(signer_idx) != EMPTY_CODE_HASH;
+                if (signer_was_non_empty) {
+                    auth_refund += 12500;
                 }
 
                 // Bump signer's nonce + set delegation code_hash =
@@ -866,8 +1109,12 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         const int64_t gas_used_pre  =
             static_cast<int64_t>(tx.gas_limit()) - gas_left;
         const int64_t max_refund    = gas_used_pre / 5;
-        const int64_t refund        =
-            (result.gas_refund < max_refund) ? result.gas_refund : max_refund;
+        // EVM-level refund (storage clears, etc.) plus EIP-7702
+        // auth-list refund (12500 per pre-existing signer). Both are
+        // subject to the same EIP-3529 cap.
+        const int64_t refund_pre_cap = result.gas_refund + auth_refund;
+        const int64_t refund         =
+            (refund_pre_cap < max_refund) ? refund_pre_cap : max_refund;
         const int64_t gas_remaining = gas_left + refund;
         const int64_t gas_used      =
             static_cast<int64_t>(tx.gas_limit()) - gas_remaining;
@@ -901,11 +1148,146 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
             accounts_.set_balance_at(coinbase_idx,
                 intx::be::store<evmc::uint256be>(bal_u + fee_u));
         }
+
+        // ===== Receipt finalization =====
+        // The in-progress receipt was pushed at the start of the
+        // iteration and emit_log filled its `logs` (with revert
+        // truncation via rollback). Compute the per-tx bloom now from
+        // whatever logs survived, then OR into the block bloom, set
+        // status + cumGas.
+        {
+            auto& rcpt = tx_receipts_.back();
+            for (const auto& log : rcpt.logs) {
+                bloom_add(rcpt.logs_bloom,
+                          log.address.bytes, sizeof(log.address.bytes));
+                for (const auto& t : log.topics) {
+                    bloom_add(rcpt.logs_bloom, t.bytes, sizeof(t.bytes));
+                }
+            }
+            for (size_t j = 0; j < 256; ++j) {
+                block_bloom_filter_[j] |= rcpt.logs_bloom[j];
+            }
+            cumulative_gas_used_     += static_cast<uint64_t>(gas_used);
+            rcpt.cumulative_gas_used  = cumulative_gas_used_;
+            rcpt.status               = (result.status_code == EVMC_SUCCESS);
+        }
     }
 }
 
 void ZiskStateDB::post_execute_block() noexcept {
-    // TODO: apply withdrawal balance credits, then EIP-7002 / EIP-7251.
+    // ===== EIP-4895: credit each withdrawal to its recipient =====
+    // Withdrawal amounts are in gwei; balances are in wei.
+    const auto gwei_to_wei = intx::uint256{1'000'000'000};
+    for (const auto& w : consensus_.withdrawals()) {
+        const size_t idx = accounts_.index_of(w.address());
+        const auto   bal_u =
+            intx::be::load<intx::uint256>(accounts_.balance_at(idx));
+        const auto credit_u =
+            intx::uint256{w.amount_gwei()} * gwei_to_wei;
+        accounts_.set_balance_at(idx,
+            intx::be::store<evmc::uint256be>(bal_u + credit_u));
+    }
+
+    // ===== EIP-6110 deposit requests =====
+    // Scan tx_receipts_ for `DepositEvent` logs emitted by the beacon-
+    // deposit contract. Each event carries five `bytes` fields
+    // (pubkey 48, withdrawal_credentials 32, amount 8, signature 96,
+    // index 8); per EIP-6110 the deposit request body is those five
+    // fields concatenated in spec order = 192 bytes per deposit. All
+    // deposits for the block aggregate into one type-0x00 entry.
+    //
+    // Pushed FIRST so requests_ stays in EIP-7685 type-byte order
+    // (0x00 → 0x01 → 0x02). Reverted logs were already dropped from
+    // tx_receipts_ via the journal/log-checkpoint mechanism.
+    {
+        // keccak256("DepositEvent(bytes,bytes,bytes,bytes,bytes)").
+        // Computed once on first entry; cheap, and avoids a wrong
+        // hardcoded value going undetected.
+        static const evmc::bytes32 deposit_event_topic = [] {
+            const char sig[] = "DepositEvent(bytes,bytes,bytes,bytes,bytes)";
+            return keccak256_bytes32(reinterpret_cast<const uint8_t*>(sig),
+                                     sizeof(sig) - 1);
+        }();
+
+        std::vector<uint8_t> deposits_buf;
+        for (const auto& receipt : tx_receipts_) {
+            for (const auto& log : receipt.logs) {
+                if (log.address != kDepositContractAddress) continue;
+                if (log.topics.empty())                       continue;
+                if (log.topics[0] != deposit_event_topic)     continue;
+
+                const uint8_t* d   = log.data.data();
+                const size_t   dsz = log.data.size();
+                const auto pubkey_f = abi_read_bytes_field(d, dsz, 0);
+                const auto wc_f     = abi_read_bytes_field(d, dsz, 1);
+                const auto amount_f = abi_read_bytes_field(d, dsz, 2);
+                const auto sig_f    = abi_read_bytes_field(d, dsz, 3);
+                const auto index_f  = abi_read_bytes_field(d, dsz, 4);
+                if (pubkey_f.length != 48 || wc_f.length != 32 ||
+                    amount_f.length != 8  || sig_f.length != 96 ||
+                    index_f.length  != 8) {
+                    fatal("EIP-6110: DepositEvent field has wrong size");
+                }
+                deposits_buf.insert(deposits_buf.end(),
+                    pubkey_f.data, pubkey_f.data + 48);
+                deposits_buf.insert(deposits_buf.end(),
+                    wc_f.data,     wc_f.data     + 32);
+                deposits_buf.insert(deposits_buf.end(),
+                    amount_f.data, amount_f.data + 8);
+                deposits_buf.insert(deposits_buf.end(),
+                    sig_f.data,    sig_f.data    + 96);
+                deposits_buf.insert(deposits_buf.end(),
+                    index_f.data,  index_f.data  + 8);
+            }
+        }
+        if (!deposits_buf.empty()) {
+            std::vector<uint8_t> req;
+            req.reserve(1 + deposits_buf.size());
+            req.push_back(kRequestTypeDeposit);
+            req.insert(req.end(),
+                       deposits_buf.begin(), deposits_buf.end());
+            requests_.push_back(std::move(req));
+        }
+    }
+
+    // ===== EIP-7002 withdrawal requests =====
+    // Calling the predeploy with empty calldata dequeues all pending
+    // requests; the EVM returns N × 76 bytes (a concatenation of
+    // 76-byte records). Per EIP-7685, we prepend the type byte 0x01
+    // to the raw queue dump and push it as one request-list entry.
+    {
+        auto result = system_call(kWithdrawalRequestsAddress, {});
+        if (result.status_code == EVMC_SUCCESS && result.output_size > 0) {
+            if (result.output_size % 76 != 0) {
+                fatal("EIP-7002: queue dump not a multiple of 76 bytes");
+            }
+            std::vector<uint8_t> req;
+            req.reserve(1 + result.output_size);
+            req.push_back(kRequestTypeWithdrawal);
+            req.insert(req.end(), result.output_data,
+                                  result.output_data + result.output_size);
+            requests_.push_back(std::move(req));
+        }
+    }
+
+    // ===== EIP-7251 consolidation requests =====
+    // Same shape as EIP-7002, but each record is 116 bytes (20 +
+    // 48 + 48) and the request type byte is 0x02.
+    {
+        auto result = system_call(kConsolidationRequestsAddress, {});
+        if (result.status_code == EVMC_SUCCESS && result.output_size > 0) {
+            if (result.output_size % 116 != 0) {
+                fatal("EIP-7251: queue dump not a multiple of 116 bytes");
+            }
+            std::vector<uint8_t> req;
+            req.reserve(1 + result.output_size);
+            req.push_back(kRequestTypeConsolidation);
+            req.insert(req.end(), result.output_data,
+                                  result.output_data + result.output_size);
+            requests_.push_back(std::move(req));
+        }
+    }
+
 }
 
 } // namespace zeg

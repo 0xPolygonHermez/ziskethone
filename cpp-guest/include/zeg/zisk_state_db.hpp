@@ -14,8 +14,10 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <span>
+#include <vector>
 
 #include <evmc/evmc.hpp>
 
@@ -31,6 +33,34 @@ namespace zeg {
 
 class ZiskStateDB final : public evmc::Host {
 public:
+    // One log emission. `data` and `topics` are owned copies of the
+    // EVM-supplied buffers, so the originals can be freed safely.
+    struct LogEntry {
+        evmc::address              address;
+        std::vector<evmc::bytes32> topics;   // up to 4 per EVM rules
+        std::vector<uint8_t>       data;
+    };
+
+    // One tx receipt. `tx_type`, `status`, `cumulative_gas_used`, and
+    // `logs_bloom` are finalized at the end of the tx; `logs` is filled
+    // incrementally by `emit_log` during execution (with rollback
+    // truncation if the EVM frame reverts).
+    struct TxReceipt {
+        Transactions::Type       tx_type{Transactions::Type::Legacy};
+        bool                     status{false};
+        uint64_t                 cumulative_gas_used{0};
+        std::array<uint8_t, 256> logs_bloom{};
+        std::vector<LogEntry>    logs;
+    };
+
+    // Snapshot taken by `checkpoint()`, undone by `rollback()`. Bundles
+    // the journal's checkpoint with the in-progress receipt's logs
+    // size so reverted frames also drop their emitted logs.
+    struct Checkpoint {
+        Journal::Checkpoint journal_cp;
+        size_t              log_count;
+    };
+
     ZiskStateDB(Accounts&             accounts,
                 const ConsensusInfo&  consensus,
                 const Contracts&      contracts,
@@ -96,9 +126,33 @@ public:
     // Internal undo log driving `checkpoint()` / `rollback()`. The
     // mutating Host overrides (`set_storage`, `selfdestruct`) log the
     // pre-write value here before touching Accounts/Storages, so a
-    // failed call frame can be reverted cleanly.
-    Journal::Checkpoint checkpoint() noexcept;
-    void                rollback(Journal::Checkpoint cp) noexcept;
+    // failed call frame can be reverted cleanly. The Checkpoint also
+    // captures the current tx's emitted-log count so reverted frames
+    // drop their logs.
+    Checkpoint checkpoint() noexcept;
+    void       rollback(Checkpoint cp) noexcept;
+
+    // ===== receipts + block bloom =====
+    //
+    // One TxReceipt per processed tx, in order. Receipt finalization
+    // happens at the end of each tx in `process_transactions`.
+    size_t                     tx_receipt_count() const noexcept { return tx_receipts_.size(); }
+    const TxReceipt&           tx_receipt(size_t i) const         { return tx_receipts_[i]; }
+    std::span<const TxReceipt> tx_receipts() const noexcept       { return tx_receipts_; }
+
+    // Block-wide aggregated logsBloom — OR of every tx's logs_bloom.
+    const std::array<uint8_t, 256>& block_bloom_filter() const noexcept { return block_bloom_filter_; }
+
+    // ===== Pectra requests (EIP-7685) =====
+    //
+    // Per-type request blobs collected by `post_execute_block` from
+    // the EIP-7002 / EIP-7251 predeploys. Each entry is one type
+    // group, laid out as `type_byte || concatenated_records`:
+    //   type 0x01 → withdrawal requests   (77 + N × 76 B once added)
+    //   type 0x02 → consolidation requests
+    // Empty queues add no entry. The block's `requests_hash` field
+    // is computed off this list (TODO; not done here).
+    std::span<const std::vector<uint8_t>> requests() const noexcept { return requests_; }
 
     // ===== block execution =====
     //
@@ -123,7 +177,7 @@ private:
     // checkpoint already taken by `call()` so we can roll back on
     // failure of any step.
     evmc::Result call_create(const evmc_message& msg,
-                             Journal::Checkpoint cp) noexcept;
+                             Checkpoint cp) noexcept;
 
     // Block-execution phase helpers — split out so `execute_block`
     // reads as three clear steps. Pre/post will eventually run system
@@ -132,6 +186,19 @@ private:
     void pre_execute_block ()                                      noexcept;
     void process_transactions(const Transactions& transactions)    noexcept;
     void post_execute_block()                                      noexcept;
+
+    // Pectra system-call helper used by `pre_execute_block` (EIP-4788
+    // beacon roots, EIP-2935 block-hash history) and
+    // `post_execute_block` (EIP-7002 withdrawal requests, EIP-7251
+    // consolidation requests). Calls `target` from the system
+    // address with `calldata` (may be empty — the requests predeploys
+    // dequeue on empty calldata), 30M gas, value 0. State changes
+    // inside the frame survive (or roll back on revert via the
+    // standard checkpoint mechanism). The returned `evmc::Result`
+    // gives the caller access to `output_data` for predeploys that
+    // return a queue dump.
+    evmc::Result system_call(const evmc::address&     target,
+                             std::span<const uint8_t> calldata) noexcept;
 
     Accounts&             accounts_;
     const ConsensusInfo&  consensus_;
@@ -142,6 +209,19 @@ private:
     evmc_tx_context       tx_context_{};
     Journal               journal_{};
     evmc::VM              vm_;
+
+    // Per-tx receipts (finalized at end-of-tx; logs filled by
+    // emit_log during execution).
+    std::vector<TxReceipt>   tx_receipts_{};
+    // Cumulative gas used across all processed txs in this block.
+    uint64_t                 cumulative_gas_used_{0};
+    // OR-aggregation of every tx's logs_bloom; matches the block
+    // header's logsBloom field.
+    std::array<uint8_t, 256> block_bloom_filter_{};
+
+    // EIP-7685 requests collected from the Pectra predeploys (one
+    // entry per non-empty request type; entries are type-prefixed).
+    std::vector<std::vector<uint8_t>> requests_{};
 };
 
 } // namespace zeg
