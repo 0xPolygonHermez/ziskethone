@@ -143,3 +143,44 @@ extraData
 prevRandao
 parentBeaconBlockRoot
 withdrawals[]
+--
+
+In Storage class:
+
+In the Mods of Storage, we shoulf add two fields:
+lastTxIdx, and tx_original
+
+in the setters and getters of the storage value we must pass a txIdx
+
+if txIdx > lastTxIdx {
+    lastTxIdx = txIdx
+    tx_original = value
+}
+
+We can add a method to get the txOriginal and a method to know if it's warm.
+
+In ZiskStateDn
+
+We need to add a txCounter that is incremented before every new transaction.
+
+This is the counter that we pass to the storage function.
+
+With that we have all the logic to implement get_storage, set_storage and accessStorage
+---
+
+Lets add now a similar mecanism for accounts
+
+In each mod we need to add txIdx.
+We don't need to keep trac of the original balance, nonce, codeHash of the transaction.
+
+Geters and seters should include a txIdx param.
+
+With all this we can implement access_account
+
+--
+
+Lets now implement transient storage. In order to do so we should have a hashmap
+address,position -> value that is reset of each transaction including system calls.
+
+For each journal entry we should add a flag to indicate if it's transient so we can unroll it correctly.
+

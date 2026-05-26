@@ -5,6 +5,7 @@
 #include "zeg/accounts.hpp"
 #include "zeg/fatal.hpp"
 #include "zeg/storages.hpp"
+#include "zeg/transient_storage.hpp"
 
 namespace zeg {
 
@@ -29,7 +30,17 @@ void Journal::log_storage(size_t idx, const evmc::bytes32& old_value) {
     entries_.emplace_back(StorageEntry{idx, old_value});
 }
 
-void Journal::rollback(Checkpoint cp, Accounts& accounts, Storages& storages) {
+void Journal::log_transient(const evmc::address&  address,
+                            const evmc::bytes32&  position,
+                            bool                  was_present,
+                            const evmc::bytes32&  old_value) {
+    entries_.emplace_back(TransientEntry{address, position, was_present, old_value});
+}
+
+void Journal::rollback(Checkpoint        cp,
+                       Accounts&         accounts,
+                       Storages&         storages,
+                       TransientStorage& transient) {
     if (cp >= entries_.size()
         || !std::holds_alternative<CheckpointMarker>(entries_[cp])) {
         fatal("Journal::rollback: invalid checkpoint");
@@ -45,6 +56,9 @@ void Journal::rollback(Checkpoint cp, Accounts& accounts, Storages& storages) {
                 accounts.set_code_hash_at(e.idx, e.old_value);
             } else if constexpr (std::is_same_v<T, StorageEntry>) {
                 storages.set_value_at(e.idx, e.old_value);
+            } else if constexpr (std::is_same_v<T, TransientEntry>) {
+                transient.restore(e.address, e.position,
+                                  e.was_present, e.old_value);
             }
             // CheckpointMarker: nothing to undo, just pop below.
         }, entries_.back());

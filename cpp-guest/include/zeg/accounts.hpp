@@ -33,9 +33,12 @@ public:
     explicit Accounts(const uint8_t*& cursor);
 
     // ----- read accessors (return modified value if dirty, else original) -----
-    evmc::uint256be balance   (const evmc::address& addr) const;
-    uint64_t        nonce     (const evmc::address& addr) const;
-    evmc::bytes32   code_hash (const evmc::address& addr) const;
+    // Take `tx_idx` and touch the account for EIP-2929 warm tracking
+    // (same pattern as Storages). `tx_idx` is the per-block EVM-frame
+    // counter that ZiskStateDB bumps for each tx + each system call.
+    evmc::uint256be balance   (const evmc::address& addr, uint64_t tx_idx);
+    uint64_t        nonce     (const evmc::address& addr, uint64_t tx_idx);
+    evmc::bytes32   code_hash (const evmc::address& addr, uint64_t tx_idx);
 
     // By-index read accessors. The plain `_at` form returns the *current*
     // value (modification if dirty, else original) — appropriate for
@@ -60,9 +63,12 @@ public:
     bool                  is_read_only_at   (size_t idx) const noexcept;
 
     // ----- write accessors (mark the field dirty) -----
-    void set_balance   (const evmc::address& addr, const evmc::uint256be& v);
-    void set_nonce     (const evmc::address& addr, uint64_t v);
-    void set_code_hash (const evmc::address& addr, const evmc::bytes32& v);
+    void set_balance   (const evmc::address& addr, const evmc::uint256be& v,
+                        uint64_t tx_idx);
+    void set_nonce     (const evmc::address& addr, uint64_t v,
+                        uint64_t tx_idx);
+    void set_code_hash (const evmc::address& addr, const evmc::bytes32& v,
+                        uint64_t tx_idx);
 
     // By-index write accessors. Skip the hashmap lookup; useful for the
     // journal's rollback path where the index is already known.
@@ -75,6 +81,19 @@ public:
     // every state it touches in its private input, so a missing address
     // is a hard input-completeness bug, not a recoverable case.
     size_t index_of(const evmc::address& addr) const;
+
+    // ----- per-tx warm/cold tracking (EIP-2929) -----
+    //
+    // Same shape as Storages: `mark_touched_at` bumps `last_tx_idx`
+    // iff `tx_idx > last_tx_idx` (idempotent in-tx); `is_warm_at`
+    // tells the caller whether the account was already touched in
+    // tx `tx_idx`. `last_tx_idx` is NOT journaled — warm state
+    // survives intra-tx reverts per EIP-2929. Unlike Storages we
+    // don't keep a per-tx-original snapshot for the field values:
+    // the EVM has no SSTORE-like status for balance/nonce/code_hash,
+    // so the EIP-2200 machinery is irrelevant here.
+    void mark_touched_at(size_t idx, uint64_t tx_idx) noexcept;
+    bool is_warm_at     (size_t idx, uint64_t tx_idx) const noexcept;
 
     uint64_t size() const noexcept { return originals_.size(); }
 
@@ -125,7 +144,11 @@ private:
 
     // One dirty-flag + new-value slot per field. The field is fetched
     // from `View` unless the matching dirty flag is set, in which case
-    // the value here wins.
+    // the value here wins. `last_tx_idx` tracks EIP-2929 warm state:
+    // `mark_touched_at` bumps it on first access in a tx; the field
+    // is NOT journaled (warm state survives intra-tx reverts).
+    // `last_tx_idx == 0` is the never-touched sentinel; tx_idx
+    // starts at 1.
     struct Mods {
         bool balance_dirty   : 1 = false;
         bool nonce_dirty     : 1 = false;
@@ -134,6 +157,8 @@ private:
         evmc::uint256be balance{};
         uint64_t        nonce     = 0;
         evmc::bytes32   code_hash{};
+
+        uint64_t        last_tx_idx = 0;
     };
 
     // Custom hasher: the address is already a high-entropy 20-byte value

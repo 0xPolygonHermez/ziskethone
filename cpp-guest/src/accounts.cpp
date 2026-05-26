@@ -29,18 +29,21 @@ size_t Accounts::index_of(const evmc::address& addr) const {
 
 // ----- read accessors -----
 
-evmc::uint256be Accounts::balance(const evmc::address& addr) const {
+evmc::uint256be Accounts::balance(const evmc::address& addr, uint64_t tx_idx) {
     const size_t i = index_of(addr);
+    mark_touched_at(i, tx_idx);
     return mods_[i].balance_dirty ? mods_[i].balance : originals_[i].balance();
 }
 
-uint64_t Accounts::nonce(const evmc::address& addr) const {
+uint64_t Accounts::nonce(const evmc::address& addr, uint64_t tx_idx) {
     const size_t i = index_of(addr);
+    mark_touched_at(i, tx_idx);
     return mods_[i].nonce_dirty ? mods_[i].nonce : originals_[i].nonce();
 }
 
-evmc::bytes32 Accounts::code_hash(const evmc::address& addr) const {
+evmc::bytes32 Accounts::code_hash(const evmc::address& addr, uint64_t tx_idx) {
     const size_t i = index_of(addr);
+    mark_touched_at(i, tx_idx);
     return mods_[i].code_hash_dirty ? mods_[i].code_hash : originals_[i].code_hash();
 }
 
@@ -82,16 +85,25 @@ bool Accounts::is_read_only_at(size_t idx) const noexcept {
 
 // ----- write accessors -----
 
-void Accounts::set_balance(const evmc::address& addr, const evmc::uint256be& v) {
-    set_balance_at(index_of(addr), v);
+void Accounts::set_balance(const evmc::address& addr, const evmc::uint256be& v,
+                           uint64_t tx_idx) {
+    const size_t i = index_of(addr);
+    mark_touched_at(i, tx_idx);
+    set_balance_at(i, v);
 }
 
-void Accounts::set_nonce(const evmc::address& addr, uint64_t v) {
-    set_nonce_at(index_of(addr), v);
+void Accounts::set_nonce(const evmc::address& addr, uint64_t v,
+                         uint64_t tx_idx) {
+    const size_t i = index_of(addr);
+    mark_touched_at(i, tx_idx);
+    set_nonce_at(i, v);
 }
 
-void Accounts::set_code_hash(const evmc::address& addr, const evmc::bytes32& v) {
-    set_code_hash_at(index_of(addr), v);
+void Accounts::set_code_hash(const evmc::address& addr, const evmc::bytes32& v,
+                             uint64_t tx_idx) {
+    const size_t i = index_of(addr);
+    mark_touched_at(i, tx_idx);
+    set_code_hash_at(i, v);
 }
 
 void Accounts::set_balance_at(size_t idx, const evmc::uint256be& v) {
@@ -107,6 +119,19 @@ void Accounts::set_nonce_at(size_t idx, uint64_t v) {
 void Accounts::set_code_hash_at(size_t idx, const evmc::bytes32& v) {
     mods_[idx].code_hash = v;
     mods_[idx].code_hash_dirty = true;
+}
+
+// ----- per-tx warm/cold tracking -----
+
+void Accounts::mark_touched_at(size_t idx, uint64_t tx_idx) noexcept {
+    auto& m = mods_[idx];
+    if (tx_idx > m.last_tx_idx) {
+        m.last_tx_idx = tx_idx;
+    }
+}
+
+bool Accounts::is_warm_at(size_t idx, uint64_t tx_idx) const noexcept {
+    return mods_[idx].last_tx_idx == tx_idx;
 }
 
 } // namespace zeg

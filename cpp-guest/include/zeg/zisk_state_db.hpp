@@ -28,6 +28,7 @@
 #include "zeg/previous_blocks.hpp"
 #include "zeg/storages.hpp"
 #include "zeg/transactions.hpp"
+#include "zeg/transient_storage.hpp"
 
 namespace zeg {
 
@@ -209,6 +210,17 @@ private:
     evmc_tx_context       tx_context_{};
     Journal               journal_{};
     evmc::VM              vm_;
+    // EIP-1153 transient storage. Reset at the start of every EVM
+    // frame (each tx + each system call) by the call sites that bump
+    // tx_counter_. TSTORE writes are journaled so revert restores
+    // (or erases) the entry.
+    TransientStorage      transient_{};
+
+    // Monotonic counter incremented at the start of each tx in
+    // process_transactions. Passed to Storages for per-tx warm/cold
+    // and per-tx-original tracking. Starts at 0 so first tx runs
+    // with tx_counter_ == 1 > 0 (the never-touched sentinel).
+    uint64_t              tx_counter_{0};
 
     // Per-tx receipts (finalized at end-of-tx; logs filled by
     // emit_log during execution).

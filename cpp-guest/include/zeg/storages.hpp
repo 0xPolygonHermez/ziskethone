@@ -33,15 +33,22 @@ public:
 
     // Returns the current slot value: the dirty new value if `set_value`
     // has been called for this (addr, position), else the original from
-    // the stream. Aborts via zeg::fatal if (addr, position) is not present.
+    // the stream. Aborts via zeg::fatal if (addr, position) is not
+    // present. Also touches the slot for tx `tx_idx` (snapshots the
+    // pre-tx value into `tx_original_at(idx)` if this is the first
+    // access in this tx) so the EVM sees the correct EIP-2929 warm
+    // state and EIP-2200 original on subsequent calls.
     evmc::bytes32 value(const evmc::address& addr,
-                        const evmc::bytes32& position) const;
+                        const evmc::bytes32& position,
+                        uint64_t              tx_idx);
 
     // Records a new value for the slot. Aborts via zeg::fatal if (addr,
-    // position) is not present in the table.
+    // position) is not present. Touches the slot for `tx_idx` (same
+    // snapshot semantics as `value()`).
     void set_value(const evmc::address& addr,
                    const evmc::bytes32& position,
-                   const evmc::bytes32& v);
+                   const evmc::bytes32& v,
+                   uint64_t              tx_idx);
 
     // By-index write accessor. Skips the hashmap lookup; useful for the
     // journal's rollback path where the index is already known.
@@ -65,6 +72,21 @@ public:
     // slot is a hard input-completeness bug, not a recoverable case.
     size_t index_of(const evmc::address& addr,
                     const evmc::bytes32& position) const;
+
+    // ----- per-tx tracking (EIP-2929 warm/cold + EIP-2200 originals) -----
+    //
+    // When a tx first touches a slot, snapshot the current value into
+    // `tx_original` and bump `last_tx_idx`. Idempotent within a tx.
+    // These fields are NEVER journaled — per EIP-2929 the warm state
+    // and per-tx-original survive intra-tx reverts.
+    void                 mark_touched_at(size_t idx, uint64_t tx_idx) noexcept;
+
+    // True iff this slot was touched in tx `tx_idx` (= warm for it).
+    bool                 is_warm_at(size_t idx, uint64_t tx_idx) const noexcept;
+
+    // Value at the start of the tx that last touched this slot. Only
+    // meaningful when `is_warm_at(idx, current_tx_idx) == true`.
+    const evmc::bytes32& tx_original_at(size_t idx) const noexcept;
 
     uint64_t size() const noexcept { return originals_.size(); }
 
@@ -103,9 +125,19 @@ private:
 
     // Per-slot mutation slot. The slot value is fetched from `View`
     // unless `dirty` is set, in which case `value` here wins.
+    //
+    // `last_tx_idx` / `tx_original` track EIP-2929 warm state and
+    // EIP-2200 per-tx-original: on the first touch in a tx,
+    // `mark_touched_at` snapshots the slot's current value into
+    // `tx_original` and bumps `last_tx_idx` to the tx counter. These
+    // two fields are NOT journaled — warm state survives intra-tx
+    // reverts per EIP-2929. `last_tx_idx == 0` is the never-touched
+    // sentinel; the tx counter starts at 1.
     struct Mods {
-        bool dirty : 1 = false;
+        bool          dirty : 1   = false;
         evmc::bytes32 value{};
+        uint64_t      last_tx_idx = 0;
+        evmc::bytes32 tx_original{};
     };
 
     // Composite map key: 20-byte address + 32-byte slot key. Trivially

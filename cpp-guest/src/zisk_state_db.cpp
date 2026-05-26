@@ -24,6 +24,42 @@ constexpr evmc::bytes32 EMPTY_CODE_HASH{{
     0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85, 0xa4, 0x70,
 }};
 
+// EVMC SSTORE status code per the EVMC spec (full 9-state table). The
+// inputs are: `original` = slot value at the start of the current tx
+// (EIP-2200), `current` = value right before this write, `new_value`
+// = value being written.
+evmc_storage_status compute_storage_status(const evmc::bytes32& original,
+                                           const evmc::bytes32& current,
+                                           const evmc::bytes32& new_value) {
+    constexpr evmc::bytes32 zero{};
+
+    if (new_value == current) {
+        return EVMC_STORAGE_ASSIGNED;
+    }
+    if (original == current) {
+        // First write in this tx.
+        if (original  == zero) return EVMC_STORAGE_ADDED;
+        if (new_value == zero) return EVMC_STORAGE_DELETED;
+        return EVMC_STORAGE_MODIFIED;
+    }
+    // Already dirtied in this tx (current != original).
+    if (original != zero && current == zero) {
+        // X -> 0 -> ?
+        return (new_value == original) ? EVMC_STORAGE_DELETED_RESTORED
+                                       : EVMC_STORAGE_DELETED_ADDED;
+    }
+    if (original != zero && new_value == zero) {
+        return EVMC_STORAGE_MODIFIED_DELETED;
+    }
+    if (original == zero && new_value == zero) {
+        return EVMC_STORAGE_ADDED_DELETED;  // 0 -> X -> 0
+    }
+    if (original == new_value) {
+        return EVMC_STORAGE_MODIFIED_RESTORED;
+    }
+    return EVMC_STORAGE_ASSIGNED;  // X -> Y -> Z fallback
+}
+
 // CREATE address derivation (Yellow Paper §7):
 //   address = keccak256(rlp([sender, sender_nonce]))[12:32]
 // `sender_nonce` is the value BEFORE the create-time increment.
@@ -380,33 +416,43 @@ bool ZiskStateDB::account_exists(const evmc::address& addr) const noexcept {
 
 evmc::bytes32 ZiskStateDB::get_storage(const evmc::address& addr,
                                        const evmc::bytes32& key) const noexcept {
-    return storages_.value(addr, key);
+    // `storages_.value(...)` touches the slot for tx_counter_ (snapshots
+    // tx_original on first access, marks warm). The const_cast is safe:
+    // mods_ is logically mutable scratch — evmc::Host::get_storage is
+    // const-by-interface but the per-tx tracking has to happen here.
+    return const_cast<Storages&>(storages_).value(addr, key, tx_counter_);
 }
 
 evmc_storage_status ZiskStateDB::set_storage(const evmc::address& addr,
                                              const evmc::bytes32& key,
                                              const evmc::bytes32& value) noexcept {
-    // Log the pre-write value first so a later revert can restore it,
-    // then perform the mutation. Proper EIP-2200/3529 status tracking
-    // (gas-refund-accurate) is a follow-up; ASSIGNED is the catch-all
-    // per evmc — gas refunds will be slightly off but the state
-    // transition itself is correct.
+    // No explicit mark_touched_at here: on Berlin+ revisions evmone
+    // always calls access_storage(addr, key) before set_storage, and
+    // our access_storage already does the snapshot. So by the time
+    // we read tx_original_at below the per-tx-original is in place.
     const size_t idx = storages_.index_of(addr, key);
-    journal_.log_storage(idx, storages_.value_at(idx));
+
+    const auto& original = storages_.tx_original_at(idx);
+    const auto  current  = storages_.value_at(idx);
+
+    journal_.log_storage(idx, current);
     storages_.set_value_at(idx, value);
-    return EVMC_STORAGE_ASSIGNED;
+
+    return compute_storage_status(original, current, value);
 }
 
 evmc::uint256be ZiskStateDB::get_balance(const evmc::address& addr) const noexcept {
-    return accounts_.balance(addr);
+    // const_cast: the per-tx warm-touch mutates accounts_.mods_,
+    // which is logically scratch state. Same pattern as get_storage.
+    return const_cast<Accounts&>(accounts_).balance(addr, tx_counter_);
 }
 
 evmc::bytes32 ZiskStateDB::get_code_hash(const evmc::address& addr) const noexcept {
-    return accounts_.code_hash(addr);
+    return const_cast<Accounts&>(accounts_).code_hash(addr, tx_counter_);
 }
 
 size_t ZiskStateDB::get_code_size(const evmc::address& addr) const noexcept {
-    const auto hash = accounts_.code_hash(addr);
+    const auto hash = const_cast<Accounts&>(accounts_).code_hash(addr, tx_counter_);
     if (hash == EMPTY_CODE_HASH) {
         return 0;
     }
@@ -417,7 +463,7 @@ size_t ZiskStateDB::copy_code(const evmc::address& addr,
                               size_t offset,
                               uint8_t* buffer,
                               size_t buffer_size) const noexcept {
-    const auto hash = accounts_.code_hash(addr);
+    const auto hash = const_cast<Accounts&>(accounts_).code_hash(addr, tx_counter_);
     if (hash == EMPTY_CODE_HASH) {
         return 0;
     }
@@ -474,7 +520,7 @@ ZiskStateDB::Checkpoint ZiskStateDB::checkpoint() noexcept {
 }
 
 void ZiskStateDB::rollback(Checkpoint cp) noexcept {
-    journal_.rollback(cp.journal_cp, accounts_, storages_);
+    journal_.rollback(cp.journal_cp, accounts_, storages_, transient_);
     if (!tx_receipts_.empty()) {
         tx_receipts_.back().logs.resize(cp.log_count);
     }
@@ -505,7 +551,7 @@ evmc::bytes32 ZiskStateDB::get_block_hash(int64_t block_number) const noexcept {
 }
 
 std::span<const uint8_t> ZiskStateDB::code(const evmc::address& addr) const noexcept {
-    const auto hash = accounts_.code_hash(addr);
+    const auto hash = const_cast<Accounts&>(accounts_).code_hash(addr, tx_counter_);
     if (hash == EMPTY_CODE_HASH) {
         return {};
     }
@@ -532,16 +578,20 @@ void ZiskStateDB::transfer_value(const evmc::address& from,
 
 // ===== Unimplementable until additional infrastructure lands =====
 
-evmc::bytes32 ZiskStateDB::get_transient_storage(const evmc::address&,
-                                                 const evmc::bytes32&) const noexcept {
-    fatal("ZiskStateDB::get_transient_storage: not yet implemented");
-    return {};
+evmc::bytes32 ZiskStateDB::get_transient_storage(const evmc::address& addr,
+                                                 const evmc::bytes32& key) const noexcept {
+    return transient_.get(addr, key);
 }
 
-void ZiskStateDB::set_transient_storage(const evmc::address&,
-                                        const evmc::bytes32&,
-                                        const evmc::bytes32&) noexcept {
-    fatal("ZiskStateDB::set_transient_storage: not yet implemented");
+void ZiskStateDB::set_transient_storage(const evmc::address& addr,
+                                        const evmc::bytes32& key,
+                                        const evmc::bytes32& value) noexcept {
+    // Snapshot the slot's pre-write state and journal it BEFORE the
+    // mutation so an enclosing revert can restore it. EIP-1153 only
+    // requires per-frame reset (handled at tx/system-call boundaries)
+    // + per-revert rollback; no warm/cold or "original" semantics.
+    const auto prev = transient_.set(addr, key, value);
+    journal_.log_transient(addr, key, prev.was_present, prev.value);
 }
 
 evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
@@ -674,15 +724,26 @@ void ZiskStateDB::emit_log(const evmc::address& addr,
     tx_receipts_.back().logs.push_back(std::move(entry));
 }
 
-evmc_access_status ZiskStateDB::access_account(const evmc::address&) noexcept {
-    fatal("ZiskStateDB::access_account: EIP-2929 access list not yet implemented");
-    return EVMC_ACCESS_COLD;
+evmc_access_status ZiskStateDB::access_account(const evmc::address& addr) noexcept {
+    // EIP-2929 account warm/cold: warm iff the account was already
+    // touched in this tx (last_tx_idx == tx_counter_). Either way,
+    // touch it now so the next access sees it warm. Same pattern as
+    // access_storage.
+    const size_t idx      = accounts_.index_of(addr);
+    const bool   was_warm = accounts_.is_warm_at(idx, tx_counter_);
+    accounts_.mark_touched_at(idx, tx_counter_);
+    return was_warm ? EVMC_ACCESS_WARM : EVMC_ACCESS_COLD;
 }
 
-evmc_access_status ZiskStateDB::access_storage(const evmc::address&,
-                                               const evmc::bytes32&) noexcept {
-    fatal("ZiskStateDB::access_storage: EIP-2929 access list not yet implemented");
-    return EVMC_ACCESS_COLD;
+evmc_access_status ZiskStateDB::access_storage(const evmc::address& addr,
+                                               const evmc::bytes32& key) noexcept {
+    // EIP-2929 warm/cold: a slot is warm iff it was already touched in
+    // this tx (last_tx_idx == tx_counter_). Either way, touch it now
+    // so the next access sees it warm.
+    const size_t idx       = storages_.index_of(addr, key);
+    const bool   was_warm  = storages_.is_warm_at(idx, tx_counter_);
+    storages_.mark_touched_at(idx, tx_counter_);
+    return was_warm ? EVMC_ACCESS_WARM : EVMC_ACCESS_COLD;
 }
 
 // ============================================================================
@@ -698,6 +759,17 @@ void ZiskStateDB::execute_block(const Transactions& transactions) noexcept {
 
 evmc::Result ZiskStateDB::system_call(const evmc::address&     target,
                                       std::span<const uint8_t> calldata) noexcept {
+    // Treat every system call as its own EVM frame for the purposes
+    // of EIP-2929 warm/cold + EIP-2200 per-tx-original tracking. The
+    // bump matters even though system calls don't pay gas: without
+    // it, the very first access inside the frame would run with
+    // tx_counter_ matching the never-touched sentinel (0), which
+    // would make is_warm_at falsely report `true` and mark_touched_at
+    // skip its snapshot. Transient storage (EIP-1153) is also reset
+    // per-frame.
+    ++tx_counter_;
+    transient_.reset();
+
     evmc_message msg{};
     msg.kind         = EVMC_CALL;
     msg.sender       = kSystemAddress;
@@ -770,6 +842,14 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
     using TxType = Transactions::Type;
 
     for (size_t i = 0; i < transactions.size(); ++i) {
+        // Bump the tx counter BEFORE any Storages access — so the
+        // very first SLOAD/SSTORE/access in this tx sees a fresh
+        // tx_idx and trips Storages::mark_touched_at's snapshot
+        // path. Starts the first tx at counter 1 (> 0 sentinel).
+        // Transient storage (EIP-1153) is also reset per-tx.
+        ++tx_counter_;
+        transient_.reset();
+
         const auto& tx = transactions.at(i);
 
         // Push the receipt for this tx up front. emit_log appends to

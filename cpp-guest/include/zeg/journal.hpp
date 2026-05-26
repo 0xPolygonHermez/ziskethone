@@ -28,6 +28,7 @@ namespace zeg {
 // Forward declarations — the cpp pulls in the full headers.
 class Accounts;
 class Storages;
+class TransientStorage;
 
 class Journal {
 public:
@@ -47,11 +48,25 @@ public:
     void log_code_hash(size_t idx, const evmc::bytes32&    old_value);
     void log_storage  (size_t idx, const evmc::bytes32&    old_value);
 
+    // EIP-1153 transient storage. Unlike persistent storage, the
+    // transient map is dynamic — there's no fixed index for a slot —
+    // so the entry carries the full (address, position) key plus a
+    // `was_present` flag indicating whether the slot existed before
+    // this write (so rollback knows whether to `restore` to a value
+    // or erase the entry).
+    void log_transient(const evmc::address&  address,
+                       const evmc::bytes32&  position,
+                       bool                  was_present,
+                       const evmc::bytes32&  old_value);
+
     // Pop every entry above `cp` (and the checkpoint marker itself),
-    // applying each write record's old_value to `accounts` / `storages`
-    // in reverse order. Aborts via zeg::fatal if `cp` does not refer to
-    // a valid checkpoint marker.
-    void rollback(Checkpoint cp, Accounts& accounts, Storages& storages);
+    // applying each write record's old_value to `accounts` /
+    // `storages` / `transient` in reverse order. Aborts via zeg::fatal
+    // if `cp` does not refer to a valid checkpoint marker.
+    void rollback(Checkpoint        cp,
+                  Accounts&         accounts,
+                  Storages&         storages,
+                  TransientStorage& transient);
 
     // Stack depth (checkpoints + write records).
     size_t size() const noexcept { return entries_.size(); }
@@ -62,13 +77,20 @@ private:
     struct BalanceEntry  { size_t idx; evmc::uint256be         old_value; };
     struct CodeHashEntry { size_t idx; evmc::bytes32           old_value; };
     struct StorageEntry  { size_t idx; evmc::bytes32           old_value; };
+    struct TransientEntry {
+        evmc::address  address;
+        evmc::bytes32  position;
+        bool           was_present;
+        evmc::bytes32  old_value;   // valid iff was_present
+    };
 
     using Entry = std::variant<
         CheckpointMarker,
         NonceEntry,
         BalanceEntry,
         CodeHashEntry,
-        StorageEntry>;
+        StorageEntry,
+        TransientEntry>;
 
     std::vector<Entry> entries_;
 };

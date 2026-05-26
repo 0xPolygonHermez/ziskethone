@@ -79,6 +79,7 @@ add_executable(zisk_eth_guest
     src/state_root.cpp
     src/storages.cpp
     src/transactions.cpp
+    src/transient_storage.cpp
     src/zisk_crypto_host_stub.cpp
     src/zisk_state_db.cpp
 )
