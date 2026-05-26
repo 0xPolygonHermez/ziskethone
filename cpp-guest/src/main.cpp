@@ -1,17 +1,21 @@
 // ZisK guest entry point: stateless re-execution of an Ethereum block.
 //
 // Reads a single private-input stream produced by `rust-input-gen`, replays
-// the block against a ZiskStateDB, verifies the pre- and post-state roots,
-// and emits the consensus block hash as a public output.
+// the block against a ZiskStateDB, verifies the pre-execution state root
+// against `consensus.parent_hash()`, recomputes the post-execution state
+// root and the execution-layer block hash of the block under proof, and
+// emits that block hash as the sole public output.
 //
 // The stream is consumed linearly. Every advance is 8-byte aligned so typed
 // pointer casts on the input buffer stay valid.
 
+#include <array>
 #include <cstdint>
 
 #include <evmc/evmc.hpp>
 
 #include "zeg/accounts.hpp"
+#include "zeg/block_header.hpp"
 #include "zeg/consensus_info.hpp"
 #include "zeg/contracts.hpp"
 #include "zeg/fatal.hpp"
@@ -32,17 +36,20 @@ const uint8_t* read_input_stream();
 // Emit a 32-byte value to ZisK as a public output.
 void emit_public_output(const evmc::bytes32& value);
 
-// ===== Header / consensus hash handling =====
-
-// Read the parent block's expected stateRoot from the stream.
-evmc::bytes32 parse_expected_old_state_root(const uint8_t*& cursor);
-
-// Read the current block's expected stateRoot from the stream.
-evmc::bytes32 parse_expected_new_state_root(const uint8_t*& cursor);
-
-// Read the precomputed consensus block hash, validate it against the
-// reconstructed header, and return the canonical 32-byte value.
-evmc::bytes32 parse_and_check_consensus_block_hash(const uint8_t*& cursor);
+// ===== Post-merge header constants =====
+//
+// `ommers_hash` is fixed at keccak256(rlp([])) since The Merge — no
+// uncles can ever be included. `difficulty` is zero from The Merge
+// onward, and `nonce` is the 8-byte zero string (Pectra inherits both
+// from The Merge / Shanghai conventions).
+constexpr evmc::bytes32 kEmptyOmmersHash{{
+    0x1d, 0xcc, 0x4d, 0xe8, 0xde, 0xc7, 0x5d, 0x7a,
+    0xab, 0x85, 0xb5, 0x67, 0xb6, 0xcc, 0xd4, 0x1a,
+    0xd3, 0x12, 0x45, 0x1b, 0x94, 0x8a, 0x74, 0x13,
+    0xf0, 0xa1, 0x42, 0xfd, 0x40, 0xd4, 0x93, 0x47,
+}};
+constexpr evmc::uint256be       kPostMergeDifficulty{};
+constexpr std::array<uint8_t, 8> kPostMergeNonce{};
 
 } // namespace
 
@@ -84,30 +91,71 @@ int main() {
     //    back cleanly.
     state.execute_block(transactions);
 
-    // 6. Verify the pre-execution state root against the parent header.
-    //    Constructing the StateRoot walks the trie once with the
-    //    original values, caches the result, and records the per-NodeR
-    //    cache entries the new-root pass will reuse. `cursor` is
-    //    advanced past every byte consumed.
-    const evmc::bytes32 expected_old = parse_expected_old_state_root(cursor);
+    // 6. Verify the pre-execution state root against the parent
+    //    anchor. In this guest's convention `consensus.parent_hash()`
+    //    carries the parent state root directly, so it is the expected
+    //    value for the old root. Constructing the StateRoot walks the
+    //    trie once with the original values, caches the result, and
+    //    records the per-NodeR cache entries the new-root pass will
+    //    reuse. `cursor` is advanced past every byte consumed.
     zeg::StateRoot state_root(cursor, accounts, storages);
-    if (state_root.old_state_root() != expected_old) {
+    if (state_root.old_state_root() != consensus.parent_hash()) {
         zeg::fatal("pre-execution state root mismatch");
     }
 
-    // 7. Verify the post-execution state root against the current
-    //    header. calculate_new_state_root reuses the cache populated
-    //    above — it does not consume from `cursor`.
-    const evmc::bytes32 expected_new = parse_expected_new_state_root(cursor);
-    const evmc::bytes32 computed_new = state_root.calculate_new_state_root();
-    if (computed_new != expected_new) {
-        zeg::fatal("post-execution state root mismatch");
-    }
+    // 7. Compute the post-execution state root. calculate_new_state_root
+    //    reuses the cache populated above — it does not consume from
+    //    `cursor`. The value is no longer verified here against a
+    //    prover-supplied root; instead it feeds step 7' as the
+    //    `state_root` field of the reconstructed header.
+    const evmc::bytes32 new_state_root = state_root.calculate_new_state_root();
 
-    // 8. Parse and verify the consensus block hash, then emit it as the
-    //    sole public output of this guest run.
-    const evmc::bytes32 consensus_hash = parse_and_check_consensus_block_hash(cursor);
-    emit_public_output(consensus_hash);
+    // 7'. Compute the execution-layer block hash of the block under
+    //     proof: keccak256(RLP(header)) over the 21 Pectra header
+    //     fields. Field sources:
+    //       - consensus inputs        ← `consensus`
+    //       - post-execution roots    ← `new_state_root`,
+    //                                   `transactions.transactions_root()`,
+    //                                   `state.{receipts,withdrawals}_root()`
+    //       - post-execution counters ← `state.{gas_used, blob_gas_used,
+    //                                            block_bloom_filter,
+    //                                            requests_hash}()`
+    //       - post-merge constants    ← `kEmptyOmmersHash`,
+    //                                   `kPostMergeDifficulty`,
+    //                                   `kPostMergeNonce`
+    //     The result is held locally — step 8 still emits the
+    //     prover-supplied consensus block hash, and downstream code
+    //     will eventually wire `execution_block_hash` into the
+    //     guest's public output.
+    const zeg::BlockHeader header{
+        .parent_hash              = consensus.parent_hash(),
+        .ommers_hash              = kEmptyOmmersHash,
+        .coinbase                 = consensus.beneficiary(),
+        .state_root               = new_state_root,
+        .transactions_root        = transactions.transactions_root(),
+        .receipts_root            = state.receipts_root(),
+        .logs_bloom               = std::span<const uint8_t, 256>{state.block_bloom_filter()},
+        .difficulty               = kPostMergeDifficulty,
+        .number                   = consensus.number(),
+        .gas_limit                = consensus.gas_limit(),
+        .gas_used                 = state.gas_used(),
+        .timestamp                = consensus.timestamp(),
+        .extra_data               = consensus.extra_data(),
+        .prev_randao              = consensus.prev_randao(),
+        .nonce                    = std::span<const uint8_t, 8>{kPostMergeNonce},
+        .base_fee_per_gas         = consensus.base_fee_per_gas(),
+        .withdrawals_root         = state.withdrawals_root(),
+        .blob_gas_used            = state.blob_gas_used(),
+        .excess_blob_gas          = consensus.excess_blob_gas(),
+        .parent_beacon_block_root = consensus.parent_beacon_block_root(),
+        .requests_hash            = state.requests_hash(),
+    };
+    const evmc::bytes32 execution_block_hash =
+        zeg::compute_block_header_hash(header);
+
+    // 8. Emit the execution-layer block hash as the sole public output
+    //    of this guest run.
+    emit_public_output(execution_block_hash);
 
     return 0;
 }
@@ -123,18 +171,6 @@ const uint8_t* read_input_stream() {
 
 void emit_public_output(const evmc::bytes32&) {
     // TODO: replace with the ZisK public-output API.
-}
-
-evmc::bytes32 parse_expected_old_state_root(const uint8_t*&) {
-    return {};
-}
-
-evmc::bytes32 parse_expected_new_state_root(const uint8_t*&) {
-    return {};
-}
-
-evmc::bytes32 parse_and_check_consensus_block_hash(const uint8_t*&) {
-    return {};
 }
 
 } // namespace

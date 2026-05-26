@@ -70,10 +70,12 @@ add_executable(zisk_eth_guest
     src/main.cpp
     src/fatal.cpp
     src/accounts.cpp
+    src/block_header.cpp
     src/consensus_info.cpp
     src/contracts.cpp
     src/hex_prefix.cpp
     src/journal.cpp
+    src/mpt.cpp
     src/previous_blocks.cpp
     src/rlp.cpp
     src/state_root.cpp

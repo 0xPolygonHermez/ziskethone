@@ -184,3 +184,14 @@ address,position -> value that is reset of each transaction including system cal
 
 For each journal entry we should add a flag to indicate if it's transient so we can unroll it correctly.
 
+---
+
+I need to compute the root for transactions and transactionrecepts merkle patricia trees.  The transactions need to be build when the transactions are loaded, and the other after the block is processed.
+
+We will need a helper class to build the MPTs.
+
+---
+
+The current block's post-execution state_root, computed by the separate StateRoot class after execute_block finishes (it walks the prover-supplied SMT-hint stream).
+The withdrawals_root (EIP-4895) — a tiny MPT over consensus_.withdrawals().
+The requests_hash (EIP-7685) — a sha256 reduction over the collected requests_ entries.

@@ -6,9 +6,12 @@
 #include <evmone/evmone.h>  // evmc_create_evmone for the owned VM instance
 #include <intx/intx.hpp>    // 256-bit add for selfdestruct balance transfer
 
+#include "zeg/config.hpp"
 #include "zeg/fatal.hpp"
 #include "zeg/keccak.hpp"
+#include "zeg/mpt.hpp"
 #include "zeg/rlp.hpp"
+#include "zeg/sha256.hpp"
 #include "zeg/zisk_crypto.hpp"  // secp256k1_ecdsa_verify (EIP-7702 auth signer)
 
 namespace zeg {
@@ -373,6 +376,84 @@ evmc::address verify_signature_and_get_signer(
     evmc::address signer{};
     std::memcpy(signer.bytes, ph.bytes + 12, 20);
     return signer;
+}
+
+// Wrap an already-concatenated payload of pre-encoded RLP items as
+// an RLP list. `rlp::encode_list`'s initializer_list overload is
+// compile-time-sized; this helper is its runtime-sized sibling.
+rlp::Bytes wrap_rlp_list(const rlp::Bytes& payload) {
+    rlp::Bytes out;
+    if (payload.size() <= 55) {
+        out.reserve(1 + payload.size());
+        out.push_back(static_cast<uint8_t>(0xc0 + payload.size()));
+    } else {
+        size_t l = payload.size();
+        uint8_t nbytes = 0;
+        for (size_t x = l; x > 0; x >>= 8) ++nbytes;
+        out.reserve(1 + nbytes + payload.size());
+        out.push_back(static_cast<uint8_t>(0xf7 + nbytes));
+        for (int8_t i = nbytes - 1; i >= 0; --i) {
+            out.push_back(static_cast<uint8_t>(l >> (8 * i)));
+        }
+    }
+    out.insert(out.end(), payload.begin(), payload.end());
+    return out;
+}
+
+// Canonical receipt encoding per Yellow Paper §4.3.1:
+//   Legacy:  rlp([status, cum_gas_used, logs_bloom, logs])
+//   Typed:   type_byte || rlp([…same fields…])
+// where each log is RLP-encoded as [address, [topics…], data].
+std::vector<uint8_t> encode_receipt(const ZiskStateDB::TxReceipt& r) {
+    using rlp::BytesView;
+
+    // Build the outer logs list: concat each log's RLP, then wrap.
+    rlp::Bytes logs_payload;
+    for (const auto& log : r.logs) {
+        const auto addr_rlp = rlp::encode(BytesView{log.address.bytes, 20});
+
+        // Topics: variable-count list of 32-byte strings.
+        rlp::Bytes topics_payload;
+        for (const auto& t : log.topics) {
+            const auto t_rlp = rlp::encode(BytesView{t.bytes, 32});
+            topics_payload.insert(topics_payload.end(),
+                                  t_rlp.begin(), t_rlp.end());
+        }
+        const auto topics_list = wrap_rlp_list(topics_payload);
+
+        const auto data_rlp = rlp::encode(BytesView{log.data.data(),
+                                                    log.data.size()});
+
+        const auto log_rlp = rlp::encode_list({
+            BytesView{addr_rlp},
+            BytesView{topics_list},
+            BytesView{data_rlp},
+        });
+        logs_payload.insert(logs_payload.end(),
+                            log_rlp.begin(), log_rlp.end());
+    }
+    const auto logs_list = wrap_rlp_list(logs_payload);
+
+    const auto status_rlp  = rlp::encode_u64(r.status ? 1u : 0u);
+    const auto cum_gas_rlp = rlp::encode_u64(r.cumulative_gas_used);
+    const auto bloom_rlp   = rlp::encode(BytesView{r.logs_bloom.data(),
+                                                   r.logs_bloom.size()});
+
+    const auto body = rlp::encode_list({
+        BytesView{status_rlp},
+        BytesView{cum_gas_rlp},
+        BytesView{bloom_rlp},
+        BytesView{logs_list},
+    });
+
+    if (r.tx_type == Transactions::Type::Legacy) {
+        return std::vector<uint8_t>(body.begin(), body.end());
+    }
+    std::vector<uint8_t> out;
+    out.reserve(1 + body.size());
+    out.push_back(static_cast<uint8_t>(r.tx_type));
+    out.insert(out.end(), body.begin(), body.end());
+    return out;
 }
 
 } // namespace
@@ -755,6 +836,52 @@ void ZiskStateDB::execute_block(const Transactions& transactions) noexcept {
     pre_execute_block ();
     process_transactions(transactions);
     post_execute_block();
+
+    // Receipts trie root: built from the finalized tx_receipts_, one
+    // leaf per tx keyed by RLP(tx_index).
+    {
+        MerklePatriciaTrie trie;
+        for (size_t i = 0; i < tx_receipts_.size(); ++i) {
+            trie.insert(rlp::encode_u64(i), encode_receipt(tx_receipts_[i]));
+        }
+        receipts_root_ = trie.root_hash();
+    }
+
+    // Withdrawals trie root (EIP-4895): one leaf per withdrawal, keyed
+    // by RLP(index_in_block), value = rlp_list(index, validator_index,
+    // address, amount_gwei). Empty list → empty-trie root.
+    {
+        MerklePatriciaTrie trie;
+        for (size_t i = 0; i < consensus_.withdrawals_count(); ++i) {
+            const auto& w           = consensus_.withdrawal(i);
+            const auto  index_rlp           = rlp::encode_u64(w.index());
+            const auto  validator_index_rlp = rlp::encode_u64(w.validator_index());
+            const auto  address_rlp         = rlp::encode(rlp::BytesView{w.address().bytes,
+                                                                          sizeof(w.address().bytes)});
+            const auto  amount_rlp          = rlp::encode_u64(w.amount_gwei());
+            auto record = rlp::encode_list({index_rlp,
+                                            validator_index_rlp,
+                                            address_rlp,
+                                            amount_rlp});
+            trie.insert(rlp::encode_u64(i), std::move(record));
+        }
+        withdrawals_root_ = trie.root_hash();
+    }
+
+    // EIP-7685 requests_hash: sha256(sha256(req[0]) || sha256(req[1])
+    // || ...) over the type-prefixed request blobs in requests_.
+    // Empty list collapses to sha256("") per the EIP.
+    {
+        std::vector<uint8_t> concatenated;
+        concatenated.reserve(requests_.size() * 32);
+        for (const auto& req : requests_) {
+            const auto inner = sha256_bytes32(req.data(), req.size());
+            concatenated.insert(concatenated.end(),
+                                std::begin(inner.bytes),
+                                std::end(inner.bytes));
+        }
+        requests_hash_ = sha256_bytes32(concatenated.data(), concatenated.size());
+    }
 }
 
 evmc::Result ZiskStateDB::system_call(const evmc::address&     target,
@@ -807,7 +934,7 @@ void ZiskStateDB::pre_execute_block() noexcept {
     ctx.block_gas_limit   = static_cast<int64_t>(consensus_.gas_limit());
     ctx.block_prev_randao = consensus_.prev_randao();
     ctx.chain_id          = intx::be::store<evmc::uint256be>(
-                                intx::uint256{consensus_.chain_id()});
+                                intx::uint256{kChainId});
     ctx.block_base_fee    = consensus_.base_fee_per_gas();
     // EIP-4844: blob_base_fee = fake_exponential(1, excess_blob_gas,
     //                                            3338477).
@@ -905,6 +1032,11 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
                 }
                 ctx.blob_hashes       = blob_hashes.data();
                 ctx.blob_hashes_count = blob_hashes.size();
+                // Accumulate the block-level blob_gas_used field
+                // (EIP-4844). The per-tx fee debit happens further
+                // below (sender pays blob_gas × blob_base_fee); this
+                // is just the running header total.
+                blob_gas_used_ += blob_hashes.size() * kGasPerBlob;
             }
 
             // EIP-7873 initcodes — Type 5 (Osaka) only. Each entry's
@@ -1032,7 +1164,7 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
                 // chain_id must be 0 (universal) or match the
                 // current chain id; otherwise skip.
                 if (a_chain_id != 0 &&
-                    a_chain_id != consensus_.chain_id()) {
+                    a_chain_id != kChainId) {
                     ++auth_idx;
                     continue;
                 }

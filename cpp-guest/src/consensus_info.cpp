@@ -52,7 +52,6 @@ const evmc::address& ConsensusInfo::beneficiary() const noexcept {
 uint64_t ConsensusInfo::number   () const noexcept { return u64_at(header_ + kNumberOffset);    }
 uint64_t ConsensusInfo::gas_limit() const noexcept { return u64_at(header_ + kGasLimitOffset);  }
 uint64_t ConsensusInfo::timestamp() const noexcept { return u64_at(header_ + kTimestampOffset); }
-uint64_t ConsensusInfo::chain_id () const noexcept { return u64_at(header_ + kChainIdOffset);   }
 
 std::span<const uint8_t> ConsensusInfo::extra_data() const noexcept {
     const uint64_t len = u64_at(header_ + kExtraDataLenOffset);
@@ -72,7 +71,7 @@ uint64_t ConsensusInfo::excess_blob_gas() const noexcept {
 }
 
 // ============================================================================
-// Constructor — fixed 200 B prefix + N × 48 B withdrawal records.
+// Constructor — fixed 232 B prefix + N × 48 B withdrawal records.
 // ============================================================================
 
 ConsensusInfo::ConsensusInfo(const uint8_t*& cursor) {

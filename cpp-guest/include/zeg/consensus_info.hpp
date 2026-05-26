@@ -8,7 +8,7 @@
 //
 // Layout in the input stream:
 //
-//   uint8[200] fixed_header_prefix     // see kFieldOffset constants
+//   uint8[232] fixed_header_prefix     // see kFieldOffset constants
 //   Withdrawal × withdrawals_count     // each 48 B (= multiple of 8)
 //
 // No per-record trailing padding is needed — every field is naturally
@@ -27,25 +27,24 @@ namespace zeg {
 
 class ConsensusInfo {
 public:
-    static constexpr uint64_t kFixedPrefixSize      = 240;
+    static constexpr uint64_t kFixedPrefixSize      = 232;
     static constexpr uint64_t kWithdrawalRecordSize = 48;
 
-    // Fixed offsets within the 240-byte header prefix. All 8-byte
+    // Fixed offsets within the 232-byte header prefix. All 8-byte
     // aligned by construction.
     static constexpr size_t kParentHashOffset            = 0;    // bytes32
     static constexpr size_t kBeneficiaryOffset           = 32;   // 20 B + 4 B pad
     static constexpr size_t kNumberOffset                = 56;   // u64
     static constexpr size_t kGasLimitOffset              = 64;   // u64
     static constexpr size_t kTimestampOffset             = 72;   // u64
-    static constexpr size_t kChainIdOffset               = 80;   // u64
-    static constexpr size_t kExtraDataLenOffset          = 88;   // u64; <= 32
-    static constexpr size_t kExtraDataOffset             = 96;   // 32 B buffer
-    static constexpr size_t kPrevRandaoOffset            = 128;  // bytes32
-    static constexpr size_t kParentBeaconBlockRootOffset = 160;  // bytes32
-    static constexpr size_t kBaseFeePerGasOffset         = 192;  // uint256be
-    static constexpr size_t kWithdrawalsCountOffset      = 224;  // u64
-    static constexpr size_t kExcessBlobGasOffset         = 232;  // u64 (EIP-4844)
-    // End of fixed prefix: 240.
+    static constexpr size_t kExtraDataLenOffset          = 80;   // u64; <= 32
+    static constexpr size_t kExtraDataOffset             = 88;   // 32 B buffer
+    static constexpr size_t kPrevRandaoOffset            = 120;  // bytes32
+    static constexpr size_t kParentBeaconBlockRootOffset = 152;  // bytes32
+    static constexpr size_t kBaseFeePerGasOffset         = 184;  // uint256be
+    static constexpr size_t kWithdrawalsCountOffset      = 216;  // u64
+    static constexpr size_t kExcessBlobGasOffset         = 224;  // u64 (EIP-4844)
+    // End of fixed prefix: 232.
 
     // Zero-copy view over one 48-byte withdrawal record (EIP-4895).
     //
@@ -72,13 +71,12 @@ public:
     // `cursor` is advanced past every byte consumed.
     explicit ConsensusInfo(const uint8_t*& cursor);
 
-    // ----- header accessors (zero-copy refs into the 200 B prefix) -----
+    // ----- header accessors (zero-copy refs into the 232 B prefix) -----
     const evmc::bytes32&     parent_hash             () const noexcept;
     const evmc::address&     beneficiary             () const noexcept;
     uint64_t                 number                  () const noexcept;
     uint64_t                 gas_limit               () const noexcept;
     uint64_t                 timestamp               () const noexcept;
-    uint64_t                 chain_id                () const noexcept;
     std::span<const uint8_t> extra_data              () const noexcept;
     const evmc::bytes32&     prev_randao             () const noexcept;
     const evmc::bytes32&     parent_beacon_block_root() const noexcept;

@@ -5,6 +5,7 @@
 
 #include "zeg/fatal.hpp"
 #include "zeg/keccak.hpp"
+#include "zeg/mpt.hpp"
 #include "zeg/rlp.hpp"
 #include "zeg/stream.hpp"
 #include "zeg/zisk_crypto.hpp"
@@ -478,6 +479,12 @@ Transactions::Transactions(const uint8_t*& cursor) {
     const uint64_t count = read_u64_le(cursor);
     views_.reserve(count);
 
+    // Builds the canonical transactions trie alongside the per-tx
+    // parsing — the value at each leaf is the wire envelope verbatim
+    // (`type_byte || rlp` for typed, raw RLP list for legacy). Root
+    // hashed once at the end of the loop into transactions_root_.
+    MerklePatriciaTrie trie;
+
     for (uint64_t i = 0; i < count; ++i) {
         const uint64_t env_size = read_u64_le(cursor);
 
@@ -546,8 +553,14 @@ Transactions::Transactions(const uint8_t*& cursor) {
         v.transaction_hash_ = keccak256_bytes32(env, env_size);
         v.sender_           = verify_and_recover_sender(v, pubkey);
 
+        // MPT leaf: RLP(tx_index) → wire envelope verbatim.
+        trie.insert(rlp::encode_u64(i),
+                    std::vector<uint8_t>(env, env + env_size));
+
         views_.push_back(std::move(v));
     }
+
+    transactions_root_ = trie.root_hash();
 }
 
 } // namespace zeg

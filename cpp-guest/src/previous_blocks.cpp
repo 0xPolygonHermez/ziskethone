@@ -3,9 +3,8 @@
 #include <cstring>
 #include <memory>  // std::assume_aligned
 
+#include "zeg/block_header.hpp"
 #include "zeg/fatal.hpp"
-#include "zeg/keccak.hpp"
-#include "zeg/rlp.hpp"
 #include "zeg/stream.hpp"
 
 namespace zeg {
@@ -86,92 +85,36 @@ std::span<const uint8_t> PreviousBlocks::View::extra_data() const noexcept {
 }
 
 // ============================================================================
-// Hash computation — canonical Pectra-era header RLP, then keccak256.
+// Hash computation — delegate to the shared block_header helper so the
+// current-block hash path uses the exact same encoding.
 // ============================================================================
 
 namespace {
 
-// Build the RLP encoding of a Pectra block header. Field order MUST
-// match the Yellow Paper (App. L) — any reorder produces a wrong hash.
-rlp::Bytes encode_header_rlp(const PreviousBlocks::View& v) {
-    using rlp::BytesView;
-
-    // Hashes / address / bloom / nonce / extra_data → byte-string RLP.
-    const auto parent_hash_rlp        = rlp::encode(BytesView{v.parent_hash().bytes,
-                                                              sizeof(v.parent_hash().bytes)});
-    const auto ommers_hash_rlp        = rlp::encode(BytesView{v.ommers_hash().bytes,
-                                                              sizeof(v.ommers_hash().bytes)});
-    const auto coinbase_rlp           = rlp::encode(BytesView{v.coinbase().bytes,
-                                                              sizeof(v.coinbase().bytes)});
-    const auto state_root_rlp         = rlp::encode(BytesView{v.state_root().bytes,
-                                                              sizeof(v.state_root().bytes)});
-    const auto txs_root_rlp           = rlp::encode(BytesView{v.transactions_root().bytes,
-                                                              sizeof(v.transactions_root().bytes)});
-    const auto receipts_root_rlp      = rlp::encode(BytesView{v.receipts_root().bytes,
-                                                              sizeof(v.receipts_root().bytes)});
-    const auto logs_bloom_span        = v.logs_bloom();
-    const auto logs_bloom_rlp         = rlp::encode(BytesView{logs_bloom_span.data(),
-                                                              logs_bloom_span.size()});
-
-    // Integers (difficulty, baseFee, u64 counters) → trimmed integer RLP.
-    const auto difficulty_rlp         = rlp::encode_u256(v.difficulty());
-    const auto number_rlp             = rlp::encode_u64 (v.number());
-    const auto gas_limit_rlp          = rlp::encode_u64 (v.gas_limit());
-    const auto gas_used_rlp           = rlp::encode_u64 (v.gas_used());
-    const auto timestamp_rlp          = rlp::encode_u64 (v.timestamp());
-
-    // extra_data (≤ 32 B) → byte-string RLP over its actual length.
-    const auto extra_data_span        = v.extra_data();
-    const auto extra_data_rlp         = rlp::encode(BytesView{extra_data_span.data(),
-                                                              extra_data_span.size()});
-
-    const auto prev_randao_rlp        = rlp::encode(BytesView{v.prev_randao().bytes,
-                                                              sizeof(v.prev_randao().bytes)});
-
-    // nonce — Ethereum encodes it as an 8-byte FIXED-WIDTH bytestring,
-    // not as a trimmed integer. encode() handles the fixed-width path.
-    const auto nonce_span             = v.nonce();
-    const auto nonce_rlp              = rlp::encode(BytesView{nonce_span.data(),
-                                                              nonce_span.size()});
-
-    const auto base_fee_rlp           = rlp::encode_u256(v.base_fee_per_gas());
-    const auto withdrawals_root_rlp   = rlp::encode(BytesView{v.withdrawals_root().bytes,
-                                                              sizeof(v.withdrawals_root().bytes)});
-    const auto blob_gas_used_rlp      = rlp::encode_u64(v.blob_gas_used());
-    const auto excess_blob_gas_rlp    = rlp::encode_u64(v.excess_blob_gas());
-    const auto parent_beacon_root_rlp = rlp::encode(BytesView{v.parent_beacon_block_root().bytes,
-                                                              sizeof(v.parent_beacon_block_root().bytes)});
-    const auto requests_hash_rlp      = rlp::encode(BytesView{v.requests_hash().bytes,
-                                                              sizeof(v.requests_hash().bytes)});
-
-    return rlp::encode_list({
-        parent_hash_rlp,
-        ommers_hash_rlp,
-        coinbase_rlp,
-        state_root_rlp,
-        txs_root_rlp,
-        receipts_root_rlp,
-        logs_bloom_rlp,
-        difficulty_rlp,
-        number_rlp,
-        gas_limit_rlp,
-        gas_used_rlp,
-        timestamp_rlp,
-        extra_data_rlp,
-        prev_randao_rlp,
-        nonce_rlp,
-        base_fee_rlp,
-        withdrawals_root_rlp,
-        blob_gas_used_rlp,
-        excess_blob_gas_rlp,
-        parent_beacon_root_rlp,
-        requests_hash_rlp,
-    });
-}
-
 evmc::bytes32 compute_header_hash(const PreviousBlocks::View& v) {
-    const auto rlp_bytes = encode_header_rlp(v);
-    return keccak256_bytes32(rlp_bytes.data(), rlp_bytes.size());
+    return compute_block_header_hash(BlockHeader{
+        .parent_hash              = v.parent_hash(),
+        .ommers_hash              = v.ommers_hash(),
+        .coinbase                 = v.coinbase(),
+        .state_root               = v.state_root(),
+        .transactions_root        = v.transactions_root(),
+        .receipts_root            = v.receipts_root(),
+        .logs_bloom               = v.logs_bloom(),
+        .difficulty               = v.difficulty(),
+        .number                   = v.number(),
+        .gas_limit                = v.gas_limit(),
+        .gas_used                 = v.gas_used(),
+        .timestamp                = v.timestamp(),
+        .extra_data               = v.extra_data(),
+        .prev_randao              = v.prev_randao(),
+        .nonce                    = v.nonce(),
+        .base_fee_per_gas         = v.base_fee_per_gas(),
+        .withdrawals_root         = v.withdrawals_root(),
+        .blob_gas_used            = v.blob_gas_used(),
+        .excess_blob_gas          = v.excess_blob_gas(),
+        .parent_beacon_block_root = v.parent_beacon_block_root(),
+        .requests_hash            = v.requests_hash(),
+    });
 }
 
 } // namespace

@@ -152,6 +152,13 @@ public:
     size_t      size() const noexcept { return views_.size(); }
     const View& at(size_t idx) const  { return views_[idx]; }
 
+    // Canonical transactions trie root (Yellow Paper §4.3.1):
+    // keccak256 of the MPT keyed by RLP(tx_index) → canonical wire
+    // envelope. Computed once at the end of construction.
+    const evmc::bytes32& transactions_root() const noexcept {
+        return transactions_root_;
+    }
+
 private:
     // Per-type parsers. Each consumes the outer RLP list payload (after
     // the optional type-byte prefix has been stripped) and writes every
@@ -166,6 +173,7 @@ private:
     static void parse_osaka      (View& v, std::span<const uint8_t> outer_payload);
 
     std::vector<View> views_;
+    evmc::bytes32     transactions_root_{};
 };
 
 } // namespace zeg

@@ -144,6 +144,26 @@ public:
     // Block-wide aggregated logsBloom — OR of every tx's logs_bloom.
     const std::array<uint8_t, 256>& block_bloom_filter() const noexcept { return block_bloom_filter_; }
 
+    // Canonical receipts trie root (Yellow Paper §4.3.1). Computed
+    // once at the end of `execute_block` from the finalized
+    // `tx_receipts_`. Empty trie (no txs) yields the well-known
+    // empty-trie root.
+    const evmc::bytes32& receipts_root() const noexcept { return receipts_root_; }
+
+    // Cumulative gas used across every tx processed in this block —
+    // matches the block header's `gasUsed` field.
+    uint64_t gas_used() const noexcept { return cumulative_gas_used_; }
+
+    // Canonical withdrawals trie root (EIP-4895). Computed once at the
+    // end of `execute_block` from `ConsensusInfo::withdrawals()`.
+    // Empty list yields the well-known empty-trie root.
+    const evmc::bytes32& withdrawals_root() const noexcept { return withdrawals_root_; }
+
+    // Total blob gas used by every Type-3 (Blob) tx in the block:
+    // num_blobs × GAS_PER_BLOB, summed across all blob txs. Matches
+    // the block header's EIP-4844 `blobGasUsed` field.
+    uint64_t blob_gas_used() const noexcept { return blob_gas_used_; }
+
     // ===== Pectra requests (EIP-7685) =====
     //
     // Per-type request blobs collected by `post_execute_block` from
@@ -151,9 +171,14 @@ public:
     // group, laid out as `type_byte || concatenated_records`:
     //   type 0x01 → withdrawal requests   (77 + N × 76 B once added)
     //   type 0x02 → consolidation requests
-    // Empty queues add no entry. The block's `requests_hash` field
-    // is computed off this list (TODO; not done here).
+    // Empty queues add no entry.
     std::span<const std::vector<uint8_t>> requests() const noexcept { return requests_; }
+
+    // EIP-7685 requests_hash: sha256(sha256(req[0]) || sha256(req[1]) ||
+    // ...) over the type-prefixed request blobs in `requests_`. Empty
+    // list collapses to sha256("") per the EIP. Computed once at the
+    // end of `execute_block`.
+    const evmc::bytes32& requests_hash() const noexcept { return requests_hash_; }
 
     // ===== block execution =====
     //
@@ -231,9 +256,25 @@ private:
     // header's logsBloom field.
     std::array<uint8_t, 256> block_bloom_filter_{};
 
+    // keccak256 of the receipts trie's root RLP. Computed at the end
+    // of execute_block from tx_receipts_.
+    evmc::bytes32 receipts_root_{};
+
+    // keccak256 of the withdrawals trie's root RLP. Computed at the
+    // end of execute_block from consensus_.withdrawals().
+    evmc::bytes32 withdrawals_root_{};
+
+    // EIP-4844 blobGasUsed: sum of (num_blobs × GAS_PER_BLOB) across
+    // every Type-3 tx processed in this block.
+    uint64_t blob_gas_used_{0};
+
     // EIP-7685 requests collected from the Pectra predeploys (one
     // entry per non-empty request type; entries are type-prefixed).
     std::vector<std::vector<uint8_t>> requests_{};
+
+    // EIP-7685 requests_hash. Computed at the end of execute_block
+    // from requests_.
+    evmc::bytes32 requests_hash_{};
 };
 
 } // namespace zeg
