@@ -71,17 +71,24 @@ add_executable(zisk_eth_guest
     src/fatal.cpp
     src/accounts.cpp
     src/block_header.cpp
+    src/bloom.cpp
     src/consensus_info.cpp
     src/contracts.cpp
+    src/create_address.cpp
+    src/eip6110_deposit.cpp
+    src/fake_exponential.cpp
     src/hex_prefix.cpp
+    src/intrinsic_gas.cpp
     src/journal.cpp
     src/mpt.cpp
     src/previous_blocks.cpp
+    src/receipt.cpp
     src/rlp.cpp
     src/state_root.cpp
     src/storages.cpp
     src/transactions.cpp
     src/transient_storage.cpp
+    src/zisk_crypto.cpp
     src/zisk_crypto_host_stub.cpp
     src/zisk_state_db.cpp
 )

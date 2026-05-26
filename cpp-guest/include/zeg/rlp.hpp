@@ -40,6 +40,12 @@ Bytes encode_u256(const evmc::uint256be& v);
 // matching `encode*` overload — the list helper only handles the wrapper).
 Bytes encode_list(std::initializer_list<BytesView> items);
 
+// Runtime-sized sibling of `encode_list`: wrap an already-concatenated
+// payload of pre-encoded RLP items. Used by callers that build the
+// payload incrementally (e.g. receipts trie, log topics list) where the
+// item count isn't known at compile time.
+Bytes encode_list_payload(BytesView payload);
+
 // ----- decoder ---------------------------------------------------------------
 //
 // Minimal RLP reader: enough to walk a transaction envelope, a block

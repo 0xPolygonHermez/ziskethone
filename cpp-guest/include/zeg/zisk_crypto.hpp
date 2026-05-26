@@ -15,6 +15,8 @@
 
 #include <cstdint>
 
+#include <evmc/evmc.hpp>
+
 extern "C" {
 
 // Computes p = u1·G + u2·PK (over secp256k1) and writes its (x, y)
@@ -30,3 +32,20 @@ int secp256k1_ecdsa_verify(
 );
 
 } // extern "C"
+
+namespace zeg {
+
+// Verify ECDSA(secp256k1) signature against `pubkey` (64 B, x || y, BE)
+// and return signer = keccak256(pubkey)[12:]. Aborts via zeg::fatal on
+// any verification failure (the wrapped lib-c call always returns 0;
+// the check is on `result.x mod n == r`).
+//
+// Used by the EIP-7702 authorization-list walk to recover each auth's
+// signer address.
+evmc::address verify_signature_and_get_signer(
+    const uint8_t*         pubkey,
+    const evmc::bytes32&   signing_hash,
+    const evmc::uint256be& r,
+    const evmc::uint256be& s);
+
+} // namespace zeg

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(awk ' *)",
+      "Bash(cpp-guest/build/zisk_eth_guest)",
+      "Bash(cpp-guest/build/zisk_eth_guest /tmp/badmagic.bin)",
+      "Bash(cpp-guest/build/zisk_eth_guest /tmp/goodmagic.bin)"
+    ]
+  }
+}

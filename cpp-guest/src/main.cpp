@@ -11,10 +11,15 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
+#include <vector>
 
 #include <evmc/evmc.hpp>
 
 #include "zeg/accounts.hpp"
+#include "zeg/binary_format.hpp"     // kMagic
 #include "zeg/block_header.hpp"
 #include "zeg/consensus_info.hpp"
 #include "zeg/contracts.hpp"
@@ -29,9 +34,12 @@ namespace {
 
 // ===== I/O =====
 
-// Returns the start of the ZisK private-input region. The real ZisK runtime
-// will provide this via its zkVM API; for now this is a stub.
-const uint8_t* read_input_stream();
+// Slurp `path` into an 8-byte-aligned static buffer, verify the leading
+// magic, and return a cursor positioned right after the magic prefix.
+// The first 8 bytes of the file are `kMagic` (4 B, little-endian) +
+// 4 B zero padding so the returned cursor stays 8-byte aligned for the
+// typed reads downstream constructors perform via std::assume_aligned<8>.
+const uint8_t* read_input_stream(const char* path);
 
 // Emit a 32-byte value to ZisK as a public output.
 void emit_public_output(const evmc::bytes32& value);
@@ -53,21 +61,26 @@ constexpr std::array<uint8_t, 8> kPostMergeNonce{};
 
 } // namespace
 
-int main() {
-    // 1. Read the entire input stream.
-    const uint8_t* cursor = read_input_stream();
+int main(int argc, char** argv) {
+    // 1. Read the entire input stream from the file path passed on
+    //    the command line. `read_input_stream` checks the magic and
+    //    returns a cursor positioned past the 8-byte magic prefix.
+    if (argc < 2) {
+        zeg::fatal("usage: zisk_eth_guest <input-file>");
+    }
+    const uint8_t* cursor = read_input_stream(argv[1]);
 
     // 2. Parse the six input-stream collections at main level. Stream-
     //    order matters and must match the prover's write order:
     //    contracts → accounts → storages → previous_blocks →
     //    consensus_info → transactions. Each constructor consumes its
     //    section and advances `cursor`.
-    zeg::Contracts      contracts       (cursor);
-    zeg::Accounts       accounts        (cursor);
-    zeg::Storages       storages        (cursor);
-    zeg::PreviousBlocks previous_blocks (cursor);
     zeg::ConsensusInfo  consensus       (cursor);
     zeg::Transactions   transactions    (cursor);
+    zeg::Accounts       accounts        (cursor);
+    zeg::Contracts      contracts       (cursor);
+    zeg::Storages       storages        (cursor);
+    zeg::PreviousBlocks previous_blocks (cursor);
 
     // 3. Anchor the ancestor chain to the block being computed.
     //    PreviousBlocks already verifies block[i].parent_hash ==
@@ -164,13 +177,47 @@ namespace {
 
 // ----- Stubs (to be implemented as the guest is fleshed out) -----
 
-const uint8_t* read_input_stream() {
-    // TODO: replace with the ZisK private-input pointer.
-    return nullptr;
+const uint8_t* read_input_stream(const char* path) {
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f) {
+        zeg::fatal("read_input_stream: failed to open input file");
+    }
+    const std::streamsize size = f.tellg();
+    if (size < 8) {
+        zeg::fatal("read_input_stream: input file too small for magic");
+    }
+    f.seekg(0);
+
+    // Back the buffer with std::vector<uint64_t> so its data() is
+    // 8-byte aligned — downstream constructors do
+    // std::assume_aligned<8> on cursor reads. The static keeps the
+    // bytes alive for the rest of main().
+    static std::vector<uint64_t> raw;
+    raw.resize((static_cast<size_t>(size) + 7) / 8);
+    if (!f.read(reinterpret_cast<char*>(raw.data()), size)) {
+        zeg::fatal("read_input_stream: short read");
+    }
+    const auto* base = reinterpret_cast<const uint8_t*>(raw.data());
+
+    uint32_t magic;
+    std::memcpy(&magic, base, sizeof(magic));
+    if (magic != zeg::kMagic) {
+        zeg::fatal("read_input_stream: bad magic (expected ZEG0)");
+    }
+
+    // Skip the magic + its 4 B zero padding so the returned cursor
+    // is 8-byte aligned.
+    return base + 8;
 }
 
-void emit_public_output(const evmc::bytes32&) {
-    // TODO: replace with the ZisK public-output API.
+void emit_public_output(const evmc::bytes32& value) {
+    // Host-build placeholder for the ZisK public-output API: print
+    // the 32-byte value as lowercase hex with a 0x prefix, one line.
+    std::printf("0x");
+    for (uint8_t b : value.bytes) {
+        std::printf("%02x", b);
+    }
+    std::printf("\n");
 }
 
 } // namespace

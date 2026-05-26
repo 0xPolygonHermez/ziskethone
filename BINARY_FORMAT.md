@@ -1,98 +1,295 @@
-# Binary Input Format (v0)
+# Binary Input Format
 
-This document defines the on-disk binary format produced by `rust-input-gen` and
-consumed by the ZisK C++ guest program (`cpp-guest`).
+This document defines the on-disk binary layout the C++ ZisK Ethereum guest
+(`cpp-guest`) consumes. The format is produced by the prover (eventually by
+`rust-input-gen`) and read by [`main()`](cpp-guest/src/main.cpp) via
+`read_input_stream(argv[1])`.
 
 ## Design goals
 
-- **Zero-copy / zero-parse on the guest side.** The C++ guest should be able
-  to `mmap` (or read into a buffer) the file and access fields directly via
-  pointer casts to packed C structs.
-- **Fixed endianness:** all multi-byte integers are stored **little-endian**
-  (matches RISC-V / x86 and ZisK's target).
-- **Byte-packed structs** (no implicit padding). Use `#pragma pack(1)` /
-  `__attribute__((packed))` on the C++ side and `#[repr(C, packed)]` on the
-  Rust side.
-- **Length-prefixed variable sections** so the guest can iterate without
-  external metadata.
-- **Section offset table at the start** for O(1) random access.
+- **Zero-parse on the guest side.** The guest reads the file into one
+  8-byte-aligned buffer and walks it with a cursor; fields with fixed
+  offsets are accessed by raw pointer cast.
+- **8-byte alignment everywhere.** Every record / variable section is
+  sized to a multiple of 8 bytes (with zero padding where needed) so the
+  cursor stays 8-byte aligned and `std::assume_aligned<8>` is sound on
+  every typed read.
+- **Little-endian** for all multi-byte integers (`u32`, `u64`). Hashes,
+  addresses, and `uint256be` keep their canonical Ethereum byte order
+  (32-byte big-endian for `uint256`, 20-byte raw for addresses).
+- **Length-prefixed sections.** Every variable-length section starts
+  with a `u64` count so the guest can iterate without an out-of-band
+  table of contents.
 
 ## Top-level layout
 
-```
-+------------------------+  offset 0
-|  FileHeader            |
-+------------------------+
-|  SectionTable[N]       |
-+------------------------+
-|  Section 0 payload     |
-+------------------------+
-|  Section 1 payload     |
-+------------------------+
-|  ...                   |
-+------------------------+
-```
-
-### `FileHeader` (32 bytes)
-
-| Offset | Size | Field            | Description                              |
-|-------:|-----:|------------------|------------------------------------------|
-|      0 |    4 | `magic`          | ASCII `"ZEG0"` (Zisk Eth Guest, v0)      |
-|      4 |    4 | `version`        | `u32` — format version (currently `0`)   |
-|      8 |    4 | `section_count`  | `u32` — number of entries in table       |
-|     12 |    4 | `flags`          | `u32` — reserved, must be `0`            |
-|     16 |    8 | `chain_id`       | `u64` — EVM chain id                     |
-|     24 |    8 | `block_number`   | `u64` — block being verified             |
-
-### `SectionEntry` (16 bytes each)
-
-| Offset | Size | Field      | Description                                    |
-|-------:|-----:|------------|------------------------------------------------|
-|      0 |    4 | `kind`     | `u32` — section kind tag (see below)           |
-|      4 |    4 | `reserved` | `u32` — must be `0`                            |
-|      8 |    4 | `offset`   | `u32` — byte offset from start of file         |
-|     12 |    4 | `length`   | `u32` — payload length in bytes                |
-
-### Section kinds (v0)
-
-| Kind | Name                  | Payload                                            |
-|-----:|-----------------------|----------------------------------------------------|
-|    1 | `PARENT_HEADER`       | One RLP-encoded block header (parent of target)    |
-|    2 | `CURRENT_HEADER`      | One RLP-encoded block header (target block)        |
-|    3 | `TRANSACTIONS`        | Length-prefixed list of RLP-encoded transactions   |
-|    4 | `WITHDRAWALS`         | Length-prefixed list of RLP-encoded withdrawals    |
-|    5 | `STATE_TRIE_NODES`    | Length-prefixed list of MPT node blobs             |
-|    6 | `STORAGE_TRIE_NODES`  | Length-prefixed list of MPT node blobs             |
-|    7 | `BYTECODES`           | Length-prefixed list of contract bytecodes         |
-|    8 | `ANCESTOR_HEADERS`    | Length-prefixed list of RLP-encoded headers (≤256) |
-
-Unknown kinds **must** be ignored by readers for forward compatibility.
-
-### Length-prefixed list payload
+The file is one contiguous byte stream, consumed left-to-right:
 
 ```
-+----------------+----+----------------+-----+-----+----------------+-----+
-| u32 item_count | u32 len_0 | bytes_0 | u32 len_1 | bytes_1 | ... |
-+----------------+----+----------------+-----+-----+----------------+-----+
++---------------------------+  offset 0
+|  Magic prefix (8 B)       |
++---------------------------+
+|  ConsensusInfo            |
++---------------------------+
+|  Transactions             |
++---------------------------+
+|  Accounts                 |
++---------------------------+
+|  Contracts                |
++---------------------------+
+|  Storages                 |
++---------------------------+
+|  PreviousBlocks           |
++---------------------------+
+|  StateRoot trie hints     |
++---------------------------+
 ```
 
-All lengths are `u32` little-endian. Items are stored back-to-back with no
-padding.
+No padding between sections — each section's last record is itself
+sized to a multiple of 8, so the next section starts 8-byte aligned.
 
-## Rationale: RLP payloads vs. parsed structs
+## Section 0 — Magic prefix (8 bytes)
 
-For v0 we keep RLP-encoded blobs rather than fully parsed C structs because:
+| Offset | Size | Field   | Description |
+|-------:|-----:|---------|-------------|
+|      0 |    4 | `magic` | ASCII `"ZEG0"` (`0x3047455A` little-endian, see [`binary_format.hpp`](cpp-guest/include/zeg/binary_format.hpp)) |
+|      4 |    4 | `pad`   | Zero-fill to keep the cursor 8-byte aligned for everything that follows |
 
-1. Ethereum block hashing is defined over the RLP encoding — the guest needs
-   the exact bytes anyway to compute Keccak-256.
-2. It keeps the binary format stable across Ethereum hard forks (new header
-   fields don't break layout).
+The guest fatals on magic mismatch.
 
-The C++ guest performs RLP decoding internally; only the *envelope* (sections,
-offsets, lengths) needs to be zero-parse.
+## Section 1 — `ConsensusInfo`
 
-## Versioning
+Per-block consensus-layer inputs for the **current** block (the one
+being executed). Schema at
+[`consensus_info.hpp`](cpp-guest/include/zeg/consensus_info.hpp).
 
-- The `version` field in `FileHeader` is bumped on any breaking change.
-- New section kinds may be added without bumping `version` as long as readers
-  ignore unknown kinds.
+### Fixed 232-byte header prefix
+
+| Offset | Size | Field                       | Type / encoding         |
+|-------:|-----:|-----------------------------|-------------------------|
+|      0 |   32 | `parent_hash`               | `bytes32` — in this guest's convention this carries the parent **state root**, not the parent block hash |
+|     32 |   20 | `beneficiary`               | 20-byte address         |
+|     52 |    4 | pad                         | zero                    |
+|     56 |    8 | `number`                    | `u64`                   |
+|     64 |    8 | `gas_limit`                 | `u64`                   |
+|     72 |    8 | `timestamp`                 | `u64`                   |
+|     80 |    8 | `extra_data_len`            | `u64`, must be ≤ 32     |
+|     88 |   32 | `extra_data`                | byte buffer (only the first `extra_data_len` bytes are meaningful; the rest is zero pad) |
+|    120 |   32 | `prev_randao`               | `bytes32`               |
+|    152 |   32 | `parent_beacon_block_root`  | `bytes32`               |
+|    184 |   32 | `base_fee_per_gas`          | `uint256be` (32-byte big-endian) |
+|    216 |    8 | `withdrawals_count`         | `u64`                   |
+|    224 |    8 | `excess_blob_gas`           | `u64` (EIP-4844)        |
+|    232 |      | **end of fixed prefix**     |                         |
+
+`chain_id` is **not** in the stream. It is compile-time pinned to `1`
+(Ethereum mainnet) in [`zeg/config.hpp`](cpp-guest/include/zeg/config.hpp).
+
+### Withdrawal records (`withdrawals_count` × 48 bytes)
+
+Immediately follow the prefix. Each record per EIP-4895:
+
+| Offset | Size | Field             | Encoding |
+|-------:|-----:|-------------------|----------|
+|      0 |    8 | `index`           | `u64`    |
+|      8 |    8 | `validator_index` | `u64`    |
+|     16 |   20 | `address`         | 20-byte address |
+|     36 |    4 | pad               | zero     |
+|     40 |    8 | `amount_gwei`     | `u64`    |
+|     48 |      | end of record     |          |
+
+## Section 2 — `Transactions`
+
+Every tx of the current block in order. Schema at
+[`transactions.hpp`](cpp-guest/include/zeg/transactions.hpp).
+
+| Offset | Size            | Field            | Description |
+|-------:|----------------:|------------------|-------------|
+|      0 |               8 | `count`          | `u64` — number of transactions |
+|      8 | variable        | `tx[0]` … `tx[count-1]` | one record per tx (see below) |
+
+### Per-tx record
+
+Variable-length. Layout for each tx:
+
+```
++--------------------+
+| u64  envelope_size |    // 8 B; byte-length of the canonical wire envelope
++--------------------+
+| u8   pubkey[64]    |    // 64 B uncompressed sender secp256k1 pubkey (x || y, BE)
++--------------------+
+| u8   envelope[]    |    // envelope_size bytes — typed: type_byte || rlp(...);
+|                    |    // legacy: raw RLP list (no type byte). Type byte is one
+|                    |    // of {0x01..0x05} per EIP-2718.
++--------------------+
+| u8   pad[0..7]     |    // zero-fill the envelope up to the next 8-byte boundary
++--------------------+
+| u8   auth_pk[]     |    // ONLY for Type-4 (SetCode / EIP-7702): N × 64 B
+|                    |    // uncompressed pubkeys, one per authorization in the
+|                    |    // tx's authorization_list. 64 B is already 8-aligned.
++--------------------+
+```
+
+The prover supplies the sender pubkey alongside each envelope so the
+guest can verify the signature without running secp256k1 recovery; the
+signer address is then derived as `keccak256(pubkey)[12:]`. Same
+mechanism for each EIP-7702 auth signer.
+
+## Section 3 — `Accounts`
+
+State-trie account table for every account the block touches. Schema at
+[`accounts.hpp`](cpp-guest/include/zeg/accounts.hpp).
+
+| Offset | Size                          | Field      |
+|-------:|------------------------------:|------------|
+|      0 |                             8 | `count`    |
+|      8 | `count` × 136                 | records    |
+
+### Account record (136 bytes)
+
+| Offset | Size | Field         | Encoding |
+|-------:|-----:|---------------|----------|
+|      0 |   20 | `address`     | 20-byte address |
+|     20 |    4 | pad           | zero |
+|     24 |   32 | `balance`     | `uint256be` |
+|     56 |    8 | `nonce`       | `u64` |
+|     64 |   32 | `storage_root`| `bytes32` (root of the account's storage trie at block start) |
+|     96 |   32 | `code_hash`   | `bytes32` (keccak256 of the deployed code; `keccak256("")` for EOAs) |
+|    128 |    8 | `is_read_only`| `u64` — `1` if the prover marked this account read-only for this block, `0` otherwise |
+|    136 |      | end of record |          |
+
+## Section 4 — `Contracts`
+
+Deployed bytecode for every code the block executes. Schema at
+[`contracts.hpp`](cpp-guest/include/zeg/contracts.hpp).
+
+| Offset | Size      | Field   |
+|-------:|----------:|---------|
+|      0 |         8 | `count` |
+|      8 | variable  | records |
+
+### Contract record (variable)
+
+```
++-------------------+
+| u64  code_size    |    // 8 B
++-------------------+
+| u8   code[]       |    // code_size bytes of EVM bytecode
++-------------------+
+| u8   pad[0..7]    |    // zero-fill to the next 8-byte boundary
++-------------------+
+```
+
+The keccak256 of `code` is the lookup key (matching `code_hash` in the
+Account record). The guest accesses code zero-copy via the embedded
+pointer + length.
+
+## Section 5 — `Storages`
+
+Per-account storage slots the block touches. Schema at
+[`storages.hpp`](cpp-guest/include/zeg/storages.hpp).
+
+| Offset | Size           | Field   |
+|-------:|---------------:|---------|
+|      0 |              8 | `count` |
+|      8 |  `count` × 96  | records |
+
+### Storage record (96 bytes)
+
+| Offset | Size | Field         | Encoding |
+|-------:|-----:|---------------|----------|
+|      0 |   20 | `address`     | 20-byte address |
+|     20 |    4 | pad           | zero |
+|     24 |   32 | `position`    | `bytes32` (storage slot key) |
+|     56 |   32 | `value`       | `bytes32` (slot value at block start) |
+|     88 |    8 | `is_read_only`| `u64` — `1` if the prover marked this slot read-only, `0` otherwise |
+|     96 |      | end of record |          |
+
+## Section 6 — `PreviousBlocks`
+
+The current block's parent and earlier ancestors (for EIP-2935 history /
+BLOCKHASH). Schema at
+[`previous_blocks.hpp`](cpp-guest/include/zeg/previous_blocks.hpp).
+
+| Offset | Size            | Field   |
+|-------:|----------------:|---------|
+|      0 |               8 | `count` |
+|      8 | `count` × 728   | records |
+
+Index 0 = the parent, index `i` = the i-th ancestor. The guest
+recomputes each block's hash from canonical Pectra-era header RLP and
+verifies the `parent_hash` chain.
+
+### PreviousBlocks record (728 bytes)
+
+All fields are at 8-byte-aligned offsets:
+
+| Offset | Size | Field                       | Encoding |
+|-------:|-----:|-----------------------------|----------|
+|      0 |   32 | `parent_hash`               | `bytes32` (block hash of the parent) |
+|     32 |   32 | `ommers_hash`               | `bytes32` |
+|     64 |   20 | `coinbase`                  | address  |
+|     84 |    4 | pad                         | zero     |
+|     88 |   32 | `state_root`                | `bytes32` |
+|    120 |   32 | `transactions_root`         | `bytes32` |
+|    152 |   32 | `receipts_root`             | `bytes32` |
+|    184 |  256 | `logs_bloom`                | 256-byte Bloom |
+|    440 |   32 | `difficulty`                | `uint256be` |
+|    472 |    8 | `number`                    | `u64` |
+|    480 |    8 | `gas_limit`                 | `u64` |
+|    488 |    8 | `gas_used`                  | `u64` |
+|    496 |    8 | `timestamp`                 | `u64` |
+|    504 |    8 | `extra_data_len`            | `u64`, ≤ 32 |
+|    512 |   32 | `extra_data`                | byte buffer (first `extra_data_len` bytes meaningful) |
+|    544 |   32 | `prev_randao`               | `bytes32` |
+|    576 |    8 | `nonce`                     | 8 raw bytes (Ethereum encodes header `nonce` as a fixed-width bytestring, not a trimmed integer) |
+|    584 |   32 | `base_fee_per_gas`          | `uint256be` |
+|    616 |   32 | `withdrawals_root`          | `bytes32` |
+|    648 |    8 | `blob_gas_used`             | `u64` |
+|    656 |    8 | `excess_blob_gas`           | `u64` |
+|    664 |   32 | `parent_beacon_block_root`  | `bytes32` |
+|    696 |   32 | `requests_hash`             | `bytes32` |
+|    728 |      | end of record               |          |
+
+## Section 7 — `StateRoot` trie hints
+
+Trie-walk hints used by [`state_root.cpp`](cpp-guest/src/state_root.cpp)
+to recompute the world-state trie root in two passes (pre-execution
+against original values, post-execution against modified values).
+
+The format is an opcode-tagged depth-first walk. Each opcode is a
+`u64` (so consumed reads stay 8-byte aligned), followed by an
+opcode-specific payload:
+
+| Opcode (u64) | Name            | Payload |
+|-------------:|-----------------|---------|
+|            0 | `Empty`         | — (zero payload) |
+|            1 | `Hash`          | 32 B `bytes32` (a subtree's already-known root hash) |
+|            2 | `ExtensionHash` | `u64 nibbles_count` + `nibbles_count` × `u64` (one nibble per `u64`, low 4 bits used) + 32 B `bytes32` |
+|            3 | `Leaf`          | `u64 idx` into Accounts (state trie) or Storages (storage trie); leaves walked under a state-trie `NodeRW` may contain a nested storage subtree via a recursive `walk_node` call |
+|            4 | `NodeRW`        | 16 sub-trees (one per branch nibble), each itself a recursive node |
+|            5 | `NodeR`         | Same shape as `NodeRW` but marks the subtree read-only — every contained leaf must reference an `is_read_only == true` entry in `Accounts` / `Storages`. The result of a `NodeR` subtree is cached during the old-root pass and reused unchanged in the new-root pass. |
+
+The walk consumes exactly as many bytes as the trie requires; the
+guest does not pre-declare a total stream size — the trailing byte of
+the last `Hash` / `Leaf` payload is also the last byte of the file
+(modulo final alignment pad).
+
+## Encoding conventions cheat-sheet
+
+| Type / field     | Wire form |
+|------------------|-----------|
+| `u32` / `u64`    | Little-endian, native width |
+| `address`        | 20 raw bytes, followed by 4 B zero pad whenever a struct holds it (to keep the next field 8-aligned) |
+| `bytes32`        | 32 raw bytes (Ethereum canonical) |
+| `uint256be`      | 32 raw big-endian bytes (Ethereum canonical) |
+| `bool`-as-`u64`  | `0` = false, `1` = true |
+| Variable buffers | `u64` length prefix, then bytes, then zero pad to the next 8-byte boundary |
+
+## Source of truth
+
+Every offset and record size in this document is mirrored as
+`constexpr` `kFieldOffset` / `kRecordSize` constants in the
+corresponding header under
+[`cpp-guest/include/zeg/`](cpp-guest/include/zeg/). When the layout
+changes, update both this document and the header in the same change.

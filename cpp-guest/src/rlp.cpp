@@ -82,6 +82,14 @@ Bytes encode_list(std::initializer_list<BytesView> items) {
     return out;
 }
 
+Bytes encode_list_payload(BytesView payload) {
+    Bytes out;
+    out.reserve(1 + (payload.size() > 55 ? 4 : 0) + payload.size());
+    append_header<0xc0, 0xf7>(out, payload.size());
+    out.insert(out.end(), payload.begin(), payload.end());
+    return out;
+}
+
 // ----- decoder -------------------------------------------------------------
 
 namespace {
