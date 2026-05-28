@@ -175,13 +175,21 @@ private:
         evmc::bytes32 tx_original{};
     };
 
-    // Composite map key: 20-byte address + 32-byte slot key. Trivially
-    // copyable, no internal padding (both members are uint8_t arrays).
+    // Composite map key: 20-byte address + 32-byte slot key.
+    //
+    // NOTE (evmone 0.19 ↔ 0.21 drift): evmone 0.19's evmc declares
+    // `struct alignas(size_t) bytes32` and `alignas(uint32_t) address`,
+    // so `Key` has 8-byte alignment and 4 padding bytes after `address`
+    // (sizeof == 56, not 52). evmone 0.21 used align-1 byte arrays, where
+    // the struct was tightly packed (sizeof == 52). Because of those
+    // padding bytes, `KeyEq` must compare the meaningful members
+    // field-wise rather than memcmp'ing the whole struct (raw padding is
+    // uninitialised and would corrupt equality). See KeyEq below.
     struct Key {
         evmc::address address;
         evmc::bytes32 position;
     };
-    static_assert(sizeof(Key) == 20 + 32, "Key must be tightly packed");
+    static_assert(sizeof(Key) >= 20 + 32, "Key must hold address + position");
 
     // Hash: XOR the lowest 8 bytes of address and position. Both halves
     // are high-entropy big-endian quantities, so XOR-ing their LSB ends
@@ -197,7 +205,10 @@ private:
     };
     struct KeyEq {
         bool operator()(const Key& x, const Key& y) const noexcept {
-            return std::memcmp(&x, &y, sizeof(x)) == 0;
+            // Field-wise compare (not memcmp of the whole struct) so the
+            // alignment padding present under evmone 0.19's aligned
+            // evmc::bytes32 doesn't taint the result.
+            return x.address == y.address && x.position == y.position;
         }
     };
 
