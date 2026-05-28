@@ -63,7 +63,7 @@ public:
 
     ZiskStateDB(Accounts&             accounts,
                 const ConsensusInfo&  consensus,
-                const Contracts&      contracts,
+                Contracts&            contracts,
                 const PreviousBlocks& previous_blocks,
                 Storages&             storages);
 
@@ -333,7 +333,7 @@ private:
 
     Accounts&             accounts_;
     const ConsensusInfo&  consensus_;
-    const Contracts&      contracts_;
+    Contracts&            contracts_;
     const PreviousBlocks& previous_blocks_;
     Storages&             storages_;
 

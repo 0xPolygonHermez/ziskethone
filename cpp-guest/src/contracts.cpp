@@ -32,9 +32,13 @@ Contracts::Contracts(const uint8_t*& cursor) {
 size_t Contracts::index_of(const evmc::bytes32& hash) const {
     const auto it = index_.find(hash);
     if (it == index_.end()) {
+        std::fprintf(stderr, "DBG missing code hash 0x");
+        for (int i = 0; i < 32; ++i) std::fprintf(stderr, "%02x", hash.bytes[i]);
+        std::fprintf(stderr, "\n");
         fatal("Contracts::index_of: code hash not present in the table");
     }
     return it->second;
 }
+
 
 } // namespace zeg

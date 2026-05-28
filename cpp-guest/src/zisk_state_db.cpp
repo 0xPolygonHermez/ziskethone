@@ -82,7 +82,7 @@ evmc_storage_status compute_storage_status(const evmc::bytes32& original,
 
 ZiskStateDB::ZiskStateDB(Accounts&             accounts,
                          const ConsensusInfo&  consensus,
-                         const Contracts&      contracts,
+                         Contracts&            contracts,
                          const PreviousBlocks& previous_blocks,
                          Storages&             storages)
     : accounts_(accounts),
@@ -693,11 +693,19 @@ void ZiskStateDB::register_deployed_code(const evmc::address& new_addr,
                                          const evmc::Result&  result) noexcept {
     // The Contracts table is consulted lazily by `code()` /
     // `copy_code()` / `get_code_size()` only if the new contract is
-    // read later in this block; if it isn't, the prover correctly
-    // omits the Contracts entry. No witness-completeness check needed.
+    // read later in this block.
     const size_t new_idx = accounts_.index_of(new_addr);
     const auto deployed_hash =
         keccak256_bytes32(result.output_data, result.output_size);
+    // Register the deployed code in the Contracts table so subsequent
+    // CALLs in this tx (and later txs) can resolve it by hash. The
+    // prover's prestate diff omits CREATE-and-then-SELFDESTRUCT (or
+    // otherwise-empty-by-tx-end) contracts even when they're CALL'd
+    // mid-tx (see block 25193032), so we can't rely on the input
+    // stream having pre-included this code. Insert is idempotent.
+    if (result.output_size > 0) {
+        contracts_.insert(deployed_hash, result.output_data, result.output_size);
+    }
     const char* trace_env = std::getenv("ZEG_TRACE_TX");
     if (trace_env != nullptr &&
         tx_counter_ == static_cast<uint64_t>(std::atoi(trace_env) + 1)) {

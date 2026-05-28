@@ -57,6 +57,26 @@ public:
 
     uint64_t size() const noexcept { return contracts_.size(); }
 
+    // Insert a contract deployed at runtime (CREATE/CREATE2). The
+    // prover's prestate diff omits contracts that are created and then
+    // either SELFDESTRUCT'd or otherwise empty by tx end (even when
+    // they're CALL'd in between), so we register their code on the fly
+    // here. Bytes are copied into `dynamic_codes_` and survive for the
+    // lifetime of this Contracts object — they outlive evmc::Result's
+    // release callback for the originating CREATE result. Idempotent:
+    // if `hash` is already present, no-ops.
+    void insert(const evmc::bytes32& hash,
+                const uint8_t* code,
+                std::size_t code_size) {
+        if (index_.find(hash) != index_.end()) {
+            return;
+        }
+        dynamic_codes_.emplace_back(code, code + code_size);
+        const uint8_t* stable = dynamic_codes_.back().data();
+        contracts_.push_back(Contract{hash, stable, code_size});
+        index_.emplace(hash, contracts_.size() - 1);
+    }
+
 private:
     // Use the keccak hash bytes directly — already cryptographic-grade
     // random, no further hashing needed.
@@ -75,6 +95,10 @@ private:
 
     std::vector<Contract> contracts_;
     std::unordered_map<evmc::bytes32, size_t, KeccakAsHash, KeccakEq> index_;
+    // Stable owning storage for runtime-added contract code (via
+    // `insert`). The Contract::code pointer for those entries lives
+    // here; for input-stream entries it points into the cursor buffer.
+    std::vector<std::vector<uint8_t>> dynamic_codes_;
 };
 
 } // namespace zeg
