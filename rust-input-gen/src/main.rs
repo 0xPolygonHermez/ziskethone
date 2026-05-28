@@ -107,51 +107,35 @@ async fn main() -> Result<()> {
     }
     info!(count = ancestors.len(), "fetched ancestor chain");
 
-    // Phase 4: prestate tracer (touched accounts/slots + block-start
-    // values) + diff (writes). Both are debug_* RPCs — require a node
-    // with the debug namespace enabled (Reth / Geth `--http.api debug`).
-    let (mut prestate, diff) = tokio::try_join!(
+    // Phase 4: fetch all data sources in parallel.
+    //
+    //   * `prestateTracer` (non-diff) — every account + slot the EVM
+    //     READ or WROTE during execution, with their block-start
+    //     values. The authoritative source for "what does the EVM
+    //     access", including SLOADs of zero-value slots that have no
+    //     leaf in the parent state trie.
+    //
+    //   * `prestateTracer` (diff mode) — only the fields that changed
+    //     during the block. Drives the `is_read_only` flag in the
+    //     binary's Accounts / Storages records.
+    //
+    //   * `debug_executionWitness` — every MPT node touched during
+    //     execution (state + storage tries), the deployed code blobs,
+    //     and the keccak preimages for keys. Used both as the
+    //     canonical source for parent-state values AND to discover
+    //     leaves the prestate tracer omits (notably: untouched-
+    //     sibling leaves that the cpp-guest's state-root walker
+    //     needs to reposition during structural splits).
+    let (mut prestate, diff, witness) = tokio::try_join!(
         client.prestate(args.block),
         client.prestate_diff(args.block),
+        client.execution_witness(args.block),
     )?;
     info!(
         accounts = prestate.len(),
         storage_slots = prestate.values().map(|p| p.storage.len()).sum::<usize>(),
         "fetched prestate"
     );
-
-    // Enrich the prestate with the four Pectra system contracts
-    // (EIP-4788 / 2935 / 7002 / 7251). The prestate tracer captures
-    // tx execution only and misses pre/post-block system calls, so
-    // these addresses aren't in the trace — but the cpp-guest's
-    // pre_execute_block invokes them and would fatal on a missing
-    // address. Fetch their bytecode from the node and inject minimal
-    // account entries (balance=0, nonce=1, the standard convention
-    // for system contracts).
-    let system_contract_slots =
-        inject_system_contracts(&client, &mut prestate, args.block).await?;
-    info!(
-        accounts = prestate.len(),
-        "added Pectra system-contract entries"
-    );
-
-    // Withdrawal recipients (EIP-4895) — credited by the block, not by
-    // any tx, so the prestate tracer misses them. cpp-guest's
-    // process_withdrawals indexes each recipient in Accounts. Pre-block
-    // balance + nonce come from the node at the parent block (since
-    // withdrawals haven't been applied yet).
-    inject_withdrawal_recipients(&client, &mut prestate, &current, args.block).await?;
-    info!(
-        accounts = prestate.len(),
-        "added withdrawal recipients"
-    );
-
-    // Fetch the state-trie witness (debug_executionWitness) — Reth/
-    // Erigon. Returns every MPT node (state + per-account storage)
-    // touched during the block, the deployed code blobs, and the
-    // preimage keys (addresses + slot keys) we need to attribute
-    // untouched-sibling leaves.
-    let witness = client.execution_witness(args.block).await?;
     info!(
         state_nodes = witness.state.len(),
         codes = witness.codes.len(),
@@ -159,11 +143,29 @@ async fn main() -> Result<()> {
         "fetched execution witness",
     );
 
-    // Witness-driven prestate enrichment. The prestate tracer omits
-    // fields the block's txs didn't read (e.g. `code` on an unaccessed
-    // EIP-7702 delegated EOA, `nonce` on an account whose nonce is
-    // never observed). Patch them from the canonical parent state
-    // trie so write_accounts emits the right block-start leaf.
+    // Inject the four Pectra system contracts (EIP-4788 / 2935 / 7002
+    // / 7251). The cpp-guest's `pre_execute_block` / `post_execute_block`
+    // CALL these from `0xfffe`; the prestate tracer captures tx
+    // execution only and misses pre/post-block system calls, so these
+    // addresses aren't in the trace. Fetch their bytecode + the
+    // touched ring-buffer slots explicitly via RPC.
+    let system_contract_slots =
+        inject_system_contracts(&client, &mut prestate, args.block).await?;
+    info!(
+        accounts = prestate.len(),
+        "added Pectra system-contract entries"
+    );
+
+    // Withdrawal recipients (EIP-4895) — credited at block boundary
+    // outside any tx, so the prestate tracer never sees them.
+    inject_withdrawal_recipients(&client, &mut prestate, &current, args.block).await?;
+    info!(
+        accounts = prestate.len(),
+        "added withdrawal recipients"
+    );
+
+    // Patch existing prestate entries with canonical values from the
+    // parent state trie (the tracer omits unread fields).
     enrich::enrich_prestate_from_witness(
         &client,
         parent.header.state_root,
@@ -172,10 +174,26 @@ async fn main() -> Result<()> {
         &mut prestate,
     ).await?;
 
-    // Geth's prestateTracer omits storage slots whose only access lives
-    // inside a reverted frame, but the execution witness still carries
-    // their storage-trie leaves. Walk every touched account's parent
-    // storage trie and add any discovered slot the tracer missed.
+    // Walk the parent state trie and append every account leaf the
+    // witness exposes (notably: off-target sibling leaves that the
+    // tracer misses). After this step every state-trie leaf reachable
+    // in the witness exists in `prestate`, so the state-root walker
+    // can reference it via `Op::Leaf <idx>` and never needs the
+    // legacy `Op::PhantomLeaf` carry-bytes trick.
+    enrich::enrich_state_leaves_from_witness(
+        &client,
+        parent.header.state_root,
+        args.block,
+        &witness,
+        &mut prestate,
+    ).await?;
+
+    // Walk every touched account's parent storage trie and append any
+    // leaf the prestate tracer missed (notably: slots whose only
+    // access lived inside a reverted frame). After this step every
+    // leaf reachable in the witness exists in `prestate`, so the
+    // state-root walker can reference it via `Op::Leaf <idx>` and
+    // never needs the legacy `Op::PhantomLeaf` carry-bytes trick.
     enrich::enrich_storage_slots_from_witness(
         parent.header.state_root,
         &witness,

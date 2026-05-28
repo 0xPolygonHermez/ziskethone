@@ -49,12 +49,19 @@ public:
         std::vector<uint8_t> path_nibbles;
         std::size_t          storage_idx;
     };
-    /// A leaf the prover carried inline via `Op::PhantomLeaf` — used for
-    /// untouched sibling leaves that need to be re-positioned during
-    /// structural splits but whose pre-image (address / slot key) isn't
-    /// in our Accounts / Storages tables. `value_rlp` is the leaf's raw
-    /// inner value bytes (account RLP for state trie, u256 RLP for
-    /// storage); the cpp-guest wraps them in HP + RLP at pack time.
+    /// Fallback leaf the prover carried inline via `Op::PhantomLeaf`.
+    /// Used only when Reth's `witness.keys` omits the keccak preimage
+    /// of a sibling leaf the chain trie's witness contains — we still
+    /// need to re-position it under structural splits, but can't
+    /// reference it by Accounts/Storages idx because we don't know
+    /// its address/slot. `value_rlp` is the leaf's raw inner value
+    /// bytes (account RLP for state trie, u256 RLP for storage);
+    /// cpp-guest wraps them in HP + RLP at pack time.
+    ///
+    /// The common path (witness leaves whose preimage IS exposed)
+    /// goes through `AccountLeafR`/`StorageLeafR` via `Op::Leaf <idx>`
+    /// after `enrich::enrich_state_leaves_from_witness` etc. populate
+    /// our prestate. This variant exists for the residual gap only.
     struct PhantomLeafR {
         std::vector<uint8_t> path_nibbles;
         std::vector<uint8_t> value_rlp;

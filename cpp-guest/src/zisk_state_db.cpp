@@ -416,6 +416,21 @@ evmc_access_status ZiskStateDB::access_account(const evmc::address& addr) noexce
 
 evmc_access_status ZiskStateDB::access_storage(const evmc::address& addr,
                                                const evmc::bytes32& key) noexcept {
+    // Soft-phantom: if the slot isn't in our table, neither the
+    // prestate tracer nor the execution witness surfaced it (e.g. an
+    // OOG'd SLOAD whose value Geth/Reth omits from the tx prestate —
+    // see block 25192679). Return COLD without warming: evmone's
+    // sload() calls access_storage BEFORE the cold-access gas check,
+    // so by returning COLD we let evmone charge the cold cost and
+    // OOG without ever reaching get_storage on this slot. If gas IS
+    // sufficient, get_storage will be invoked next and fatal on the
+    // missing slot — by design, to surface a real input-completeness
+    // gap rather than silently return a wrong (zero) value when the
+    // chain slot might be non-zero.
+    if (!storages_.contains(addr, key)) {
+        return EVMC_ACCESS_COLD;
+    }
+
     // EIP-2929 warm/cold: a slot is warm iff it was already touched in
     // this tx (last_tx_idx == tx_counter_). Either way, touch it now
     // so the next access sees it warm.

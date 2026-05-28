@@ -1,13 +1,19 @@
-//! Witness-driven prestate enrichment.
+//! Witness-driven prestate construction.
 //!
-//! Walks the canonical parent state trie from the witness and patches
-//! `prestate` so each touched account's block-start values (nonce /
-//! balance / code) match the chain authoritatively. The prestate
-//! tracer omits fields the txs in this block didn't touch (e.g. it
-//! won't include `code` for an EIP-7702 delegated EOA whose code was
-//! never EXTCODE-read), and our `write_accounts` then mis-defaults to
-//! EMPTY_CODE_HASH — wrong for the post-execution state-root
-//! reconstruction.
+//! This module builds the entire `Prestate` from the
+//! `debug_executionWitness` MPT alone — no `prestateTracer` is needed.
+//! The witness contains every node along the path to any account/slot
+//! the EVM accessed during execution, plus a `keys` field listing the
+//! keccak preimages of those paths (addresses for state-trie leaves,
+//! slot positions for storage-trie leaves). With those we can walk
+//! the parent state trie top-down, recover the `(addr, slot)` for
+//! every leaf, and populate `Prestate` with the canonical block-start
+//! values.
+//!
+//! Why drop `prestateTracer`? It silently omits state touched only in
+//! reverted frames (observed live on block 25191713). The execution
+//! witness includes the surrounding MPT structure, so we get more
+//! complete coverage by going to the witness directly.
 
 use std::collections::HashMap;
 
@@ -16,7 +22,315 @@ use anyhow::{anyhow, bail, Context, Result};
 use tracing::info;
 
 use crate::mpt::{hp_decode, keccak256, Rlp};
-use crate::rpc::{self, ExecutionWitness, Prestate};
+use crate::rpc::{self, AccountPrestate, ExecutionWitness, Prestate};
+
+/// Build a complete `Prestate` from the execution witness by walking
+/// the parent state trie top-down and visiting every account leaf the
+/// witness exposes, then walking each account's per-account storage
+/// subtree the same way.
+///
+/// `client` is needed only as a fallback for fetching bytecode whose
+/// `code_hash` appears in the state-trie leaf but isn't present in
+/// `witness.codes` (rare, but happens when the code wasn't EXTCODE'd
+/// during this block's execution).
+///
+/// Leaves whose key preimage is missing from `witness.keys` are
+/// skipped here — the state-root walker will emit `Op::Hash` for them
+/// so the trie still reconstructs correctly. The cpp-guest never
+/// needs to look these slots up at runtime because the EVM only
+/// accesses what has a preimage.
+pub async fn build_prestate_from_witness(
+    client: &rpc::Client,
+    parent_state_root: B256,
+    block: u64,
+    witness: &ExecutionWitness,
+) -> Result<Prestate> {
+    // Index nodes by their keccak hash for fast traversal.
+    let mut nodes: HashMap<[u8; 32], Vec<u8>> = HashMap::with_capacity(witness.state.len());
+    for raw in &witness.state {
+        if raw.len() < 32 {
+            continue;
+        }
+        nodes.insert(keccak256(raw), raw.to_vec());
+    }
+
+    // Preimage tables: keccak(key) → key. Reth's witness.keys mixes
+    // 20-byte addresses (state-trie keys) and 32-byte slot positions
+    // (storage-trie keys), so dispatch by length.
+    let mut addr_preimage: HashMap<[u8; 32], Address> = HashMap::new();
+    let mut slot_preimage: HashMap<[u8; 32], B256> = HashMap::new();
+    for k in &witness.keys {
+        match k.len() {
+            20 => {
+                let mut a = [0u8; 20];
+                a.copy_from_slice(k);
+                addr_preimage.insert(keccak256(k.as_ref()), Address::from(a));
+            }
+            32 => {
+                let mut p = [0u8; 32];
+                p.copy_from_slice(k);
+                slot_preimage.insert(keccak256(k.as_ref()), B256::from(p));
+            }
+            _ => { /* unknown preimage shape; ignore */ }
+        }
+    }
+
+    // codes_by_hash: needed both to attach `code` to discovered
+    // accounts and as the first lookup before falling back to RPC.
+    let mut codes_by_hash: HashMap<[u8; 32], Bytes> = HashMap::new();
+    for c in &witness.codes {
+        codes_by_hash.insert(keccak256(c), c.clone());
+    }
+
+    // Step 1: collect every leaf in the parent state trie.
+    let mut state_leaves: Vec<([u8; 32], Vec<u8>)> = Vec::new();
+    collect_leaves(&nodes, &parent_state_root.0, &mut Vec::new(), &mut state_leaves)?;
+
+    let mut prestate = Prestate::default();
+    let mut state_missing = 0usize;
+    let mut storage_missing = 0usize;
+
+    for (path_hash, account_rlp) in state_leaves {
+        let addr = match addr_preimage.get(&path_hash) {
+            Some(a) => *a,
+            None => {
+                // The state-root walker will emit Op::Hash for this
+                // leaf so the trie still verifies — the cpp-guest
+                // never accesses it because the EVM didn't either.
+                state_missing += 1;
+                continue;
+            }
+        };
+        let (nonce, balance, sroot, code_hash) = decode_account_rlp(&account_rlp)?;
+        let mut entry = AccountPrestate::default();
+        entry.nonce = Some(nonce);
+        entry.balance = Some(balance);
+        if code_hash != EMPTY_CODE_HASH {
+            if let Some(c) = codes_by_hash.get(&code_hash) {
+                entry.code = Some(c.clone());
+            } else {
+                let c = client.code(addr, block - 1).await?;
+                if keccak256(&c) != code_hash {
+                    bail!(
+                        "build_prestate: eth_getCode for {} returned code hashing to {} != chain leaf's {}",
+                        addr,
+                        hex::encode(keccak256(&c)),
+                        hex::encode(code_hash)
+                    );
+                }
+                entry.code = Some(c);
+            }
+        }
+
+        // Step 2: walk the per-account storage trie for this addr.
+        if sroot != EMPTY_TRIE_ROOT {
+            let mut storage_leaves: Vec<([u8; 32], Vec<u8>)> = Vec::new();
+            collect_leaves(&nodes, &sroot, &mut Vec::new(), &mut storage_leaves)?;
+            for (slot_hash, value_rlp) in storage_leaves {
+                let pos = match slot_preimage.get(&slot_hash) {
+                    Some(p) => *p,
+                    None => {
+                        storage_missing += 1;
+                        continue;
+                    }
+                };
+                let (val_item, _) = Rlp::decode(&value_rlp)?;
+                let val_bytes = val_item.as_bytes()?;
+                let mut padded = [0u8; 32];
+                padded[32 - val_bytes.len()..].copy_from_slice(val_bytes);
+                entry.storage.insert(pos, B256::from(padded));
+            }
+        }
+
+        prestate.insert(addr, entry);
+    }
+
+    info!(
+        accounts = prestate.len(),
+        storage_slots = prestate.values().map(|p| p.storage.len()).sum::<usize>(),
+        state_leaves_missing_preimage = state_missing,
+        storage_leaves_missing_preimage = storage_missing,
+        "built prestate from witness",
+    );
+    Ok(prestate)
+}
+
+/// Append every account leaf reachable in the witness state trie to
+/// `prestate` (if not already present). Used so the state-root walker
+/// can emit `Op::Leaf <idx>` for off-target sibling leaves instead of
+/// the legacy `Op::PhantomLeaf` carry-bytes trick — every leaf the
+/// walker encounters now has an idx into prestate.
+///
+/// Leaves whose address preimage is missing from `witness.keys` are
+/// skipped; the walker handles them via `Op::Hash` at the leaf's
+/// position.
+pub async fn enrich_state_leaves_from_witness(
+    client: &rpc::Client,
+    parent_state_root: B256,
+    block: u64,
+    witness: &ExecutionWitness,
+    prestate: &mut Prestate,
+) -> Result<usize> {
+    let mut nodes: HashMap<[u8; 32], Vec<u8>> = HashMap::with_capacity(witness.state.len());
+    for raw in &witness.state {
+        if raw.len() < 32 {
+            continue;
+        }
+        nodes.insert(keccak256(raw), raw.to_vec());
+    }
+    let mut addr_preimage: HashMap<[u8; 32], Address> = HashMap::new();
+    for k in &witness.keys {
+        if k.len() == 20 {
+            let mut a = [0u8; 20];
+            a.copy_from_slice(k);
+            addr_preimage.insert(keccak256(k.as_ref()), Address::from(a));
+        }
+    }
+    let mut codes_by_hash: HashMap<[u8; 32], Bytes> = HashMap::new();
+    for c in &witness.codes {
+        codes_by_hash.insert(keccak256(c), c.clone());
+    }
+
+    let mut state_leaves: Vec<([u8; 32], Vec<u8>)> = Vec::new();
+    collect_leaves(&nodes, &parent_state_root.0, &mut Vec::new(), &mut state_leaves)?;
+
+    let mut added = 0usize;
+    let mut missing_preimage = 0usize;
+    for (path_hash, account_rlp) in state_leaves {
+        let addr = match addr_preimage.get(&path_hash) {
+            Some(a) => *a,
+            None => {
+                missing_preimage += 1;
+                continue;
+            }
+        };
+        if prestate.contains_key(&addr) {
+            continue;
+        }
+        let (nonce, balance, _sroot, code_hash) = decode_account_rlp(&account_rlp)?;
+        let mut entry = AccountPrestate::default();
+        entry.nonce = Some(nonce);
+        entry.balance = Some(balance);
+        if code_hash != EMPTY_CODE_HASH {
+            if let Some(c) = codes_by_hash.get(&code_hash) {
+                entry.code = Some(c.clone());
+            } else {
+                let c = client.code(addr, block - 1).await?;
+                if keccak256(&c) != code_hash {
+                    bail!(
+                        "enrich_state_leaves: eth_getCode for {} hashes to {} != chain leaf's {}",
+                        addr,
+                        hex::encode(keccak256(&c)),
+                        hex::encode(code_hash)
+                    );
+                }
+                entry.code = Some(c);
+            }
+        }
+        prestate.insert(addr, entry);
+        added += 1;
+    }
+
+    info!(
+        added,
+        missing_preimage,
+        "appended state-trie leaves into prestate"
+    );
+    Ok(added)
+}
+
+/// Inject every address that appears in the prestate diff but isn't
+/// already in `prestate` — these are accounts CREATEd this block (no
+/// leaf in the parent trie). Empty entries; values get filled by the
+/// EVM execution and end up in the post-state via `write_accounts`'s
+/// is_read_only=false flagging.
+pub fn inject_diff_addresses(prestate: &mut Prestate, diff: &crate::rpc::PrestateDiff) {
+    let mut added = 0usize;
+    for side in [&diff.pre, &diff.post] {
+        for (addr, info) in side {
+            let entry = prestate.entry(*addr).or_insert_with(|| { added += 1; AccountPrestate::default() });
+            if entry.balance.is_none() { entry.balance = info.balance; }
+            if entry.nonce.is_none()   { entry.nonce   = info.nonce; }
+            if entry.code.is_none() && info.code.is_some() {
+                entry.code = info.code.clone();
+            }
+            // Storage slots from diff.pre carry the block-start values
+            // for slots that aren't visible in the witness storage
+            // trie (e.g. slots only touched in reverted frames; or
+            // chain.diff.pre entries that have value=0 implicitly).
+            for (slot, val) in &info.storage {
+                prestate
+                    .get_mut(addr)
+                    .unwrap()
+                    .storage
+                    .entry(*slot)
+                    .or_insert(*val);
+            }
+        }
+    }
+    info!(added_accounts = added, "injected diff addresses into prestate");
+}
+
+/// Inject every address that appears as a tx sender or `to` field —
+/// these are guaranteed to be EVM-accessed (sender pays gas; `to` is
+/// the callee). Empty entries if not already present.
+pub fn inject_tx_addresses(prestate: &mut Prestate, current: &alloy::rpc::types::Block) {
+    use alloy::consensus::TxEnvelope;
+    use alloy::rpc::types::BlockTransactions;
+    let mut added = 0usize;
+    if let BlockTransactions::Full(txs) = &current.transactions {
+        for tx in txs {
+            if prestate.entry(tx.from).or_insert_with(|| { added += 1; AccountPrestate::default() }).balance.is_none() {
+                // sender will be filled by witness walk if it exists in
+                // parent trie; otherwise stays empty until tx execution.
+            }
+            if let Some(to) = tx_to(&tx.inner) {
+                prestate.entry(to).or_insert_with(|| { added += 1; AccountPrestate::default() });
+            }
+            // EIP-2930 access list addrs + slots.
+            for (addr, slots) in tx_access_list(&tx.inner) {
+                let entry = prestate.entry(addr).or_insert_with(|| { added += 1; AccountPrestate::default() });
+                for slot in slots {
+                    entry.storage.entry(slot).or_insert(B256::ZERO);
+                }
+            }
+            // EIP-7702 authorization signers.
+            if let TxEnvelope::Eip7702(signed) = &tx.inner {
+                for auth in &signed.tx().authorization_list {
+                    if let Ok(sig) = auth.signature() {
+                        if let Ok(vk) = sig.recover_from_prehash(&auth.inner().signature_hash()) {
+                            let pt = vk.to_encoded_point(false);
+                            let bytes = pt.as_bytes();
+                            if bytes.len() == 65 && bytes[0] == 0x04 {
+                                let h = keccak256(&bytes[1..]);
+                                let mut a = [0u8; 20];
+                                a.copy_from_slice(&h[12..]);
+                                prestate.entry(Address::from(a)).or_insert_with(|| { added += 1; AccountPrestate::default() });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    info!(added_addresses = added, "injected tx-derived addresses into prestate");
+}
+
+fn tx_to(env: &alloy::consensus::TxEnvelope) -> Option<Address> {
+    use alloy::consensus::Transaction as _;
+    env.to()
+}
+
+fn tx_access_list(env: &alloy::consensus::TxEnvelope) -> Vec<(Address, Vec<B256>)> {
+    use alloy::consensus::Transaction as _;
+    match env.access_list() {
+        Some(al) => al
+            .iter()
+            .map(|item| (item.address, item.storage_keys.clone()))
+            .collect(),
+        None => Vec::new(),
+    }
+}
 
 pub async fn enrich_prestate_from_witness(
     client: &rpc::Client,

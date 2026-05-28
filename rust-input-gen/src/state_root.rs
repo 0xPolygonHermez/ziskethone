@@ -52,9 +52,14 @@ pub enum Op {
     Leaf          = 3,
     NodeRw        = 4,
     NodeR         = 5,
-    /// Untouched-sibling leaf re-positioned during a structural split.
-    /// Payload: nibble path + raw value bytes. cpp-guest's PhantomLeafR
-    /// folds back through reduce_branch as the wrap collapses.
+    /// Fallback: untouched-sibling leaf re-positioned during a
+    /// structural split when its keccak preimage is missing from
+    /// `witness.keys` (so we can't look up an Accounts/Storages idx).
+    /// Common path uses `Op::Leaf <idx>` instead, via the witness-
+    /// driven enrichment in `enrich::enrich_state_leaves_from_witness`
+    /// + `enrich_storage_slots_from_witness`. Payload: path nibbles
+    /// + raw value bytes; cpp-guest's `PhantomLeafR` folds back
+    /// through reduce_branch as the wrap collapses.
     PhantomLeaf   = 6,
 }
 
@@ -201,6 +206,14 @@ fn emit_hash(out: &mut Vec<u8>, hash: &[u8; 32]) {
 /// `PhantomLeaf` / `ExtensionHash` / synthesised branch ops — Op::Hash
 /// can't be used because the parent slot expects the inline bytes, not
 /// a 33-byte hash reference.
+///
+/// After the witness-driven enrichment of prestate (see
+/// `enrich::enrich_state_leaves_from_witness` + `enrich_storage_slots_from_witness`),
+/// every leaf reachable in the witness whose preimage IS in
+/// `witness.keys` is in our prestate → in `touch.addrs`/`touch.slots`
+/// → a target. So this function only fires for inline subtrees whose
+/// leaves' preimages are missing from `witness.keys` — PhantomLeaf is
+/// retained as the fallback for that residual case.
 fn emit_untouched_inline(out: &mut Vec<u8>, ctx: &Ctx, raw: &[u8]) -> Result<()> {
     let (item, _) = Rlp::decode(raw)?;
     let items = item.as_list().context("inline node not a list")?;
@@ -270,20 +283,18 @@ fn walk_untouched(out: &mut Vec<u8>, ctx: &Ctx, child: SubtreeChild<'_>) -> Resu
 
 /// Emit opcodes for a hash-referenced untouched subtree.
 ///
-/// The naive choice is `Op::Hash` (yields `HashR` on the cpp side),
-/// but that's lossy: when an adjacent touched leaf is later DELETED
-/// (post-execution value = 0), the parent branch collapses to its
-/// sole-surviving child, and cpp's `reduce_branch` produces an
-/// `Ext(prefix_nibble, hash_of_full_subtree)` — non-canonical if the
-/// surviving subtree is itself a leaf or extension (canonical MPT
-/// merges the prefix nibble into the leaf/extension's path).
-///
-/// To fix this, if the witness has the preimage and it's a leaf or
-/// extension, emit the mergeable variant (`PhantomLeaf` / `ExtensionHash`)
-/// so cpp's `reduce_branch` can prepend the nibble into the child's
-/// path. Branches and missing preimages fall back to `Op::Hash` — no
-/// merge benefit (branches don't fold) and missing preimages mean the
-/// node wasn't needed for old-root computation.
+/// After the witness-driven enrichment pass, leaves reachable in the
+/// witness with a preimage in `witness.keys` are targets → the walker
+/// descends through them via `walk()` and emits `Op::Leaf <idx>`. So
+/// the "0 targets" case here means either:
+///   * A leaf whose preimage is missing → emit `Op::PhantomLeaf` so
+///     `reduce_branch` can merge prefix nibbles into the leaf path
+///     during structural splits.
+///   * An extension to a hash child → emit `Op::ExtensionHash` (same
+///     mergeable reason).
+///   * A branch or missing-preimage subtree → fall back to `Op::Hash`
+///     (branches don't fold; missing-preimage subtrees weren't
+///     needed for old-root computation).
 fn emit_untouched_hash(out: &mut Vec<u8>, ctx: &Ctx, h: &[u8; 32]) -> Result<()> {
     if let Some(raw) = ctx.nodes.get(h) {
         let (item, _) = Rlp::decode(raw)?;
@@ -355,8 +366,8 @@ fn walk(
                 // represented by Op::Hash because the parent expects
                 // the inline RLP bytes, not a 33-byte hash ref. Walk
                 // into the inline node and emit opcodes that
-                // reconstruct the same bytes via PhantomLeaf /
-                // ExtensionHash / synthesized branches.
+                // reconstruct the same bytes via ExtensionHash /
+                // synthesized branches.
                 emit_untouched_inline(out, ctx, b)?;
             }
         }
@@ -711,10 +722,15 @@ fn emit_continuation(
         // Leaf at depth walked.len() with `remaining.len()` path
         // nibbles still to walk.
         if targets.is_empty() {
-            // Untouched sibling leaf at the new shorter path. Emit
-            // Op::PhantomLeaf so the cpp-guest carries the leaf
-            // through reduce_branch with the shrinking path, packing
-            // the right RLP (inline vs hash) at finalize time.
+            // Untouched sibling leaf at a divergence inside this
+            // extension/leaf. After the witness-driven enrichment of
+            // prestate, every leaf reachable in the witness with a
+            // preimage is a target → reaching this branch implies the
+            // sibling's preimage is missing from `witness.keys` (Reth
+            // surfaces the leaf for structural reasons but doesn't
+            // expose its address/slot preimage). Fall back to
+            // Op::PhantomLeaf so the cpp-guest can re-position it
+            // through reduce_branch with its raw value bytes.
             let value_bytes = items[1].as_bytes()?;
             put_op(out, Op::PhantomLeaf);
             put_u64(out, remaining.len() as u64);

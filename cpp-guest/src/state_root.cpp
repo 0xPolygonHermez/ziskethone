@@ -59,11 +59,12 @@ enum class Op : uint64_t {
     Leaf          = 3,
     NodeRW        = 4,
     NodeR         = 5,
-    /// Untouched sibling leaf the prover needs to re-position during a
-    /// structural split. Payload: u64 path_nib_count + nib_count×u64
+    /// Fallback: carries a sibling leaf inline when Reth omits its
+    /// keccak preimage from `witness.keys` so we can't reference it by
+    /// Accounts/Storages idx. Payload: u64 path_nib_count + nib_count×u64
     /// (low 4 bits) + u64 value_len + value_len bytes (pad to 8). The
-    /// cpp-guest builds the leaf RLP from path + value at finalize time,
-    /// so the leaf's hash adapts as its path shortens via reduce_branch.
+    /// common path (preimage present → enriched into prestate) goes
+    /// through `Op::Leaf <idx>` instead.
     PhantomLeaf   = 6,
 };
 
