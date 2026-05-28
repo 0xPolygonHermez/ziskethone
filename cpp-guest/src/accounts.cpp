@@ -24,9 +24,9 @@ Accounts::Accounts(const uint8_t*& cursor) {
 size_t Accounts::index_of(const evmc::address& addr) const {
     const auto it = index_.find(addr);
     if (it == index_.end()) {
-        std::fprintf(stderr, "DBG missing addr 0x");
-        for (int i = 0; i < 20; ++i) std::fprintf(stderr, "%02x", addr.bytes[i]);
-        std::fprintf(stderr, "\n");
+        ZEG_DEBUG_PRINTF("DBG missing addr 0x");
+        for (int i = 0; i < 20; ++i) ZEG_DEBUG_PRINTF("%02x", addr.bytes[i]);
+        ZEG_DEBUG_PRINTF("\n");
         fatal("Accounts::index_of: address not present in the table");
     }
     return it->second;
@@ -156,21 +156,21 @@ void Accounts::check_read_only_unchanged() const {
     for (size_t i = 0; i < originals_.size(); ++i) {
         if (!originals_[i].is_read_only()) continue;
         if (balance_at(i)   != originals_[i].balance()) {
-            std::fprintf(stderr, "DBG read-only account mutated (balance) idx=%zu addr=0x", i);
-            for (uint8_t b : originals_[i].address().bytes) std::fprintf(stderr, "%02x", b);
-            std::fprintf(stderr, "\n");
+            ZEG_DEBUG_PRINTF("DBG read-only account mutated (balance) idx=%zu addr=0x", i);
+            for (uint8_t b : originals_[i].address().bytes) ZEG_DEBUG_PRINTF("%02x", b);
+            ZEG_DEBUG_PRINTF("\n");
             fatal("Accounts::check_read_only_unchanged: balance mutated");
         }
         if (nonce_at(i)     != originals_[i].nonce()) {
-            std::fprintf(stderr, "DBG read-only account mutated (nonce) idx=%zu addr=0x", i);
-            for (uint8_t b : originals_[i].address().bytes) std::fprintf(stderr, "%02x", b);
-            std::fprintf(stderr, "\n");
+            ZEG_DEBUG_PRINTF("DBG read-only account mutated (nonce) idx=%zu addr=0x", i);
+            for (uint8_t b : originals_[i].address().bytes) ZEG_DEBUG_PRINTF("%02x", b);
+            ZEG_DEBUG_PRINTF("\n");
             fatal("Accounts::check_read_only_unchanged: nonce mutated");
         }
         if (code_hash_at(i) != originals_[i].code_hash()) {
-            std::fprintf(stderr, "DBG read-only account mutated (code_hash) idx=%zu addr=0x", i);
-            for (uint8_t b : originals_[i].address().bytes) std::fprintf(stderr, "%02x", b);
-            std::fprintf(stderr, "\n");
+            ZEG_DEBUG_PRINTF("DBG read-only account mutated (code_hash) idx=%zu addr=0x", i);
+            for (uint8_t b : originals_[i].address().bytes) ZEG_DEBUG_PRINTF("%02x", b);
+            ZEG_DEBUG_PRINTF("\n");
             fatal("Accounts::check_read_only_unchanged: code_hash mutated");
         }
     }

@@ -27,6 +27,11 @@
 #include "zeg/system_addresses.hpp"
 #include "zeg/zisk_crypto.hpp"  // verify_signature_and_get_signer (EIP-7702)
 
+// silkworm_core's syscall-accelerated secp256k1 recovery (EIP-7702 auth
+// signers). On Zisk this lowers to the secp256k1_add/dbl CSR syscalls via
+// evmone's evmmax::secp256k1::ecrecover.
+#include <zilk_core/core/crypto/ecdsa.h>
+
 namespace zeg {
 
 namespace {
@@ -706,6 +711,7 @@ void ZiskStateDB::register_deployed_code(const evmc::address& new_addr,
     if (result.output_size > 0) {
         contracts_.insert(deployed_hash, result.output_data, result.output_size);
     }
+#ifndef ZISK
     const char* trace_env = std::getenv("ZEG_TRACE_TX");
     if (trace_env != nullptr &&
         tx_counter_ == static_cast<uint64_t>(std::atoi(trace_env) + 1)) {
@@ -718,6 +724,7 @@ void ZiskStateDB::register_deployed_code(const evmc::address& new_addr,
             std::fprintf(stderr, "%02x", result.output_data[i]);
         std::fprintf(stderr, "\n");
     }
+#endif
     journal_.log_code_hash(new_idx, accounts_.code_hash_at(new_idx),
                            accounts_.last_tx_idx_at(new_idx));
     accounts_.set_code_hash_at(new_idx, deployed_hash, tx_counter_);
@@ -805,6 +812,7 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         pre_warm_for_tx(tx);
 
         // DEBUG: attach an evmone instruction tracer for the target tx.
+#ifndef ZISK
         static std::ofstream trace_out;
         auto* vm_ev = static_cast<evmone::VM*>(vm_raw_);
         const char* trace_env = std::getenv("ZEG_TRACE_TX");
@@ -812,6 +820,7 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
             if (!trace_out.is_open()) trace_out.open("/tmp/cpp_tx_trace.jsonl");
             vm_ev->add_tracer(evmone::create_instruction_tracer(trace_out));
         }
+#endif
 
         // Push the receipt for this tx up front. emit_log appends to
         // tx_receipts_.back().logs during execution; finalize_receipt
@@ -845,17 +854,21 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         }
 
         const uint64_t gas_used = settle_tx_gas(tx, result, sender_idx, auth_refund);
+#ifndef ZISK
         std::fprintf(stderr, "TX %zu gas_used=%llu status=%d\n",
                      i, (unsigned long long)gas_used,
                      (int)result.status_code);
+#endif
         finalize_receipt(result, gas_used);
 
+#ifndef ZISK
         // Detach tracer after the traced tx so later txs don't trace.
         if (trace_env != nullptr && i == static_cast<size_t>(std::atoi(trace_env))) {
             vm_ev->remove_tracers();
             trace_out.flush();
             trace_out.close();
         }
+#endif
     }
 }
 
@@ -1127,7 +1140,7 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item&          auth
     if (!fit.has_next()) fatal("EIP-7702: auth missing nonce");
     const uint64_t a_nonce = rlp::as_u64(fit.next());
     if (!fit.has_next()) fatal("EIP-7702: auth missing y_parity");
-    (void)rlp::as_u64(fit.next());  // y_parity — not used here
+    const uint64_t a_y_parity = rlp::as_u64(fit.next());  // recovery-id bit
     if (!fit.has_next()) fatal("EIP-7702: auth missing r");
     const auto a_r = rlp::as_u256(fit.next());
     if (!fit.has_next()) fatal("EIP-7702: auth missing s");
@@ -1158,11 +1171,21 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item&          auth
     const auto a_hash = keccak256_bytes32(
         preimage.data(), preimage.size());
 
-    // Verify against prover-supplied pubkey, recover signer.
-    const auto pk_span = tx.auth_pubkey(auth_idx);
-    const evmc::address signer =
-        verify_signature_and_get_signer(pk_span.data(),
-                                        a_hash, a_r, a_s);
+    // Recover the auth signer directly from (hash, r, s, y_parity) via
+    // silkworm_core's syscall-accelerated ecrecover. The prover-supplied
+    // pubkey hint (tx.auth_pubkey(auth_idx)) is no longer consumed; the
+    // input-stream layout is unchanged (the constructor still skips it).
+    // A malformed EIP-7702 auth signature can't yield a valid signer, so
+    // recovery failure means this auth simply contributes no signer; per
+    // the spec an unrecoverable auth is skipped (return 0 refund).
+    uint8_t a_signature[64];
+    std::memcpy(a_signature,      a_r.bytes, 32);
+    std::memcpy(a_signature + 32, a_s.bytes, 32);
+    evmc::address signer{};
+    if (!silkworm_recover_address(signer.bytes, a_hash.bytes, a_signature,
+                                  static_cast<uint8_t>(a_y_parity & 1))) {
+        return 0;
+    }
 
     // Signer must be in the witness with the matching nonce.
     const size_t signer_idx = accounts_.index_of(signer);

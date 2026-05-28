@@ -26,11 +26,11 @@ size_t Storages::index_of(const evmc::address& addr,
                           const evmc::bytes32& position) const {
     const auto it = index_.find(Key{addr, position});
     if (it == index_.end()) {
-        std::fprintf(stderr, "DBG missing storage slot addr=0x");
-        for (int i = 0; i < 20; ++i) std::fprintf(stderr, "%02x", addr.bytes[i]);
-        std::fprintf(stderr, " pos=0x");
-        for (int i = 0; i < 32; ++i) std::fprintf(stderr, "%02x", position.bytes[i]);
-        std::fprintf(stderr, "\n");
+        ZEG_DEBUG_PRINTF("DBG missing storage slot addr=0x");
+        for (int i = 0; i < 20; ++i) ZEG_DEBUG_PRINTF("%02x", addr.bytes[i]);
+        ZEG_DEBUG_PRINTF(" pos=0x");
+        for (int i = 0; i < 32; ++i) ZEG_DEBUG_PRINTF("%02x", position.bytes[i]);
+        ZEG_DEBUG_PRINTF("\n");
         fatal("Storages::index_of: (address, position) not present in the table");
     }
     return it->second;
@@ -115,11 +115,11 @@ void Storages::check_read_only_unchanged() const {
     for (size_t i = 0; i < originals_.size(); ++i) {
         if (!originals_[i].is_read_only()) continue;
         if (value_at(i) != originals_[i].value()) {
-            std::fprintf(stderr, "DBG read-only slot mutated idx=%zu addr=0x", i);
-            for (uint8_t b : originals_[i].address().bytes)  std::fprintf(stderr, "%02x", b);
-            std::fprintf(stderr, " pos=0x");
-            for (uint8_t b : originals_[i].position().bytes) std::fprintf(stderr, "%02x", b);
-            std::fprintf(stderr, "\n");
+            ZEG_DEBUG_PRINTF("DBG read-only slot mutated idx=%zu addr=0x", i);
+            for (uint8_t b : originals_[i].address().bytes)  ZEG_DEBUG_PRINTF("%02x", b);
+            ZEG_DEBUG_PRINTF(" pos=0x");
+            for (uint8_t b : originals_[i].position().bytes) ZEG_DEBUG_PRINTF("%02x", b);
+            ZEG_DEBUG_PRINTF("\n");
             fatal("Storages::check_read_only_unchanged: value mutated");
         }
     }
