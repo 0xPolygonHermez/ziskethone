@@ -72,12 +72,27 @@ public:
     // lives in the stream; there is no setter.
     bool                  is_read_only_at(size_t idx) const noexcept;
 
-    // Look up the array index of (addr, position). Aborts the guest via
-    // zeg::fatal if the slot isn't in the table — the guest is supposed
-    // to have every state it touches in its private input, so a missing
-    // slot is a hard input-completeness bug, not a recoverable case.
+    // Look up the array index of (addr, position). The slot may have
+    // come from the witness OR from a runtime-added "phantom" record
+    // (see below). If the slot isn't in either, this method ALLOCATES
+    // a fresh phantom entry with original value 0 and returns its
+    // index — the cpp guest needs to support slots whose only access
+    // is inside reverted frames, which neither the prestate tracer
+    // nor `debug_executionWitness` always report.
+    //
+    // The returned index encodes its provenance: the high bit
+    // (`kPhantomFlag`) is set for phantom slots. All by-index
+    // accessors below dispatch on this bit. State-root reconstruction
+    // never visits phantoms (they aren't referenced from any opcode
+    // emitted by rust-input-gen) so they're invisible to the trie.
     size_t index_of(const evmc::address& addr,
-                    const evmc::bytes32& position) const;
+                    const evmc::bytes32& position);
+
+    // Sentinel bit set on indices returned by `index_of` (and any
+    // other method) when the slot is a phantom rather than a witness
+    // entry. The remaining bits are the phantom's position in the
+    // internal `phantoms_` vector.
+    static constexpr size_t kPhantomFlag = 1ULL << 63;
 
     // DBG: non-fataling probe — true iff (addr, position) is in the table.
     bool contains(const evmc::address& addr,

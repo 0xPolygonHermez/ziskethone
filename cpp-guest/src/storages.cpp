@@ -26,6 +26,11 @@ size_t Storages::index_of(const evmc::address& addr,
                           const evmc::bytes32& position) const {
     const auto it = index_.find(Key{addr, position});
     if (it == index_.end()) {
+        std::fprintf(stderr, "DBG missing storage slot addr=0x");
+        for (int i = 0; i < 20; ++i) std::fprintf(stderr, "%02x", addr.bytes[i]);
+        std::fprintf(stderr, " pos=0x");
+        for (int i = 0; i < 32; ++i) std::fprintf(stderr, "%02x", position.bytes[i]);
+        std::fprintf(stderr, "\n");
         fatal("Storages::index_of: (address, position) not present in the table");
     }
     return it->second;

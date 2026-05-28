@@ -172,6 +172,16 @@ async fn main() -> Result<()> {
         &mut prestate,
     ).await?;
 
+    // Geth's prestateTracer omits storage slots whose only access lives
+    // inside a reverted frame, but the execution witness still carries
+    // their storage-trie leaves. Walk every touched account's parent
+    // storage trie and add any discovered slot the tracer missed.
+    enrich::enrich_storage_slots_from_witness(
+        parent.header.state_root,
+        &witness,
+        &mut prestate,
+    )?;
+
     // Single source of ordering for Accounts / Storages / StateRoot.
     let touch = TouchSet::build(&prestate, &diff);
     info!(

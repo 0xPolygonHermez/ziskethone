@@ -201,18 +201,31 @@ size_t ZiskStateDB::copy_code(const evmc::address& addr,
 
 bool ZiskStateDB::selfdestruct(const evmc::address& addr,
                                const evmc::address& beneficiary) noexcept {
-    // EIP-6780 same-tx-creation tracking is out of scope. For pre-
-    // existing contracts (the common case) selfdestruct now only moves
-    // the balance and does NOT destroy the contract — so we always
-    // return false (not destroyed) and only do the balance transfer.
+    // EIP-6780 (Cancun) semantics:
+    //   * If the contract was CREATEd earlier in THIS transaction, the
+    //     account is fully destroyed: balance moves to the beneficiary,
+    //     then nonce / code_hash / every storage slot are cleared and
+    //     the leaf disappears from the state trie (`return true`).
+    //   * Otherwise, only the balance is transferred to the beneficiary
+    //     and the account is preserved (`return false`).
+    //
+    // All field clears go through the journal so a revert of the
+    // surrounding frame restores the contract intact.
+    const size_t src_idx = accounts_.index_of(addr);
+    const bool same_tx_created = created_this_tx_idx_.count(src_idx) != 0;
+
     if (addr == beneficiary) {
-        // Self-transfer is a no-op on balance (would zero it otherwise).
+        // Same-address transfer is a no-op on balance (the two
+        // set_balance_at calls below would otherwise overwrite each
+        // other and leave the account net-credited).
+        if (same_tx_created) {
+            clear_account_for_selfdestruct(src_idx);
+            return true;
+        }
         return false;
     }
 
-    // Log both balances BEFORE mutating so a revert restores them in
-    // the reverse order they were written.
-    const size_t src_idx = accounts_.index_of(addr);
+    // Log + transfer balance.
     const size_t dst_idx = accounts_.index_of(beneficiary);
     journal_.log_balance(src_idx, accounts_.balance_at(src_idx),
                          accounts_.last_tx_idx_at(src_idx));
@@ -225,7 +238,59 @@ bool ZiskStateDB::selfdestruct(const evmc::address& addr,
                              intx::be::store<evmc::uint256be>(dst_u + src_u),
                              tx_counter_);
     accounts_.set_balance_at(src_idx, evmc::uint256be{}, tx_counter_);
+
+    if (same_tx_created) {
+        clear_account_for_selfdestruct(src_idx);
+        return true;
+    }
     return false;
+}
+
+void ZiskStateDB::clear_account_for_selfdestruct(size_t src_idx) noexcept {
+    // EIP-6780 full-destroy helper. Caller has already transferred the
+    // balance to the beneficiary (or skipped the transfer for the
+    // self-as-beneficiary edge case). Zero the remaining account fields
+    // and every storage slot — journaled so a frame revert restores
+    // the contract exactly as it was before SELFDESTRUCT.
+
+    // Account fields.
+    journal_.log_nonce(src_idx, accounts_.nonce_at(src_idx),
+                       accounts_.last_tx_idx_at(src_idx));
+    accounts_.set_nonce_at(src_idx, 0, tx_counter_);
+
+    journal_.log_code_hash(src_idx, accounts_.code_hash_at(src_idx),
+                           accounts_.last_tx_idx_at(src_idx));
+    accounts_.set_code_hash_at(src_idx, EMPTY_CODE_HASH, tx_counter_);
+
+    // Storage: zero every (addr, slot) entry in the witness for this
+    // address. The records are sorted by (address, position) — rust-
+    // input-gen writes them from a `BTreeSet<(Address, B256)>`, so a
+    // single address's slots form one contiguous range. Binary-search
+    // the range start (O(log N)) and walk forward while the address
+    // matches (O(K) for K slots of this account) instead of scanning
+    // the full table on every SELFDESTRUCT.
+    const evmc::address& addr = accounts_.address_at(src_idx);
+    const uint64_t n_slots = storages_.size();
+    uint64_t lo = 0, hi = n_slots;
+    while (lo < hi) {
+        const uint64_t mid = lo + (hi - lo) / 2;
+        if (std::memcmp(storages_.address_at(mid).bytes, addr.bytes,
+                        sizeof(addr.bytes)) < 0) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    for (uint64_t i = lo;
+         i < n_slots
+             && std::memcmp(storages_.address_at(i).bytes, addr.bytes,
+                            sizeof(addr.bytes)) == 0;
+         ++i) {
+        const auto cur = storages_.value_at(i);
+        if (cur == evmc::bytes32{}) continue;
+        journal_.log_storage(i, cur, storages_.last_tx_idx_at(i));
+        storages_.set_value_at(i, evmc::bytes32{}, tx_counter_);
+    }
 }
 
 evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
@@ -513,6 +578,9 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     // at creation time, so subsequent EXTCODE*/CALL on it within this
     // tx is WARM (100 gas) rather than COLD (2600 gas). Journaled —
     // if the surrounding frame reverts, the warming is undone.
+    // EIP-6780: mark the new index as "created this tx" so a later
+    // SELFDESTRUCT from this contract fully destroys it (instead of
+    // just transferring balance).
     {
         const size_t na_idx = accounts_.index_of(new_addr);
         if (!accounts_.is_warm_at(na_idx, tx_counter_)) {
@@ -520,6 +588,7 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
                                       accounts_.last_tx_idx_at(na_idx));
         }
         accounts_.mark_touched_at(na_idx, tx_counter_);
+        created_this_tx_idx_.insert(na_idx);
     }
 
     // 4. Execute the init code with the new address as the recipient.
@@ -682,8 +751,12 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         // tx_idx and trips Storages::mark_touched_at's snapshot
         // path. Starts the first tx at counter 1 (> 0 sentinel).
         // Transient storage (EIP-1153) is also reset per-tx.
+        // EIP-6780: the "created this tx" set is per-tx; reset here
+        // so SELFDESTRUCT in the new tx only fully-destroys accounts
+        // CREATEd by this tx, not by any prior one.
         ++tx_counter_;
         transient_.reset();
+        created_this_tx_idx_.clear();
 
         const auto& tx = transactions.at(i);
 
@@ -1155,11 +1228,13 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
         // top level there's no enclosing checkpoint to roll back, so
         // the entry is unused — but emitting it keeps the invariant
         // "every warming inside a frame is journaled" uniform.
+        // EIP-6780: mark for full-destroy on same-tx SELFDESTRUCT.
         if (!accounts_.is_warm_at(new_idx, tx_counter_)) {
             journal_.log_account_warm(new_idx,
                                       accounts_.last_tx_idx_at(new_idx));
         }
         accounts_.mark_touched_at(new_idx, tx_counter_);
+        created_this_tx_idx_.insert(new_idx);
 
         auto result = vm_.execute(*this, EVMC_OSAKA, msg,
                                   entry_code.data(), entry_code.size());

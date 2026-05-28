@@ -97,6 +97,176 @@ pub async fn enrich_prestate_from_witness(
     Ok(patched)
 }
 
+/// Discover storage slots touched by the EVM that Geth's `prestateTracer`
+/// omits (notably: slots whose only access is inside a reverted frame —
+/// the tracer reports the account but with empty `storage`). The
+/// `debug_executionWitness` MPT nevertheless includes every storage
+/// trie node the EVM touched, so we can recover those slots by walking
+/// each touched account's parent storage trie and using `witness.keys`
+/// to invert the trie path (keccak256(slot_pos)) back to the slot
+/// position. Slots already in `prestate.storage` are left untouched;
+/// new entries are inserted with their canonical pre-block value.
+///
+/// Returns the number of (addr, slot) pairs newly inserted.
+pub fn enrich_storage_slots_from_witness(
+    parent_state_root: B256,
+    witness: &ExecutionWitness,
+    prestate: &mut Prestate,
+) -> Result<usize> {
+    let mut nodes: HashMap<[u8; 32], Vec<u8>> = HashMap::with_capacity(witness.state.len());
+    for raw in &witness.state {
+        if raw.len() < 32 {
+            continue;
+        }
+        nodes.insert(keccak256(raw), raw.to_vec());
+    }
+
+    // Preimage table: trie path (keccak of slot position) → slot position.
+    // `witness.keys` mixes 20-byte addresses and 32-byte slot positions —
+    // we only care about the 32-byte entries here.
+    let mut slot_preimage: HashMap<[u8; 32], B256> = HashMap::new();
+    for k in &witness.keys {
+        if k.len() == 32 {
+            let pos = B256::from_slice(k);
+            slot_preimage.insert(keccak256(k.as_ref()), pos);
+        }
+    }
+
+    let mut added = 0usize;
+    let mut missing_preimage = 0usize;
+    let addrs: Vec<Address> = prestate.keys().copied().collect();
+    for addr in addrs {
+        let addr_hash = keccak256(addr.as_slice());
+        let leaf = match walk_to_leaf(&nodes, &parent_state_root.0, &addr_hash)? {
+            Some(v) => v,
+            None => continue, // account doesn't exist in parent trie → no storage
+        };
+        let (_nonce, _balance, sroot, _ch) = decode_account_rlp(&leaf)?;
+        if sroot == EMPTY_TRIE_ROOT {
+            continue;
+        }
+
+        // Collect every storage leaf reachable from this root.
+        let mut leaves: Vec<([u8; 32], Vec<u8>)> = Vec::new();
+        collect_leaves(&nodes, &sroot, &mut Vec::new(), &mut leaves)?;
+        for (path_hash, value_rlp) in leaves {
+            let pos = match slot_preimage.get(&path_hash) {
+                Some(p) => *p,
+                None => {
+                    missing_preimage += 1;
+                    continue;
+                }
+            };
+            let entry = prestate.get_mut(&addr).unwrap();
+            if entry.storage.contains_key(&pos) {
+                continue;
+            }
+            // Storage leaf value is RLP(uint256_minimal). Decode to B256.
+            let (val_item, _) = Rlp::decode(&value_rlp)?;
+            let val_bytes = val_item.as_bytes()?;
+            let mut padded = [0u8; 32];
+            padded[32 - val_bytes.len()..].copy_from_slice(val_bytes);
+            entry.storage.insert(pos, B256::from(padded));
+            added += 1;
+        }
+    }
+
+    info!(
+        added_slots = added,
+        missing_preimage = missing_preimage,
+        "enriched prestate.storage from witness storage tries"
+    );
+    Ok(added)
+}
+
+/// DFS over the trie rooted at `root_hash`, accumulating every leaf as
+/// (full_path_hash, raw_value_bytes). `path_nibs` carries the nibbles
+/// walked from the root so far; on each leaf we reconstruct the full
+/// 32-byte path = pack(path_nibs + leaf_hp_nibs).
+fn collect_leaves(
+    nodes: &HashMap<[u8; 32], Vec<u8>>,
+    root_hash: &[u8; 32],
+    path_nibs: &mut Vec<u8>,
+    out: &mut Vec<([u8; 32], Vec<u8>)>,
+) -> Result<()> {
+    if root_hash == &EMPTY_TRIE_ROOT {
+        return Ok(());
+    }
+    let raw = match nodes.get(root_hash) {
+        Some(v) => v.clone(),
+        None => return Ok(()), // partial witness: subtree we can't see
+    };
+    collect_leaves_raw(nodes, &raw, path_nibs, out)
+}
+
+fn collect_leaves_raw(
+    nodes: &HashMap<[u8; 32], Vec<u8>>,
+    raw: &[u8],
+    path_nibs: &mut Vec<u8>,
+    out: &mut Vec<([u8; 32], Vec<u8>)>,
+) -> Result<()> {
+    let (item, _) = Rlp::decode(raw)?;
+    let items = item.as_list()?;
+    match items.len() {
+        17 => {
+            for nib in 0u8..16 {
+                path_nibs.push(nib);
+                collect_child(nodes, &items[nib as usize], path_nibs, out)?;
+                path_nibs.pop();
+            }
+        }
+        2 => {
+            let path = items[0].as_bytes()?;
+            let (extra_nibs, is_leaf) = hp_decode(path);
+            let push_n = extra_nibs.len();
+            for n in &extra_nibs {
+                path_nibs.push(*n);
+            }
+            if is_leaf {
+                if path_nibs.len() == 64 {
+                    let mut full = [0u8; 32];
+                    for i in 0..32 {
+                        full[i] = (path_nibs[2 * i] << 4) | path_nibs[2 * i + 1];
+                    }
+                    let val = items[1].as_bytes()?.to_vec();
+                    out.push((full, val));
+                }
+                // else: a leaf whose path doesn't reach a full 32-byte
+                // hash — would be a state-trie account leaf hit by accident
+                // if `root_hash` was a state-root. Storage tries always
+                // have 64-nibble paths; skip anything shorter.
+            } else {
+                collect_child(nodes, &items[1], path_nibs, out)?;
+            }
+            for _ in 0..push_n {
+                path_nibs.pop();
+            }
+        }
+        _ => bail!("collect_leaves: bad MPT shape ({} items)", items.len()),
+    }
+    Ok(())
+}
+
+fn collect_child(
+    nodes: &HashMap<[u8; 32], Vec<u8>>,
+    child: &Rlp<'_>,
+    path_nibs: &mut Vec<u8>,
+    out: &mut Vec<([u8; 32], Vec<u8>)>,
+) -> Result<()> {
+    match child {
+        Rlp::Bytes(b) if b.is_empty() => Ok(()),
+        Rlp::Bytes(b) if b.len() == 32 => {
+            let h = <[u8; 32]>::try_from(*b).unwrap();
+            collect_leaves(nodes, &h, path_nibs, out)
+        }
+        Rlp::Bytes(_) => Ok(()), // partial / unsupported
+        Rlp::List(_) => {
+            let buf = encode_inline(child);
+            collect_leaves_raw(nodes, &buf, path_nibs, out)
+        }
+    }
+}
+
 // ===== MPT walk + RLP =======================================================
 
 fn walk_to_leaf(

@@ -29,6 +29,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <unordered_set>
 #include <vector>
 
 #include <evmc/evmc.hpp>
@@ -229,6 +230,11 @@ private:
     bool init_create_account(const evmc::address& new_addr,
                              const evmc_message&  msg) noexcept;
 
+    // EIP-6780 helper: zero nonce + code_hash and clear every storage
+    // slot of `src_idx`. Caller (`selfdestruct`) has already moved the
+    // balance to the beneficiary. All clears are journaled.
+    void clear_account_for_selfdestruct(size_t src_idx) noexcept;
+
     // After successful init-code execution, set the new account's
     // code_hash = keccak256(result.output_data). Journaled.
     void register_deployed_code(const evmc::address& new_addr,
@@ -350,6 +356,17 @@ private:
     // and per-tx-original tracking. Starts at 0 so first tx runs
     // with tx_counter_ == 1 > 0 (the never-touched sentinel).
     uint64_t              tx_counter_{0};
+
+    // EIP-6780 (Cancun): account indices of contracts CREATEd in the
+    // current transaction. Reset at every tx boundary. If a contract
+    // in this set issues SELFDESTRUCT, the account is fully destroyed
+    // (nonce + code_hash + balance + storage all cleared); for any
+    // address NOT in this set, SELFDESTRUCT only transfers the balance
+    // and leaves the account intact. Not journaled — a stale entry
+    // left behind after a CREATE-frame revert is harmless because the
+    // destroyed contract can't issue SELFDESTRUCT after its CREATE
+    // rolls back.
+    std::unordered_set<size_t> created_this_tx_idx_{};
 
     // Per-tx receipts (finalized at end-of-tx; logs filled by emit_log
     // during execution).
