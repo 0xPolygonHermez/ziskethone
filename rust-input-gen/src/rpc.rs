@@ -6,7 +6,7 @@
 //! The prestate-tracer responses are parsed via `serde_json::Value`
 //! since the wire shape differs slightly between clients.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, Bytes, B256, U256};
@@ -119,12 +119,12 @@ impl Client {
         for tx in traces {
             let inner = tx.get("result").unwrap_or(tx);
             if let Some(pre) = inner.get("pre") {
-                merge_one_into(&mut diff.pre, pre, /*first_wins=*/ true);
+                merge_one_into(&mut diff.pre, pre, /*first_wins=*/ true, None);
             }
             if let Some(post) = inner.get("post") {
                 // For the `post` side, last-wins captures the final
                 // value seen in the block.
-                merge_one_into(&mut diff.post, post, /*first_wins=*/ false);
+                merge_one_into(&mut diff.post, post, /*first_wins=*/ false, None);
             }
         }
         Ok(diff)
@@ -262,37 +262,66 @@ fn decode_hex_array(v: &Value, field: &'static str) -> Result<Vec<Bytes>> {
 fn merge_prestate_traces(traces_raw: &Value, first_wins: bool) -> Prestate {
     let mut out = Prestate::default();
     let Some(traces) = traces_raw.as_array() else { return out };
+    // Track which addresses have been "first-seen" so we can correctly
+    // snapshot block-start state from the FIRST tx that touches each
+    // address — including treating omitted JSON fields as their default
+    // values (the tracer omits zero balance, zero nonce, empty code).
+    // Without this, a later tx that reports a modified field (e.g.
+    // nonce=1 after an EIP-7702 auth bump) would erroneously become
+    // our "block-start" value when the true block-start was 0.
+    let mut seen: HashSet<Address> = HashSet::new();
     for tx in traces {
         // Each entry is either `{"result": {<addr>: {...}}}` or the
         // address-keyed object directly, depending on the client.
         let inner = tx.get("result").unwrap_or(tx);
-        merge_one_into(&mut out, inner, first_wins);
+        merge_one_into(&mut out, inner, first_wins, Some(&mut seen));
     }
     out
 }
 
-fn merge_one_into(out: &mut Prestate, addrs_obj: &Value, first_wins: bool) {
+fn merge_one_into(
+    out: &mut Prestate,
+    addrs_obj: &Value,
+    first_wins: bool,
+    mut seen: Option<&mut HashSet<Address>>,
+) {
     let Some(obj) = addrs_obj.as_object() else { return };
     for (addr_str, info) in obj {
         let Ok(addr) = addr_str.parse::<Address>() else {
             warn!(%addr_str, "skipping malformed address in prestate trace");
             continue;
         };
+        // `is_first_appearance` is only meaningful for the non-diff
+        // (full prestate) caller, which passes a `seen` set. The diff
+        // caller (`merge_one_into(.., first_wins, None)`) doesn't track
+        // first-appearance because diff JSON omits "unchanged" fields,
+        // so omitted ≠ default there — only present-vs-absent matters.
+        let is_first_appearance =
+            seen.as_mut().map(|s| s.insert(addr)).unwrap_or(false);
         let entry = out.entry(addr).or_default();
 
-        if let Some(v) = parse_u256(info.get("balance")) {
-            if !first_wins || entry.balance.is_none() {
-                entry.balance = Some(v);
+        if is_first_appearance {
+            // First tx to touch this address: snapshot the block-start
+            // state. The tracer omits zero balance / zero nonce / empty
+            // code from the JSON, so omission means the default value.
+            entry.balance = Some(parse_u256(info.get("balance")).unwrap_or(U256::ZERO));
+            entry.nonce   = Some(parse_u64(info.get("nonce")).unwrap_or(0));
+            entry.code    = Some(parse_bytes(info.get("code")).unwrap_or_default());
+        } else {
+            if let Some(v) = parse_u256(info.get("balance")) {
+                if !first_wins || entry.balance.is_none() {
+                    entry.balance = Some(v);
+                }
             }
-        }
-        if let Some(v) = parse_u64(info.get("nonce")) {
-            if !first_wins || entry.nonce.is_none() {
-                entry.nonce = Some(v);
+            if let Some(v) = parse_u64(info.get("nonce")) {
+                if !first_wins || entry.nonce.is_none() {
+                    entry.nonce = Some(v);
+                }
             }
-        }
-        if let Some(v) = parse_bytes(info.get("code")) {
-            if !first_wins || entry.code.is_none() {
-                entry.code = Some(v);
+            if let Some(v) = parse_bytes(info.get("code")) {
+                if !first_wins || entry.code.is_none() {
+                    entry.code = Some(v);
+                }
             }
         }
         if let Some(stor) = info.get("storage").and_then(Value::as_object) {

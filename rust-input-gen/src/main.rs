@@ -379,12 +379,15 @@ async fn inject_system_contracts(
             // writable (the prestate diff never sees these because
             // system calls aren't transactions).
             writable.insert((addr, slot));
-            if entry.storage.contains_key(&slot) {
-                continue;
-            }
-            // Ring-buffer slots carry the historical value from prior
-            // blocks (EIP-4788 beacon roots, EIP-2935 block hashes,
-            // etc.). Block-start = parent-block value.
+            // ALWAYS overwrite with the parent-block value. The
+            // prestateTracer reports per-tx state at tx start, but
+            // the pre-block EIP-4788/2935/7002/7251 system calls
+            // run BEFORE any tx — so any tx that reads these slots
+            // sees the POST-system-call value, and our aggregated
+            // prestate would record that as "block-start", which is
+            // wrong. The true block-start value is at parent-block
+            // (= before this block's system call writes the new
+            // ring-buffer entry).
             let v = client.storage_at(addr, slot, block - 1).await?;
             entry.storage.insert(slot, v);
         }

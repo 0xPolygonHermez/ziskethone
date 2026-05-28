@@ -403,6 +403,21 @@ evmc_access_status ZiskStateDB::access_account(const evmc::address& addr) noexce
     if (evmone::state::is_precompile(EVMC_OSAKA, addr)) {
         return EVMC_ACCESS_WARM;
     }
+    // Soft-phantom: if the address isn't in our table, neither the
+    // prestate tracer nor the execution witness surfaced it (e.g. an
+    // EXTCODESIZE in a failed/OOG'd frame — see block 25192931).
+    // Return COLD without warming. evmone's call-sites that use
+    // access_account (EXTCODESIZE/EXTCODEHASH/BALANCE/CALL/etc.)
+    // perform the cold-access gas check immediately after; if gas is
+    // insufficient the opcode OOGs without invoking the downstream
+    // getter (get_code_size/get_balance/...). If gas IS sufficient,
+    // the getter will be invoked next and fatal on the missing addr —
+    // by design, to surface a real input-completeness gap rather than
+    // silently return wrong values when the chain account might have
+    // non-default code/balance.
+    if (!accounts_.contains(addr)) {
+        return EVMC_ACCESS_COLD;
+    }
     const size_t idx      = accounts_.index_of(addr);
     const bool   was_warm = accounts_.is_warm_at(idx, tx_counter_);
     if (!was_warm) {
