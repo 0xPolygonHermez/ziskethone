@@ -27,3 +27,6 @@ build/
 # Env
 .env
 .env.local
+
+# Zisk target build output
+cpp-guest/build-zisk/
