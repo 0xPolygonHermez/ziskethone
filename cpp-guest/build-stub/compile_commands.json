@@ -1,0 +1,338 @@
+[
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/main.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/main.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/main.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/main.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/fatal.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/fatal.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/fatal.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/fatal.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/accounts.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/accounts.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/accounts.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/accounts.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/block_header.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/block_header.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/block_header.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/block_header.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/bloom.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/bloom.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/bloom.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/bloom.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/consensus_info.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/consensus_info.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/consensus_info.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/consensus_info.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/contracts.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/contracts.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/contracts.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/contracts.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/create_address.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/create_address.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/create_address.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/create_address.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/eip6110_deposit.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/eip6110_deposit.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/eip6110_deposit.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/eip6110_deposit.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/fake_exponential.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/fake_exponential.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/fake_exponential.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/fake_exponential.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/hex_prefix.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/hex_prefix.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/hex_prefix.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/hex_prefix.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/intrinsic_gas.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/intrinsic_gas.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/intrinsic_gas.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/intrinsic_gas.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/journal.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/journal.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/journal.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/journal.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/mpt.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/mpt.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/mpt.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/mpt.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/previous_blocks.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/previous_blocks.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/previous_blocks.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/previous_blocks.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/receipt.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/receipt.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/receipt.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/receipt.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/rlp.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/rlp.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/rlp.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/rlp.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/state_root.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/state_root.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/state_root.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/state_root.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/storages.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/storages.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/storages.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/storages.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/transactions.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/transactions.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/transactions.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/transactions.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/transient_storage.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/transient_storage.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/transient_storage.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/transient_storage.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/zisk_crypto.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/zisk_crypto.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/zisk_crypto.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/zisk_crypto.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/zisk_state_db.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/zisk_state_db.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/zisk_state_db.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/zisk_state_db.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIE -Wall -Wextra -Wpedantic -o CMakeFiles/zisk_eth_guest.dir/src/zisk_crypto_host_stub.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/zisk_crypto_host_stub.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/src/zisk_crypto_host_stub.cpp",
+  "output": "CMakeFiles/zisk_eth_guest.dir/src/zisk_crypto_host_stub.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/evmc/lib/tooling",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -o CMakeFiles/tooling.dir/run.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/lib/tooling/run.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/lib/tooling/run.cpp",
+  "output": "_deps/evmone-build/evmc/lib/tooling/CMakeFiles/tooling.dir/run.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone_precompiles",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -isystem /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/deps/src/blst/bindings -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone_precompiles.dir/blake2b.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/blake2b.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/blake2b.cpp",
+  "output": "_deps/evmone-build/lib/evmone_precompiles/CMakeFiles/evmone_precompiles.dir/blake2b.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone_precompiles",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -isystem /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/deps/src/blst/bindings -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone_precompiles.dir/bls.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/bls.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/bls.cpp",
+  "output": "_deps/evmone-build/lib/evmone_precompiles/CMakeFiles/evmone_precompiles.dir/bls.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone_precompiles",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -isystem /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/deps/src/blst/bindings -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone_precompiles.dir/bn254.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/bn254.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/bn254.cpp",
+  "output": "_deps/evmone-build/lib/evmone_precompiles/CMakeFiles/evmone_precompiles.dir/bn254.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone_precompiles",
+  "command": "/usr/bin/cc  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -isystem /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/deps/src/blst/bindings -O3 -DNDEBUG -arch x86_64 -fPIC -fvisibility=hidden -o CMakeFiles/evmone_precompiles.dir/keccak.c.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/keccak.c",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/keccak.c",
+  "output": "_deps/evmone-build/lib/evmone_precompiles/CMakeFiles/evmone_precompiles.dir/keccak.c.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone_precompiles",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -isystem /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/deps/src/blst/bindings -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone_precompiles.dir/pairing/bn254/pairing.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/pairing/bn254/pairing.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/pairing/bn254/pairing.cpp",
+  "output": "_deps/evmone-build/lib/evmone_precompiles/CMakeFiles/evmone_precompiles.dir/pairing/bn254/pairing.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone_precompiles",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -isystem /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/deps/src/blst/bindings -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone_precompiles.dir/modexp.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/modexp.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/modexp.cpp",
+  "output": "_deps/evmone-build/lib/evmone_precompiles/CMakeFiles/evmone_precompiles.dir/modexp.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone_precompiles",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -isystem /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/deps/src/blst/bindings -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone_precompiles.dir/mulmod.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/mulmod.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/mulmod.cpp",
+  "output": "_deps/evmone-build/lib/evmone_precompiles/CMakeFiles/evmone_precompiles.dir/mulmod.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone_precompiles",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -isystem /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/deps/src/blst/bindings -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone_precompiles.dir/ripemd160.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/ripemd160.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/ripemd160.cpp",
+  "output": "_deps/evmone-build/lib/evmone_precompiles/CMakeFiles/evmone_precompiles.dir/ripemd160.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone_precompiles",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -isystem /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/deps/src/blst/bindings -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone_precompiles.dir/secp256k1.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/secp256k1.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/secp256k1.cpp",
+  "output": "_deps/evmone-build/lib/evmone_precompiles/CMakeFiles/evmone_precompiles.dir/secp256k1.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone_precompiles",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -isystem /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/deps/src/blst/bindings -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone_precompiles.dir/secp256r1.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/secp256r1.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/secp256r1.cpp",
+  "output": "_deps/evmone-build/lib/evmone_precompiles/CMakeFiles/evmone_precompiles.dir/secp256r1.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone_precompiles",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -isystem /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/deps/src/blst/bindings -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone_precompiles.dir/sha256.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/sha256.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/sha256.cpp",
+  "output": "_deps/evmone-build/lib/evmone_precompiles/CMakeFiles/evmone_precompiles.dir/sha256.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone_precompiles",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -isystem /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/deps/src/blst/bindings -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone_precompiles.dir/kzg.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/kzg.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/kzg.cpp",
+  "output": "_deps/evmone-build/lib/evmone_precompiles/CMakeFiles/evmone_precompiles.dir/kzg.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone.dir/advanced_analysis.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/advanced_analysis.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/advanced_analysis.cpp",
+  "output": "_deps/evmone-build/lib/evmone/CMakeFiles/evmone.dir/advanced_analysis.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone.dir/advanced_execution.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/advanced_execution.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/advanced_execution.cpp",
+  "output": "_deps/evmone-build/lib/evmone/CMakeFiles/evmone.dir/advanced_execution.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone.dir/advanced_instructions.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/advanced_instructions.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/advanced_instructions.cpp",
+  "output": "_deps/evmone-build/lib/evmone/CMakeFiles/evmone.dir/advanced_instructions.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone.dir/baseline_analysis.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/baseline_analysis.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/baseline_analysis.cpp",
+  "output": "_deps/evmone-build/lib/evmone/CMakeFiles/evmone.dir/baseline_analysis.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone.dir/baseline_execution.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/baseline_execution.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/baseline_execution.cpp",
+  "output": "_deps/evmone-build/lib/evmone/CMakeFiles/evmone.dir/baseline_execution.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone.dir/baseline_instruction_table.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/baseline_instruction_table.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/baseline_instruction_table.cpp",
+  "output": "_deps/evmone-build/lib/evmone/CMakeFiles/evmone.dir/baseline_instruction_table.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone.dir/delegation.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/delegation.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/delegation.cpp",
+  "output": "_deps/evmone-build/lib/evmone/CMakeFiles/evmone.dir/delegation.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone.dir/instructions_calls.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/instructions_calls.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/instructions_calls.cpp",
+  "output": "_deps/evmone-build/lib/evmone/CMakeFiles/evmone.dir/instructions_calls.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone.dir/instructions_storage.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/instructions_storage.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/instructions_storage.cpp",
+  "output": "_deps/evmone-build/lib/evmone/CMakeFiles/evmone.dir/instructions_storage.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone.dir/tracing.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/tracing.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/tracing.cpp",
+  "output": "_deps/evmone-build/lib/evmone/CMakeFiles/evmone.dir/tracing.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/lib/evmone",
+  "command": "/usr/bin/c++  -DPROJECT_VERSION=\\\"0.21.0\\\" -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -o CMakeFiles/evmone.dir/vm.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/vm.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone/vm.cpp",
+  "output": "_deps/evmone-build/lib/evmone/CMakeFiles/evmone.dir/vm.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/test_state",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -o CMakeFiles/evmone-state.dir/block.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/test/state/block.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/test/state/block.cpp",
+  "output": "_deps/evmone-build/test_state/CMakeFiles/evmone-state.dir/block.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/test_state",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -o CMakeFiles/evmone-state.dir/bloom_filter.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/test/state/bloom_filter.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/test/state/bloom_filter.cpp",
+  "output": "_deps/evmone-build/test_state/CMakeFiles/evmone-state.dir/bloom_filter.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/test_state",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -o CMakeFiles/evmone-state.dir/ethash_difficulty.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/test/state/ethash_difficulty.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/test/state/ethash_difficulty.cpp",
+  "output": "_deps/evmone-build/test_state/CMakeFiles/evmone-state.dir/ethash_difficulty.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/test_state",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -o CMakeFiles/evmone-state.dir/host.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/test/state/host.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/test/state/host.cpp",
+  "output": "_deps/evmone-build/test_state/CMakeFiles/evmone-state.dir/host.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/test_state",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -o CMakeFiles/evmone-state.dir/precompiles.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/test/state/precompiles.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/test/state/precompiles.cpp",
+  "output": "_deps/evmone-build/test_state/CMakeFiles/evmone-state.dir/precompiles.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/test_state",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -o CMakeFiles/evmone-state.dir/requests.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/test/state/requests.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/test/state/requests.cpp",
+  "output": "_deps/evmone-build/test_state/CMakeFiles/evmone-state.dir/requests.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/test_state",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -o CMakeFiles/evmone-state.dir/state.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/test/state/state.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/test/state/state.cpp",
+  "output": "_deps/evmone-build/test_state/CMakeFiles/evmone-state.dir/state.cpp.o"
+},
+{
+  "directory": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-build/test_state",
+  "command": "/usr/bin/c++  -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/lib/evmone_precompiles/.. -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/evmc/include -I/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/include -isystem /Users/jbaylina/.hunter/_Base/b194453/00d5287/8ff0dd8/Install/include -O3 -DNDEBUG -std=c++20 -arch x86_64 -fPIC -o CMakeFiles/evmone-state.dir/system_contracts.cpp.o -c /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/test/state/system_contracts.cpp",
+  "file": "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-src/test/state/system_contracts.cpp",
+  "output": "_deps/evmone-build/test_state/CMakeFiles/evmone-state.dir/system_contracts.cpp.o"
+}
+]

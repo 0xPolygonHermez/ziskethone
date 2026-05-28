@@ -1,0 +1,1342 @@
+
+---
+events:
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineSystem.cmake:205 (message)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      The system is: Darwin - 25.4.0 - x86_64
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:123 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" succeeded.
+      Compiler: /usr/bin/cc 
+      Build flags: 
+      Id flags:  
+      
+      The output was:
+      0
+      
+      
+      Compilation of the C compiler identification source "CMakeCCompilerId.c" produced "a.out"
+      
+      The C compiler identification is AppleClang, found in:
+        /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/4.0.1/CompilerIdC/a.out
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCXXCompiler.cmake:126 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" succeeded.
+      Compiler: /usr/bin/c++ 
+      Build flags: 
+      Id flags:  
+      
+      The output was:
+      0
+      
+      
+      Compilation of the CXX compiler identification source "CMakeCXXCompilerId.cpp" produced "a.out"
+      
+      The CXX compiler identification is AppleClang, found in:
+        /Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/4.0.1/CompilerIdCXX/a.out
+      
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:83 (try_compile)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    checks:
+      - "Detecting C compiler ABI info"
+    directories:
+      source: "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-V2sP4A"
+      binary: "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-V2sP4A"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_OSX_ARCHITECTURES: ""
+      CMAKE_OSX_DEPLOYMENT_TARGET: ""
+      CMAKE_OSX_SYSROOT: ""
+      CMAKE_POSITION_INDEPENDENT_CODE: "ON"
+    buildResult:
+      variable: "CMAKE_C_ABI_COMPILED"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-V2sP4A'
+        
+        Run Build Command(s): /usr/local/bin/cmake -E env VERBOSE=1 /usr/local/bin/gmake -f Makefile cmTC_f7443/fast
+        gmake[1]: Entering directory '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-V2sP4A'
+        /usr/local/bin/gmake  -f CMakeFiles/cmTC_f7443.dir/build.make CMakeFiles/cmTC_f7443.dir/build
+        gmake[2]: Entering directory '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-V2sP4A'
+        Building C object CMakeFiles/cmTC_f7443.dir/CMakeCCompilerABI.c.o
+        /usr/bin/cc   -arch x86_64 -fPIE   -v -Wl,-v -MD -MT CMakeFiles/cmTC_f7443.dir/CMakeCCompilerABI.c.o -MF CMakeFiles/cmTC_f7443.dir/CMakeCCompilerABI.c.o.d -o CMakeFiles/cmTC_f7443.dir/CMakeCCompilerABI.c.o -c /usr/local/share/cmake/Modules/CMakeCCompilerABI.c
+        Apple clang version 21.0.0 (clang-2100.1.1.101)
+        Target: x86_64-apple-darwin25.4.0
+        Thread model: posix
+        InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin
+        clang: warning: -Wl,-v: 'linker' input unused [-Wunused-command-line-argument]
+         "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang" -cc1 -triple x86_64-apple-macosx26.0.0 -Wundef-prefix=TARGET_OS_ -Wdeprecated-objc-isa-usage -Werror=deprecated-objc-isa-usage -Werror=implicit-function-declaration -emit-obj -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name CMakeCCompilerABI.c -mrelocation-model pic -pic-level 2 -mframe-pointer=all -fno-strict-return -ffp-contract=on -fno-rounding-math -funwind-tables=2 -fno-sized-deallocation -target-sdk-version=26.4 -fvisibility-inlines-hidden-static-local-var -fno-modulemap-allow-subdirectory-search -fdefine-target-os-macros -fno-assume-unique-vtables -fno-modulemap-allow-subdirectory-search -target-cpu penryn -tune-cpu generic -debugger-tuning=lldb -fdebug-compilation-dir=/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-V2sP4A -target-linker-version 1267 -v -fcoverage-compilation-dir=/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-V2sP4A -resource-dir /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21 -dependency-file CMakeFiles/cmTC_f7443.dir/CMakeCCompilerABI.c.o.d -skip-unused-modulemap-deps -MT CMakeFiles/cmTC_f7443.dir/CMakeCCompilerABI.c.o -sys-header-deps -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -I/usr/local/include -I/usr/local/include -internal-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/local/include -internal-isystem /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include -internal-externc-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include -internal-externc-isystem /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include -internal-iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -internal-iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/SubFrameworks -internal-iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/Library/Frameworks -Wno-elaborated-enum-base -ferror-limit 19 -stack-protector 1 -fstack-check -mdarwin-stkchk-strong-link -fblocks -fencode-extended-block-signature -fregister-global-dtors-with-atexit -fgnuc-version=4.2.1 -fskip-odr-check-in-gmf -fmax-type-align=16 -fcommon -clang-vendor-feature=+disableNonDependentMemberExprInCurrentInstantiation -fno-odr-hash-protocols -clang-vendor-feature=+enableAggressiveVLAFolding -clang-vendor-feature=+revert09abecef7bbf -clang-vendor-feature=+thisNoAlignAttr -clang-vendor-feature=+thisNoNullAttr -clang-vendor-feature=+disableAtImportPrivateFrameworkInImplementationError -Wno-error=allocator-wrappers -fdwarf2-cfi-asm -o CMakeFiles/cmTC_f7443.dir/CMakeCCompilerABI.c.o -x c /usr/local/share/cmake/Modules/CMakeCCompilerABI.c
+        clang -cc1 version 21.0.0 (clang-2100.1.1.101) default target x86_64-apple-darwin25.4.0
+        ignoring nonexistent directory "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/local/include"
+        ignoring nonexistent directory "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/Library/Frameworks"
+        ignoring duplicate directory "/usr/local/include"
+        #include "..." search starts here:
+        #include <...> search starts here:
+         /usr/local/include
+         /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include
+         /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include
+         /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include
+         /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks (framework directory)
+         /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/SubFrameworks (framework directory)
+        End of search list.
+        Linking C executable cmTC_f7443
+        /usr/local/bin/cmake -E cmake_link_script CMakeFiles/cmTC_f7443.dir/link.txt --verbose=1
+        Apple clang version 21.0.0 (clang-2100.1.1.101)
+        Target: x86_64-apple-darwin25.4.0
+        Thread model: posix
+        InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin
+         "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld" -demangle -lto_library /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/libLTO.dylib -dynamic -arch x86_64 -platform_version macos 26.0.0 26.4 -syslibroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -mllvm -enable-linkonceodr-outlining -o cmTC_f7443 -L/usr/local/lib -L/usr/local/lib -search_paths_first -headerpad_max_install_names -v CMakeFiles/cmTC_f7443.dir/CMakeCCompilerABI.c.o -lSystem /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/lib/darwin/libclang_rt.osx.a
+        @(#)PROGRAM:ld PROJECT:ld-1267
+        BUILD 18:28:38 Apr 22 2026
+        configured to support archs: armv6 armv7 armv7s arm64 arm64e arm64_32 i386 x86_64 x86_64h armv6m armv7k armv7m armv7em armv8m.main armv8.1m.main
+        will use ld-classic for: armv6 armv7 armv7s i386 armv6m armv7k armv7m armv7em
+        LTO support using: LLVM version 21.0.0 (static support for 30, runtime is 30)
+        TAPI support using: Apple TAPI version 21.0.0 (tapi-2100.0.2.6)
+        Library search paths:
+        	/usr/local/lib
+        	/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib
+        	/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift
+        Framework search paths:
+        	/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks
+        /usr/bin/cc  -arch x86_64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names  -v -Wl,-v CMakeFiles/cmTC_f7443.dir/CMakeCCompilerABI.c.o -o cmTC_f7443
+        gmake[2]: Leaving directory '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-V2sP4A'
+        gmake[1]: Leaving directory '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-V2sP4A'
+        
+      exitCode: 0
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:122 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Effective list of requested architectures (possibly empty)  : ""
+      Effective list of architectures found in the ABI info binary: "x86_64"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:191 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Parsed C implicit include dir info: rv=done
+        found start of include info
+        found start of implicit include info
+          add: [/usr/local/include]
+          add: [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include]
+          add: [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include]
+          add: [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include]
+        end of search list found
+        collapse include dir [/usr/local/include] ==> [/usr/local/include]
+        collapse include dir [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include] ==> [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include]
+        collapse include dir [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include]
+        collapse include dir [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include] ==> [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include]
+        implicit include dirs: [/usr/local/include;/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include;/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include]
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:227 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Parsed C implicit link information:
+        link line regex: [^( *|.*[/\\])(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
+        linker tool regex: [^[ 	]*(->|")?[ 	]*(([^"]*[/\\])?(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)))("|,| |$)]
+        ignore line: [Change Dir: '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-V2sP4A']
+        ignore line: []
+        ignore line: [Run Build Command(s): /usr/local/bin/cmake -E env VERBOSE=1 /usr/local/bin/gmake -f Makefile cmTC_f7443/fast]
+        ignore line: [gmake[1]: Entering directory '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-V2sP4A']
+        ignore line: [/usr/local/bin/gmake  -f CMakeFiles/cmTC_f7443.dir/build.make CMakeFiles/cmTC_f7443.dir/build]
+        ignore line: [gmake[2]: Entering directory '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-V2sP4A']
+        ignore line: [Building C object CMakeFiles/cmTC_f7443.dir/CMakeCCompilerABI.c.o]
+        ignore line: [/usr/bin/cc   -arch x86_64 -fPIE   -v -Wl -v -MD -MT CMakeFiles/cmTC_f7443.dir/CMakeCCompilerABI.c.o -MF CMakeFiles/cmTC_f7443.dir/CMakeCCompilerABI.c.o.d -o CMakeFiles/cmTC_f7443.dir/CMakeCCompilerABI.c.o -c /usr/local/share/cmake/Modules/CMakeCCompilerABI.c]
+        ignore line: [Apple clang version 21.0.0 (clang-2100.1.1.101)]
+        ignore line: [Target: x86_64-apple-darwin25.4.0]
+        ignore line: [Thread model: posix]
+        ignore line: [InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin]
+        ignore line: [clang: warning: -Wl -v: 'linker' input unused [-Wunused-command-line-argument]]
+        ignore line: [ "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang" -cc1 -triple x86_64-apple-macosx26.0.0 -Wundef-prefix=TARGET_OS_ -Wdeprecated-objc-isa-usage -Werror=deprecated-objc-isa-usage -Werror=implicit-function-declaration -emit-obj -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name CMakeCCompilerABI.c -mrelocation-model pic -pic-level 2 -mframe-pointer=all -fno-strict-return -ffp-contract=on -fno-rounding-math -funwind-tables=2 -fno-sized-deallocation -target-sdk-version=26.4 -fvisibility-inlines-hidden-static-local-var -fno-modulemap-allow-subdirectory-search -fdefine-target-os-macros -fno-assume-unique-vtables -fno-modulemap-allow-subdirectory-search -target-cpu penryn -tune-cpu generic -debugger-tuning=lldb -fdebug-compilation-dir=/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-V2sP4A -target-linker-version 1267 -v -fcoverage-compilation-dir=/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-V2sP4A -resource-dir /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21 -dependency-file CMakeFiles/cmTC_f7443.dir/CMakeCCompilerABI.c.o.d -skip-unused-modulemap-deps -MT CMakeFiles/cmTC_f7443.dir/CMakeCCompilerABI.c.o -sys-header-deps -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -I/usr/local/include -I/usr/local/include -internal-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/local/include -internal-isystem /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include -internal-externc-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include -internal-externc-isystem /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include -internal-iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -internal-iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/SubFrameworks -internal-iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/Library/Frameworks -Wno-elaborated-enum-base -ferror-limit 19 -stack-protector 1 -fstack-check -mdarwin-stkchk-strong-link -fblocks -fencode-extended-block-signature -fregister-global-dtors-with-atexit -fgnuc-version=4.2.1 -fskip-odr-check-in-gmf -fmax-type-align=16 -fcommon -clang-vendor-feature=+disableNonDependentMemberExprInCurrentInstantiation -fno-odr-hash-protocols -clang-vendor-feature=+enableAggressiveVLAFolding -clang-vendor-feature=+revert09abecef7bbf -clang-vendor-feature=+thisNoAlignAttr -clang-vendor-feature=+thisNoNullAttr -clang-vendor-feature=+disableAtImportPrivateFrameworkInImplementationError -Wno-error=allocator-wrappers -fdwarf2-cfi-asm -o CMakeFiles/cmTC_f7443.dir/CMakeCCompilerABI.c.o -x c /usr/local/share/cmake/Modules/CMakeCCompilerABI.c]
+        ignore line: [clang -cc1 version 21.0.0 (clang-2100.1.1.101) default target x86_64-apple-darwin25.4.0]
+        ignore line: [ignoring nonexistent directory "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/local/include"]
+        ignore line: [ignoring nonexistent directory "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/Library/Frameworks"]
+        ignore line: [ignoring duplicate directory "/usr/local/include"]
+        ignore line: [#include "..." search starts here:]
+        ignore line: [#include <...> search starts here:]
+        ignore line: [ /usr/local/include]
+        ignore line: [ /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include]
+        ignore line: [ /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include]
+        ignore line: [ /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include]
+        ignore line: [ /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks (framework directory)]
+        ignore line: [ /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/SubFrameworks (framework directory)]
+        ignore line: [End of search list.]
+        ignore line: [Linking C executable cmTC_f7443]
+        ignore line: [/usr/local/bin/cmake -E cmake_link_script CMakeFiles/cmTC_f7443.dir/link.txt --verbose=1]
+        ignore line: [Apple clang version 21.0.0 (clang-2100.1.1.101)]
+        ignore line: [Target: x86_64-apple-darwin25.4.0]
+        ignore line: [Thread model: posix]
+        ignore line: [InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin]
+        link line: [ "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld" -demangle -lto_library /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/libLTO.dylib -dynamic -arch x86_64 -platform_version macos 26.0.0 26.4 -syslibroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -mllvm -enable-linkonceodr-outlining -o cmTC_f7443 -L/usr/local/lib -L/usr/local/lib -search_paths_first -headerpad_max_install_names -v CMakeFiles/cmTC_f7443.dir/CMakeCCompilerABI.c.o -lSystem /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/lib/darwin/libclang_rt.osx.a]
+          arg [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld] ==> ignore
+          arg [-demangle] ==> ignore
+          arg [-lto_library] ==> ignore, skip following value
+          arg [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/libLTO.dylib] ==> skip value of -lto_library
+          arg [-dynamic] ==> ignore
+          arg [-arch] ==> ignore
+          arg [x86_64] ==> ignore
+          arg [-platform_version] ==> ignore
+          arg [macos] ==> ignore
+          arg [26.0.0] ==> ignore
+          arg [26.4] ==> ignore
+          arg [-syslibroot] ==> ignore
+          arg [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk] ==> ignore
+          arg [-mllvm] ==> ignore
+          arg [-enable-linkonceodr-outlining] ==> ignore
+          arg [-o] ==> ignore
+          arg [cmTC_f7443] ==> ignore
+          arg [-L/usr/local/lib] ==> dir [/usr/local/lib]
+          arg [-L/usr/local/lib] ==> dir [/usr/local/lib]
+          arg [-search_paths_first] ==> ignore
+          arg [-headerpad_max_install_names] ==> ignore
+          arg [-v] ==> ignore
+          arg [CMakeFiles/cmTC_f7443.dir/CMakeCCompilerABI.c.o] ==> ignore
+          arg [-lSystem] ==> lib [System]
+          arg [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/lib/darwin/libclang_rt.osx.a] ==> lib [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/lib/darwin/libclang_rt.osx.a]
+        linker tool for 'C': /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld
+        Library search paths: [;/usr/local/lib;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift]
+        Framework search paths: [;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks]
+        remove lib [System]
+        remove lib [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/lib/darwin/libclang_rt.osx.a]
+        collapse library dir [/usr/local/lib] ==> [/usr/local/lib]
+        collapse library dir [/usr/local/lib] ==> [/usr/local/lib]
+        collapse library dir [/usr/local/lib] ==> [/usr/local/lib]
+        collapse library dir [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib]
+        collapse library dir [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift]
+        collapse framework dir [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks]
+        implicit libs: []
+        implicit objs: []
+        implicit dirs: [/usr/local/lib;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift]
+        implicit fwks: [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks]
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/Internal/CMakeDetermineLinkerId.cmake:36 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:264 (cmake_determine_linker_id)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Running the C compiler's linker: "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld" "-v"
+      @(#)PROGRAM:ld PROJECT:ld-1267
+      BUILD 18:28:38 Apr 22 2026
+      configured to support archs: armv6 armv7 armv7s arm64 arm64e arm64_32 i386 x86_64 x86_64h armv6m armv7k armv7m armv7em armv8m.main armv8.1m.main
+      will use ld-classic for: armv6 armv7 armv7s i386 armv6m armv7k armv7m armv7em
+      LTO support using: LLVM version 21.0.0 (static support for 30, runtime is 30)
+      TAPI support using: Apple TAPI version 21.0.0 (tapi-2100.0.2.6)
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:83 (try_compile)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    checks:
+      - "Detecting CXX compiler ABI info"
+    directories:
+      source: "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-TFRFgZ"
+      binary: "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-TFRFgZ"
+    cmakeVariables:
+      CMAKE_CXX_FLAGS: ""
+      CMAKE_CXX_FLAGS_DEBUG: "-g"
+      CMAKE_CXX_SCAN_FOR_MODULES: "OFF"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_OSX_ARCHITECTURES: ""
+      CMAKE_OSX_DEPLOYMENT_TARGET: ""
+      CMAKE_OSX_SYSROOT: ""
+      CMAKE_POSITION_INDEPENDENT_CODE: "ON"
+    buildResult:
+      variable: "CMAKE_CXX_ABI_COMPILED"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-TFRFgZ'
+        
+        Run Build Command(s): /usr/local/bin/cmake -E env VERBOSE=1 /usr/local/bin/gmake -f Makefile cmTC_c6eb5/fast
+        gmake[1]: Entering directory '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-TFRFgZ'
+        /usr/local/bin/gmake  -f CMakeFiles/cmTC_c6eb5.dir/build.make CMakeFiles/cmTC_c6eb5.dir/build
+        gmake[2]: Entering directory '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-TFRFgZ'
+        Building CXX object CMakeFiles/cmTC_c6eb5.dir/CMakeCXXCompilerABI.cpp.o
+        /usr/bin/c++   -std=c++17 -arch x86_64 -fPIE   -v -Wl,-v -MD -MT CMakeFiles/cmTC_c6eb5.dir/CMakeCXXCompilerABI.cpp.o -MF CMakeFiles/cmTC_c6eb5.dir/CMakeCXXCompilerABI.cpp.o.d -o CMakeFiles/cmTC_c6eb5.dir/CMakeCXXCompilerABI.cpp.o -c /usr/local/share/cmake/Modules/CMakeCXXCompilerABI.cpp
+        Apple clang version 21.0.0 (clang-2100.1.1.101)
+        Target: x86_64-apple-darwin25.4.0
+        Thread model: posix
+        InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin
+        clang++: warning: -Wl,-v: 'linker' input unused [-Wunused-command-line-argument]
+        ignoring nonexistent directory "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/../include/c++/v1"
+         "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang" -cc1 -triple x86_64-apple-macosx26.0.0 -Wundef-prefix=TARGET_OS_ -Wdeprecated-objc-isa-usage -Werror=deprecated-objc-isa-usage -Werror=implicit-function-declaration -emit-obj -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name CMakeCXXCompilerABI.cpp -mrelocation-model pic -pic-level 2 -mframe-pointer=all -fno-strict-return -ffp-contract=on -fno-rounding-math -funwind-tables=2 -fno-sized-deallocation -target-sdk-version=26.4 -fvisibility-inlines-hidden-static-local-var -fno-modulemap-allow-subdirectory-search -fdefine-target-os-macros -fno-assume-unique-vtables -fno-modulemap-allow-subdirectory-search -target-cpu penryn -tune-cpu generic -debugger-tuning=lldb -fdebug-compilation-dir=/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-TFRFgZ -target-linker-version 1267 -v -fcoverage-compilation-dir=/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-TFRFgZ -resource-dir /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21 -dependency-file CMakeFiles/cmTC_c6eb5.dir/CMakeCXXCompilerABI.cpp.o.d -skip-unused-modulemap-deps -MT CMakeFiles/cmTC_c6eb5.dir/CMakeCXXCompilerABI.cpp.o -sys-header-deps -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -I/usr/local/include -I/usr/local/include -internal-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -internal-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/local/include -internal-isystem /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include -internal-externc-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include -internal-externc-isystem /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include -internal-iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -internal-iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/SubFrameworks -internal-iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/Library/Frameworks -Wno-elaborated-enum-base -std=c++17 -fdeprecated-macro -ferror-limit 19 -stack-protector 1 -fstack-check -mdarwin-stkchk-strong-link -fblocks -fencode-extended-block-signature -fregister-global-dtors-with-atexit -fgnuc-version=4.2.1 -fskip-odr-check-in-gmf -fcxx-exceptions -fexceptions -fmax-type-align=16 -fcommon -clang-vendor-feature=+disableNonDependentMemberExprInCurrentInstantiation -fno-odr-hash-protocols -clang-vendor-feature=+enableAggressiveVLAFolding -clang-vendor-feature=+revert09abecef7bbf -clang-vendor-feature=+thisNoAlignAttr -clang-vendor-feature=+thisNoNullAttr -clang-vendor-feature=+disableAtImportPrivateFrameworkInImplementationError -Wno-error=allocator-wrappers -fdwarf2-cfi-asm -o CMakeFiles/cmTC_c6eb5.dir/CMakeCXXCompilerABI.cpp.o -x c++ /usr/local/share/cmake/Modules/CMakeCXXCompilerABI.cpp
+        clang -cc1 version 21.0.0 (clang-2100.1.1.101) default target x86_64-apple-darwin25.4.0
+        ignoring nonexistent directory "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/local/include"
+        ignoring nonexistent directory "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/Library/Frameworks"
+        ignoring duplicate directory "/usr/local/include"
+        #include "..." search starts here:
+        #include <...> search starts here:
+         /usr/local/include
+         /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1
+         /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include
+         /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include
+         /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include
+         /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks (framework directory)
+         /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/SubFrameworks (framework directory)
+        End of search list.
+        Linking CXX executable cmTC_c6eb5
+        /usr/local/bin/cmake -E cmake_link_script CMakeFiles/cmTC_c6eb5.dir/link.txt --verbose=1
+        Apple clang version 21.0.0 (clang-2100.1.1.101)
+        Target: x86_64-apple-darwin25.4.0
+        Thread model: posix
+        InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin
+         "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld" -demangle -lto_library /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/libLTO.dylib -dynamic -arch x86_64 -platform_version macos 26.0.0 26.4 -syslibroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -mllvm -enable-linkonceodr-outlining -o cmTC_c6eb5 -L/usr/local/lib -L/usr/local/lib -search_paths_first -headerpad_max_install_names -v CMakeFiles/cmTC_c6eb5.dir/CMakeCXXCompilerABI.cpp.o -lc++ -lSystem /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/lib/darwin/libclang_rt.osx.a
+        @(#)PROGRAM:ld PROJECT:ld-1267
+        BUILD 18:28:38 Apr 22 2026
+        configured to support archs: armv6 armv7 armv7s arm64 arm64e arm64_32 i386 x86_64 x86_64h armv6m armv7k armv7m armv7em armv8m.main armv8.1m.main
+        will use ld-classic for: armv6 armv7 armv7s i386 armv6m armv7k armv7m armv7em
+        LTO support using: LLVM version 21.0.0 (static support for 30, runtime is 30)
+        TAPI support using: Apple TAPI version 21.0.0 (tapi-2100.0.2.6)
+        Library search paths:
+        	/usr/local/lib
+        	/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib
+        	/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift
+        Framework search paths:
+        	/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks
+        /usr/bin/c++  -arch x86_64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names  -v -Wl,-v CMakeFiles/cmTC_c6eb5.dir/CMakeCXXCompilerABI.cpp.o -o cmTC_c6eb5
+        gmake[2]: Leaving directory '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-TFRFgZ'
+        gmake[1]: Leaving directory '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-TFRFgZ'
+        
+      exitCode: 0
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:122 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Effective list of requested architectures (possibly empty)  : ""
+      Effective list of architectures found in the ABI info binary: "x86_64"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:191 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Parsed CXX implicit include dir info: rv=done
+        found start of include info
+        found start of implicit include info
+          add: [/usr/local/include]
+          add: [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1]
+          add: [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include]
+          add: [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include]
+          add: [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include]
+        end of search list found
+        collapse include dir [/usr/local/include] ==> [/usr/local/include]
+        collapse include dir [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1]
+        collapse include dir [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include] ==> [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include]
+        collapse include dir [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include]
+        collapse include dir [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include] ==> [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include]
+        implicit include dirs: [/usr/local/include;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1;/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include;/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include]
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:227 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Parsed CXX implicit link information:
+        link line regex: [^( *|.*[/\\])(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
+        linker tool regex: [^[ 	]*(->|")?[ 	]*(([^"]*[/\\])?(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)))("|,| |$)]
+        ignore line: [Change Dir: '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-TFRFgZ']
+        ignore line: []
+        ignore line: [Run Build Command(s): /usr/local/bin/cmake -E env VERBOSE=1 /usr/local/bin/gmake -f Makefile cmTC_c6eb5/fast]
+        ignore line: [gmake[1]: Entering directory '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-TFRFgZ']
+        ignore line: [/usr/local/bin/gmake  -f CMakeFiles/cmTC_c6eb5.dir/build.make CMakeFiles/cmTC_c6eb5.dir/build]
+        ignore line: [gmake[2]: Entering directory '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-TFRFgZ']
+        ignore line: [Building CXX object CMakeFiles/cmTC_c6eb5.dir/CMakeCXXCompilerABI.cpp.o]
+        ignore line: [/usr/bin/c++   -std=c++17 -arch x86_64 -fPIE   -v -Wl -v -MD -MT CMakeFiles/cmTC_c6eb5.dir/CMakeCXXCompilerABI.cpp.o -MF CMakeFiles/cmTC_c6eb5.dir/CMakeCXXCompilerABI.cpp.o.d -o CMakeFiles/cmTC_c6eb5.dir/CMakeCXXCompilerABI.cpp.o -c /usr/local/share/cmake/Modules/CMakeCXXCompilerABI.cpp]
+        ignore line: [Apple clang version 21.0.0 (clang-2100.1.1.101)]
+        ignore line: [Target: x86_64-apple-darwin25.4.0]
+        ignore line: [Thread model: posix]
+        ignore line: [InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin]
+        ignore line: [clang++: warning: -Wl -v: 'linker' input unused [-Wunused-command-line-argument]]
+        ignore line: [ignoring nonexistent directory "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/../include/c++/v1"]
+        ignore line: [ "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang" -cc1 -triple x86_64-apple-macosx26.0.0 -Wundef-prefix=TARGET_OS_ -Wdeprecated-objc-isa-usage -Werror=deprecated-objc-isa-usage -Werror=implicit-function-declaration -emit-obj -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name CMakeCXXCompilerABI.cpp -mrelocation-model pic -pic-level 2 -mframe-pointer=all -fno-strict-return -ffp-contract=on -fno-rounding-math -funwind-tables=2 -fno-sized-deallocation -target-sdk-version=26.4 -fvisibility-inlines-hidden-static-local-var -fno-modulemap-allow-subdirectory-search -fdefine-target-os-macros -fno-assume-unique-vtables -fno-modulemap-allow-subdirectory-search -target-cpu penryn -tune-cpu generic -debugger-tuning=lldb -fdebug-compilation-dir=/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-TFRFgZ -target-linker-version 1267 -v -fcoverage-compilation-dir=/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/CMakeFiles/CMakeScratch/TryCompile-TFRFgZ -resource-dir /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21 -dependency-file CMakeFiles/cmTC_c6eb5.dir/CMakeCXXCompilerABI.cpp.o.d -skip-unused-modulemap-deps -MT CMakeFiles/cmTC_c6eb5.dir/CMakeCXXCompilerABI.cpp.o -sys-header-deps -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -I/usr/local/include -I/usr/local/include -internal-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -internal-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/local/include -internal-isystem /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include -internal-externc-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include -internal-externc-isystem /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include -internal-iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -internal-iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/SubFrameworks -internal-iframework /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/Library/Frameworks -Wno-elaborated-enum-base -std=c++17 -fdeprecated-macro -ferror-limit 19 -stack-protector 1 -fstack-check -mdarwin-stkchk-strong-link -fblocks -fencode-extended-block-signature -fregister-global-dtors-with-atexit -fgnuc-version=4.2.1 -fskip-odr-check-in-gmf -fcxx-exceptions -fexceptions -fmax-type-align=16 -fcommon -clang-vendor-feature=+disableNonDependentMemberExprInCurrentInstantiation -fno-odr-hash-protocols -clang-vendor-feature=+enableAggressiveVLAFolding -clang-vendor-feature=+revert09abecef7bbf -clang-vendor-feature=+thisNoAlignAttr -clang-vendor-feature=+thisNoNullAttr -clang-vendor-feature=+disableAtImportPrivateFrameworkInImplementationError -Wno-error=allocator-wrappers -fdwarf2-cfi-asm -o CMakeFiles/cmTC_c6eb5.dir/CMakeCXXCompilerABI.cpp.o -x c++ /usr/local/share/cmake/Modules/CMakeCXXCompilerABI.cpp]
+        ignore line: [clang -cc1 version 21.0.0 (clang-2100.1.1.101) default target x86_64-apple-darwin25.4.0]
+        ignore line: [ignoring nonexistent directory "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/local/include"]
+        ignore line: [ignoring nonexistent directory "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/Library/Frameworks"]
+        ignore line: [ignoring duplicate directory "/usr/local/include"]
+        ignore line: [#include "..." search starts here:]
+        ignore line: [#include <...> search starts here:]
+        ignore line: [ /usr/local/include]
+        ignore line: [ /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1]
+        ignore line: [ /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include]
+        ignore line: [ /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include]
+        ignore line: [ /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include]
+        ignore line: [ /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks (framework directory)]
+        ignore line: [ /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/SubFrameworks (framework directory)]
+        ignore line: [End of search list.]
+        ignore line: [Linking CXX executable cmTC_c6eb5]
+        ignore line: [/usr/local/bin/cmake -E cmake_link_script CMakeFiles/cmTC_c6eb5.dir/link.txt --verbose=1]
+        ignore line: [Apple clang version 21.0.0 (clang-2100.1.1.101)]
+        ignore line: [Target: x86_64-apple-darwin25.4.0]
+        ignore line: [Thread model: posix]
+        ignore line: [InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin]
+        link line: [ "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld" -demangle -lto_library /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/libLTO.dylib -dynamic -arch x86_64 -platform_version macos 26.0.0 26.4 -syslibroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -mllvm -enable-linkonceodr-outlining -o cmTC_c6eb5 -L/usr/local/lib -L/usr/local/lib -search_paths_first -headerpad_max_install_names -v CMakeFiles/cmTC_c6eb5.dir/CMakeCXXCompilerABI.cpp.o -lc++ -lSystem /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/lib/darwin/libclang_rt.osx.a]
+          arg [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld] ==> ignore
+          arg [-demangle] ==> ignore
+          arg [-lto_library] ==> ignore, skip following value
+          arg [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/libLTO.dylib] ==> skip value of -lto_library
+          arg [-dynamic] ==> ignore
+          arg [-arch] ==> ignore
+          arg [x86_64] ==> ignore
+          arg [-platform_version] ==> ignore
+          arg [macos] ==> ignore
+          arg [26.0.0] ==> ignore
+          arg [26.4] ==> ignore
+          arg [-syslibroot] ==> ignore
+          arg [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk] ==> ignore
+          arg [-mllvm] ==> ignore
+          arg [-enable-linkonceodr-outlining] ==> ignore
+          arg [-o] ==> ignore
+          arg [cmTC_c6eb5] ==> ignore
+          arg [-L/usr/local/lib] ==> dir [/usr/local/lib]
+          arg [-L/usr/local/lib] ==> dir [/usr/local/lib]
+          arg [-search_paths_first] ==> ignore
+          arg [-headerpad_max_install_names] ==> ignore
+          arg [-v] ==> ignore
+          arg [CMakeFiles/cmTC_c6eb5.dir/CMakeCXXCompilerABI.cpp.o] ==> ignore
+          arg [-lc++] ==> lib [c++]
+          arg [-lSystem] ==> lib [System]
+          arg [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/lib/darwin/libclang_rt.osx.a] ==> lib [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/lib/darwin/libclang_rt.osx.a]
+        linker tool for 'CXX': /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld
+        Library search paths: [;/usr/local/lib;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift]
+        Framework search paths: [;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks]
+        remove lib [System]
+        remove lib [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/lib/darwin/libclang_rt.osx.a]
+        collapse library dir [/usr/local/lib] ==> [/usr/local/lib]
+        collapse library dir [/usr/local/lib] ==> [/usr/local/lib]
+        collapse library dir [/usr/local/lib] ==> [/usr/local/lib]
+        collapse library dir [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib]
+        collapse library dir [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift]
+        collapse framework dir [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks]
+        implicit libs: [c++]
+        implicit objs: []
+        implicit dirs: [/usr/local/lib;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift]
+        implicit fwks: [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks]
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/Internal/CMakeDetermineLinkerId.cmake:36 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:264 (cmake_determine_linker_id)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Running the CXX compiler's linker: "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld" "-v"
+      @(#)PROGRAM:ld PROJECT:ld-1267
+      BUILD 18:28:38 Apr 22 2026
+      configured to support archs: armv6 armv7 armv7s arm64 arm64e arm64_32 i386 x86_64 x86_64h armv6m armv7k armv7m armv7em armv8m.main armv8.1m.main
+      will use ld-classic for: armv6 armv7 armv7s i386 armv6m armv7k armv7m armv7em
+      LTO support using: LLVM version 21.0.0 (static support for 30, runtime is 30)
+      TAPI support using: Apple TAPI version 21.0.0 (tapi-2100.0.2.6)
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "CMakeLists.txt:76 (try_compile)"
+    directories:
+      source: "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/_test/CMakeFiles/CMakeTmp"
+      binary: "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/_test/CMakeFiles/CMakeTmp"
+    cmakeVariables:
+      CMAKE_CXX_FLAGS: ""
+      CMAKE_CXX_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "/Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/cmake/modules"
+      CMAKE_OSX_ARCHITECTURES: ""
+      CMAKE_OSX_DEPLOYMENT_TARGET: ""
+      CMAKE_OSX_SYSROOT: ""
+      CMAKE_POSITION_INDEPENDENT_CODE: "ON"
+    buildResult:
+      variable: "try_compile_result"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/_test/CMakeFiles/CMakeTmp'
+        
+        Run Build Command(s): /usr/local/bin/cmake -E env VERBOSE=1 /usr/local/bin/gmake -f Makefile cmTC_5b4ca/fast
+        gmake[1]: Entering directory '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/_test/CMakeFiles/CMakeTmp'
+        /usr/local/bin/gmake  -f CMakeFiles/cmTC_5b4ca.dir/build.make CMakeFiles/cmTC_5b4ca.dir/build
+        gmake[2]: Entering directory '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/_test/CMakeFiles/CMakeTmp'
+        Building CXX object CMakeFiles/cmTC_5b4ca.dir/ShowPredefined.cpp.o
+        /usr/bin/c++   -std=c++17 -arch x86_64 -fPIE -MD -MT CMakeFiles/cmTC_5b4ca.dir/ShowPredefined.cpp.o -MF CMakeFiles/cmTC_5b4ca.dir/ShowPredefined.cpp.o.d -o CMakeFiles/cmTC_5b4ca.dir/ShowPredefined.cpp.o -c /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:143:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define _LIBCPP_VERSION 210106__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          143 | # pragma message(HUNTER_INFO(_LIBCPP_VERSION))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:151:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define _LP64 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          151 | # pragma message(HUNTER_INFO(_LP64))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:463:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __APPLE_CC__ 6000__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          463 | # pragma message(HUNTER_INFO(__APPLE_CC__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:467:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __APPLE__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          467 | # pragma message(HUNTER_INFO(__APPLE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:623:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __ATOMIC_ACQUIRE 2__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          623 | # pragma message(HUNTER_INFO(__ATOMIC_ACQUIRE))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:627:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __ATOMIC_ACQ_REL 4__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          627 | # pragma message(HUNTER_INFO(__ATOMIC_ACQ_REL))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:631:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __ATOMIC_CONSUME 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          631 | # pragma message(HUNTER_INFO(__ATOMIC_CONSUME))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:643:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __ATOMIC_RELAXED 0__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          643 | # pragma message(HUNTER_INFO(__ATOMIC_RELAXED))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:647:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __ATOMIC_RELEASE 3__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          647 | # pragma message(HUNTER_INFO(__ATOMIC_RELEASE))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:651:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __ATOMIC_SEQ_CST 5__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          651 | # pragma message(HUNTER_INFO(__ATOMIC_SEQ_CST))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:675:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __BIGGEST_ALIGNMENT__ 16__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          675 | # pragma message(HUNTER_INFO(__BIGGEST_ALIGNMENT__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:687:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __BLOCKS__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          687 | # pragma message(HUNTER_INFO(__BLOCKS__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:699:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __BYTE_ORDER__ 1234__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          699 | # pragma message(HUNTER_INFO(__BYTE_ORDER__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:703:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __CHAR16_TYPE__ unsigned short__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          703 | # pragma message(HUNTER_INFO(__CHAR16_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:707:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __CHAR32_TYPE__ unsigned int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          707 | # pragma message(HUNTER_INFO(__CHAR32_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:711:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __CHAR_BIT__ 8__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          711 | # pragma message(HUNTER_INFO(__CHAR_BIT__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:743:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __CONSTANT_CFSTRINGS__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          743 | # pragma message(HUNTER_INFO(__CONSTANT_CFSTRINGS__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:747:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __COUNTER__ 0__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          747 | # pragma message(HUNTER_INFO(__COUNTER__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:771:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __DBL_DECIMAL_DIG__ 17__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          771 | # pragma message(HUNTER_INFO(__DBL_DECIMAL_DIG__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:775:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __DBL_DENORM_MIN__ 4.9406564584124654e-324__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          775 | # pragma message(HUNTER_INFO(__DBL_DENORM_MIN__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:779:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __DBL_DIG__ 15__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          779 | # pragma message(HUNTER_INFO(__DBL_DIG__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:783:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __DBL_EPSILON__ 2.2204460492503131e-16__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          783 | # pragma message(HUNTER_INFO(__DBL_EPSILON__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:787:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __DBL_HAS_DENORM__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          787 | # pragma message(HUNTER_INFO(__DBL_HAS_DENORM__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:791:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __DBL_HAS_INFINITY__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          791 | # pragma message(HUNTER_INFO(__DBL_HAS_INFINITY__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:795:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __DBL_HAS_QUIET_NAN__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          795 | # pragma message(HUNTER_INFO(__DBL_HAS_QUIET_NAN__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:799:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __DBL_MANT_DIG__ 53__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          799 | # pragma message(HUNTER_INFO(__DBL_MANT_DIG__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:803:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __DBL_MAX_10_EXP__ 308__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          803 | # pragma message(HUNTER_INFO(__DBL_MAX_10_EXP__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:807:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __DBL_MAX_EXP__ 1024__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          807 | # pragma message(HUNTER_INFO(__DBL_MAX_EXP__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:811:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __DBL_MAX__ 1.7976931348623157e+308__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          811 | # pragma message(HUNTER_INFO(__DBL_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:815:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __DBL_MIN_10_EXP__ (-307)__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          815 | # pragma message(HUNTER_INFO(__DBL_MIN_10_EXP__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:819:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __DBL_MIN_EXP__ (-1021)__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          819 | # pragma message(HUNTER_INFO(__DBL_MIN_EXP__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:823:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __DBL_MIN__ 2.2250738585072014e-308__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          823 | # pragma message(HUNTER_INFO(__DBL_MIN__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:935:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __DECIMAL_DIG__ 21__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          935 | # pragma message(HUNTER_INFO(__DECIMAL_DIG__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:943:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __DEPRECATED 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          943 | # pragma message(HUNTER_INFO(__DEPRECATED))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:959:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __DYNAMIC__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          959 | # pragma message(HUNTER_INFO(__DYNAMIC__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:983:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ 260000__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          983 | # pragma message(HUNTER_INFO(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:987:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __EXCEPTIONS 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          987 | # pragma message(HUNTER_INFO(__EXCEPTIONS))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:991:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __FINITE_MATH_ONLY__ 0__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          991 | # pragma message(HUNTER_INFO(__FINITE_MATH_ONLY__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:999:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __FLT_DECIMAL_DIG__ 9__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+          999 | # pragma message(HUNTER_INFO(__FLT_DECIMAL_DIG__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1003:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __FLT_DENORM_MIN__ 1.40129846e-45F__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1003 | # pragma message(HUNTER_INFO(__FLT_DENORM_MIN__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1007:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __FLT_DIG__ 6__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1007 | # pragma message(HUNTER_INFO(__FLT_DIG__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1011:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __FLT_EPSILON__ 1.19209290e-7F__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1011 | # pragma message(HUNTER_INFO(__FLT_EPSILON__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1015:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __FLT_EVAL_METHOD__ 0__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1015 | # pragma message(HUNTER_INFO(__FLT_EVAL_METHOD__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1019:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __FLT_HAS_DENORM__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1019 | # pragma message(HUNTER_INFO(__FLT_HAS_DENORM__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1023:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __FLT_HAS_INFINITY__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1023 | # pragma message(HUNTER_INFO(__FLT_HAS_INFINITY__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1027:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __FLT_HAS_QUIET_NAN__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1027 | # pragma message(HUNTER_INFO(__FLT_HAS_QUIET_NAN__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1031:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __FLT_MANT_DIG__ 24__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1031 | # pragma message(HUNTER_INFO(__FLT_MANT_DIG__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1035:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __FLT_MAX_10_EXP__ 38__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1035 | # pragma message(HUNTER_INFO(__FLT_MAX_10_EXP__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1039:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __FLT_MAX_EXP__ 128__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1039 | # pragma message(HUNTER_INFO(__FLT_MAX_EXP__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1043:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __FLT_MAX__ 3.40282347e+38F__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1043 | # pragma message(HUNTER_INFO(__FLT_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1047:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __FLT_MIN_10_EXP__ (-37)__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1047 | # pragma message(HUNTER_INFO(__FLT_MIN_10_EXP__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1051:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __FLT_MIN_EXP__ (-125)__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1051 | # pragma message(HUNTER_INFO(__FLT_MIN_EXP__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1055:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __FLT_MIN__ 1.17549435e-38F__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1055 | # pragma message(HUNTER_INFO(__FLT_MIN__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1059:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __FLT_RADIX__ 2__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1059 | # pragma message(HUNTER_INFO(__FLT_RADIX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1111:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __FXSR__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1111 | # pragma message(HUNTER_INFO(__FXSR__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1127:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GCC_ASM_FLAG_OUTPUTS__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1127 | # pragma message(HUNTER_INFO(__GCC_ASM_FLAG_OUTPUTS__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1131:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GCC_ATOMIC_BOOL_LOCK_FREE 2__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1131 | # pragma message(HUNTER_INFO(__GCC_ATOMIC_BOOL_LOCK_FREE))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1135:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GCC_ATOMIC_CHAR16_T_LOCK_FREE 2__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1135 | # pragma message(HUNTER_INFO(__GCC_ATOMIC_CHAR16_T_LOCK_FREE))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1139:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GCC_ATOMIC_CHAR32_T_LOCK_FREE 2__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1139 | # pragma message(HUNTER_INFO(__GCC_ATOMIC_CHAR32_T_LOCK_FREE))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1143:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GCC_ATOMIC_CHAR_LOCK_FREE 2__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1143 | # pragma message(HUNTER_INFO(__GCC_ATOMIC_CHAR_LOCK_FREE))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1147:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GCC_ATOMIC_INT_LOCK_FREE 2__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1147 | # pragma message(HUNTER_INFO(__GCC_ATOMIC_INT_LOCK_FREE))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1151:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GCC_ATOMIC_LLONG_LOCK_FREE 2__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1151 | # pragma message(HUNTER_INFO(__GCC_ATOMIC_LLONG_LOCK_FREE))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1155:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GCC_ATOMIC_LONG_LOCK_FREE 2__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1155 | # pragma message(HUNTER_INFO(__GCC_ATOMIC_LONG_LOCK_FREE))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1159:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GCC_ATOMIC_POINTER_LOCK_FREE 2__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1159 | # pragma message(HUNTER_INFO(__GCC_ATOMIC_POINTER_LOCK_FREE))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1163:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GCC_ATOMIC_SHORT_LOCK_FREE 2__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1163 | # pragma message(HUNTER_INFO(__GCC_ATOMIC_SHORT_LOCK_FREE))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1167:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GCC_ATOMIC_TEST_AND_SET_TRUEVAL 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1167 | # pragma message(HUNTER_INFO(__GCC_ATOMIC_TEST_AND_SET_TRUEVAL))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1171:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GCC_ATOMIC_WCHAR_T_LOCK_FREE 2__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1171 | # pragma message(HUNTER_INFO(__GCC_ATOMIC_WCHAR_T_LOCK_FREE))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1175:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GCC_HAVE_DWARF2_CFI_ASM 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1175 | # pragma message(HUNTER_INFO(__GCC_HAVE_DWARF2_CFI_ASM))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1179:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_1 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1179 | # pragma message(HUNTER_INFO(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1183:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_16 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1183 | # pragma message(HUNTER_INFO(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1187:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_2 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1187 | # pragma message(HUNTER_INFO(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1191:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_4 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1191 | # pragma message(HUNTER_INFO(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1195:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_8 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1195 | # pragma message(HUNTER_INFO(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1231:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GNUC_GNU_INLINE__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1231 | # pragma message(HUNTER_INFO(__GNUC_GNU_INLINE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1243:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GNUC_MINOR__ 2__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1243 | # pragma message(HUNTER_INFO(__GNUC_MINOR__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1247:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GNUC_PATCHLEVEL__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1247 | # pragma message(HUNTER_INFO(__GNUC_PATCHLEVEL__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1255:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GNUC__ 4__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1255 | # pragma message(HUNTER_INFO(__GNUC__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1259:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GNUG__ 4__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1259 | # pragma message(HUNTER_INFO(__GNUG__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1267:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GXX_ABI_VERSION 1002__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1267 | # pragma message(HUNTER_INFO(__GXX_ABI_VERSION))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1271:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GXX_EXPERIMENTAL_CXX0X__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1271 | # pragma message(HUNTER_INFO(__GXX_EXPERIMENTAL_CXX0X__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1275:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GXX_RTTI 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1275 | # pragma message(HUNTER_INFO(__GXX_RTTI))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1283:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __GXX_WEAK__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1283 | # pragma message(HUNTER_INFO(__GXX_WEAK__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1351:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT16_C __INT16_C__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1351 | # pragma message(HUNTER_INFO(__INT16_C))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1355:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT16_MAX__ 32767__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1355 | # pragma message(HUNTER_INFO(__INT16_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1359:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT16_TYPE__ short__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1359 | # pragma message(HUNTER_INFO(__INT16_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1363:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT32_C __INT32_C__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1363 | # pragma message(HUNTER_INFO(__INT32_C))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1367:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT32_MAX__ 2147483647__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1367 | # pragma message(HUNTER_INFO(__INT32_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1371:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT32_TYPE__ int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1371 | # pragma message(HUNTER_INFO(__INT32_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1375:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT64_C __INT64_C__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1375 | # pragma message(HUNTER_INFO(__INT64_C))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1379:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT64_C_SUFFIX__ LL__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1379 | # pragma message(HUNTER_INFO(__INT64_C_SUFFIX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1383:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT64_MAX__ 9223372036854775807LL__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1383 | # pragma message(HUNTER_INFO(__INT64_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1387:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT64_TYPE__ long long int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1387 | # pragma message(HUNTER_INFO(__INT64_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1391:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT8_C __INT8_C__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1391 | # pragma message(HUNTER_INFO(__INT8_C))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1395:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT8_MAX__ 127__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1395 | # pragma message(HUNTER_INFO(__INT8_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1399:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT8_TYPE__ signed char__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1399 | # pragma message(HUNTER_INFO(__INT8_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1411:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INTMAX_C __INTMAX_C__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1411 | # pragma message(HUNTER_INFO(__INTMAX_C))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1415:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INTMAX_MAX__ 9223372036854775807L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1415 | # pragma message(HUNTER_INFO(__INTMAX_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1419:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INTMAX_TYPE__ long int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1419 | # pragma message(HUNTER_INFO(__INTMAX_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1423:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INTMAX_WIDTH__ 64__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1423 | # pragma message(HUNTER_INFO(__INTMAX_WIDTH__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1427:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INTPTR_MAX__ 9223372036854775807L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1427 | # pragma message(HUNTER_INFO(__INTPTR_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1431:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INTPTR_TYPE__ long int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1431 | # pragma message(HUNTER_INFO(__INTPTR_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1435:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INTPTR_WIDTH__ 64__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1435 | # pragma message(HUNTER_INFO(__INTPTR_WIDTH__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1439:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT_FAST16_MAX__ 32767__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1439 | # pragma message(HUNTER_INFO(__INT_FAST16_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1443:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT_FAST16_TYPE__ short__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1443 | # pragma message(HUNTER_INFO(__INT_FAST16_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1447:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT_FAST32_MAX__ 2147483647__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1447 | # pragma message(HUNTER_INFO(__INT_FAST32_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1451:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT_FAST32_TYPE__ int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1451 | # pragma message(HUNTER_INFO(__INT_FAST32_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1455:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT_FAST64_MAX__ 9223372036854775807LL__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1455 | # pragma message(HUNTER_INFO(__INT_FAST64_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1459:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT_FAST64_TYPE__ long long int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1459 | # pragma message(HUNTER_INFO(__INT_FAST64_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1463:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT_FAST8_MAX__ 127__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1463 | # pragma message(HUNTER_INFO(__INT_FAST8_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1467:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT_FAST8_TYPE__ signed char__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1467 | # pragma message(HUNTER_INFO(__INT_FAST8_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1471:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT_LEAST16_MAX__ 32767__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1471 | # pragma message(HUNTER_INFO(__INT_LEAST16_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1475:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT_LEAST16_TYPE__ short__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1475 | # pragma message(HUNTER_INFO(__INT_LEAST16_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1479:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT_LEAST32_MAX__ 2147483647__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1479 | # pragma message(HUNTER_INFO(__INT_LEAST32_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1483:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT_LEAST32_TYPE__ int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1483 | # pragma message(HUNTER_INFO(__INT_LEAST32_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1487:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT_LEAST64_MAX__ 9223372036854775807LL__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1487 | # pragma message(HUNTER_INFO(__INT_LEAST64_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1491:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT_LEAST64_TYPE__ long long int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1491 | # pragma message(HUNTER_INFO(__INT_LEAST64_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1495:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT_LEAST8_MAX__ 127__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1495 | # pragma message(HUNTER_INFO(__INT_LEAST8_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1499:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT_LEAST8_TYPE__ signed char__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1499 | # pragma message(HUNTER_INFO(__INT_LEAST8_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1503:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __INT_MAX__ 2147483647__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1503 | # pragma message(HUNTER_INFO(__INT_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1531:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __LDBL_DENORM_MIN__ 3.64519953188247460253e-4951L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1531 | # pragma message(HUNTER_INFO(__LDBL_DENORM_MIN__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1535:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __LDBL_DIG__ 18__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1535 | # pragma message(HUNTER_INFO(__LDBL_DIG__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1539:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __LDBL_EPSILON__ 1.08420217248550443401e-19L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1539 | # pragma message(HUNTER_INFO(__LDBL_EPSILON__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1543:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __LDBL_HAS_DENORM__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1543 | # pragma message(HUNTER_INFO(__LDBL_HAS_DENORM__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1547:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __LDBL_HAS_INFINITY__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1547 | # pragma message(HUNTER_INFO(__LDBL_HAS_INFINITY__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1551:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __LDBL_HAS_QUIET_NAN__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1551 | # pragma message(HUNTER_INFO(__LDBL_HAS_QUIET_NAN__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1555:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __LDBL_MANT_DIG__ 64__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1555 | # pragma message(HUNTER_INFO(__LDBL_MANT_DIG__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1559:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __LDBL_MAX_10_EXP__ 4932__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1559 | # pragma message(HUNTER_INFO(__LDBL_MAX_10_EXP__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1563:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __LDBL_MAX_EXP__ 16384__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1563 | # pragma message(HUNTER_INFO(__LDBL_MAX_EXP__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1567:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __LDBL_MAX__ 1.18973149535723176502e+4932L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1567 | # pragma message(HUNTER_INFO(__LDBL_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1571:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __LDBL_MIN_10_EXP__ (-4931)__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1571 | # pragma message(HUNTER_INFO(__LDBL_MIN_10_EXP__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1575:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __LDBL_MIN_EXP__ (-16381)__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1575 | # pragma message(HUNTER_INFO(__LDBL_MIN_EXP__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1579:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __LDBL_MIN__ 3.36210314311209350626e-4932L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1579 | # pragma message(HUNTER_INFO(__LDBL_MIN__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1615:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __LITTLE_ENDIAN__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1615 | # pragma message(HUNTER_INFO(__LITTLE_ENDIAN__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1659:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __LONG_LONG_MAX__ 9223372036854775807LL__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1659 | # pragma message(HUNTER_INFO(__LONG_LONG_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1663:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __LONG_MAX__ 9223372036854775807L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1663 | # pragma message(HUNTER_INFO(__LONG_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1667:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __LP64__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1667 | # pragma message(HUNTER_INFO(__LP64__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1671:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __MACH__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1671 | # pragma message(HUNTER_INFO(__MACH__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1735:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __MMX__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1735 | # pragma message(HUNTER_INFO(__MMX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1771:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __NO_MATH_INLINES 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1771 | # pragma message(HUNTER_INFO(__NO_MATH_INLINES))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1787:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __ORDER_BIG_ENDIAN__ 4321__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1787 | # pragma message(HUNTER_INFO(__ORDER_BIG_ENDIAN__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1791:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __ORDER_LITTLE_ENDIAN__ 1234__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1791 | # pragma message(HUNTER_INFO(__ORDER_LITTLE_ENDIAN__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1795:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __ORDER_PDP_ENDIAN__ 3412__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1795 | # pragma message(HUNTER_INFO(__ORDER_PDP_ENDIAN__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1839:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __PIC__ 2__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1839 | # pragma message(HUNTER_INFO(__PIC__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1847:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __POINTER_WIDTH__ 64__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1847 | # pragma message(HUNTER_INFO(__POINTER_WIDTH__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1863:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __PRAGMA_REDEFINE_EXTNAME 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1863 | # pragma message(HUNTER_INFO(__PRAGMA_REDEFINE_EXTNAME))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1867:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __PTRDIFF_MAX__ 9223372036854775807L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1867 | # pragma message(HUNTER_INFO(__PTRDIFF_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1871:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __PTRDIFF_TYPE__ long int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1871 | # pragma message(HUNTER_INFO(__PTRDIFF_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1875:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __PTRDIFF_WIDTH__ 64__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1875 | # pragma message(HUNTER_INFO(__PTRDIFF_WIDTH__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1895:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __REGISTER_PREFIX__ __HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1895 | # pragma message(HUNTER_INFO(__REGISTER_PREFIX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1931:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SCHAR_MAX__ 127__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1931 | # pragma message(HUNTER_INFO(__SCHAR_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1935:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SEG_FS 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1935 | # pragma message(HUNTER_INFO(__SEG_FS))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1939:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SEG_GS 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1939 | # pragma message(HUNTER_INFO(__SEG_GS))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1983:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SHRT_MAX__ 32767__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1983 | # pragma message(HUNTER_INFO(__SHRT_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1987:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SIG_ATOMIC_MAX__ 2147483647__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1987 | # pragma message(HUNTER_INFO(__SIG_ATOMIC_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:1999:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SIG_ATOMIC_WIDTH__ 32__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         1999 | # pragma message(HUNTER_INFO(__SIG_ATOMIC_WIDTH__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2003:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SIZEOF_DOUBLE__ 8__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2003 | # pragma message(HUNTER_INFO(__SIZEOF_DOUBLE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2015:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SIZEOF_FLOAT__ 4__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2015 | # pragma message(HUNTER_INFO(__SIZEOF_FLOAT__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2019:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SIZEOF_INT128__ 16__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2019 | # pragma message(HUNTER_INFO(__SIZEOF_INT128__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2023:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SIZEOF_INT__ 4__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2023 | # pragma message(HUNTER_INFO(__SIZEOF_INT__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2027:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SIZEOF_LONG_DOUBLE__ 16__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2027 | # pragma message(HUNTER_INFO(__SIZEOF_LONG_DOUBLE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2031:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SIZEOF_LONG_LONG__ 8__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2031 | # pragma message(HUNTER_INFO(__SIZEOF_LONG_LONG__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2035:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SIZEOF_LONG__ 8__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2035 | # pragma message(HUNTER_INFO(__SIZEOF_LONG__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2039:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SIZEOF_POINTER__ 8__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2039 | # pragma message(HUNTER_INFO(__SIZEOF_POINTER__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2043:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SIZEOF_PTRDIFF_T__ 8__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2043 | # pragma message(HUNTER_INFO(__SIZEOF_PTRDIFF_T__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2047:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SIZEOF_SHORT__ 2__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2047 | # pragma message(HUNTER_INFO(__SIZEOF_SHORT__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2051:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SIZEOF_SIZE_T__ 8__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2051 | # pragma message(HUNTER_INFO(__SIZEOF_SIZE_T__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2055:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SIZEOF_WCHAR_T__ 4__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2055 | # pragma message(HUNTER_INFO(__SIZEOF_WCHAR_T__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2059:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SIZEOF_WINT_T__ 4__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2059 | # pragma message(HUNTER_INFO(__SIZEOF_WINT_T__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2063:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SIZE_MAX__ 18446744073709551615UL__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2063 | # pragma message(HUNTER_INFO(__SIZE_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2067:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SIZE_TYPE__ long unsigned int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2067 | # pragma message(HUNTER_INFO(__SIZE_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2071:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SIZE_WIDTH__ 64__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2071 | # pragma message(HUNTER_INFO(__SIZE_WIDTH__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2083:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SSE2_MATH__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2083 | # pragma message(HUNTER_INFO(__SSE2_MATH__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2087:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SSE2__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2087 | # pragma message(HUNTER_INFO(__SSE2__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2091:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SSE3__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2091 | # pragma message(HUNTER_INFO(__SSE3__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2099:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SSE4_1__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2099 | # pragma message(HUNTER_INFO(__SSE4_1__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2107:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SSE_MATH__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2107 | # pragma message(HUNTER_INFO(__SSE_MATH__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2111:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SSE__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2111 | # pragma message(HUNTER_INFO(__SSE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2119:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SSP__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2119 | # pragma message(HUNTER_INFO(__SSP__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2123:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __SSSE3__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2123 | # pragma message(HUNTER_INFO(__SSSE3__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2127:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 16UL__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2127 | # pragma message(HUNTER_INFO(__STDCPP_DEFAULT_NEW_ALIGNMENT__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2135:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __STDCPP_THREADS__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2135 | # pragma message(HUNTER_INFO(__STDCPP_THREADS__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2139:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __STDC_HOSTED__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2139 | # pragma message(HUNTER_INFO(__STDC_HOSTED__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2159:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __STDC_NO_THREADS__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2159 | # pragma message(HUNTER_INFO(__STDC_NO_THREADS__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2163:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __STDC_UTF_16__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2163 | # pragma message(HUNTER_INFO(__STDC_UTF_16__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2167:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __STDC_UTF_32__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2167 | # pragma message(HUNTER_INFO(__STDC_UTF_32__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2175:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __STDC__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2175 | # pragma message(HUNTER_INFO(__STDC__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2347:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT16_C __UINT16_C__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2347 | # pragma message(HUNTER_INFO(__UINT16_C))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2351:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT16_MAX__ 65535__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2351 | # pragma message(HUNTER_INFO(__UINT16_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2355:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT16_TYPE__ unsigned short__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2355 | # pragma message(HUNTER_INFO(__UINT16_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2359:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT32_C __UINT32_C__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2359 | # pragma message(HUNTER_INFO(__UINT32_C))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2363:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT32_MAX__ 4294967295U__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2363 | # pragma message(HUNTER_INFO(__UINT32_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2367:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT32_TYPE__ unsigned int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2367 | # pragma message(HUNTER_INFO(__UINT32_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2371:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT64_C __UINT64_C__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2371 | # pragma message(HUNTER_INFO(__UINT64_C))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2375:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT64_MAX__ 18446744073709551615ULL__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2375 | # pragma message(HUNTER_INFO(__UINT64_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2379:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT64_TYPE__ long long unsigned int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2379 | # pragma message(HUNTER_INFO(__UINT64_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2383:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT8_C __UINT8_C__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2383 | # pragma message(HUNTER_INFO(__UINT8_C))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2387:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT8_MAX__ 255__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2387 | # pragma message(HUNTER_INFO(__UINT8_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2391:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT8_TYPE__ unsigned char__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2391 | # pragma message(HUNTER_INFO(__UINT8_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2395:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINTMAX_C __UINTMAX_C__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2395 | # pragma message(HUNTER_INFO(__UINTMAX_C))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2399:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINTMAX_MAX__ 18446744073709551615UL__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2399 | # pragma message(HUNTER_INFO(__UINTMAX_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2403:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINTMAX_TYPE__ long unsigned int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2403 | # pragma message(HUNTER_INFO(__UINTMAX_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2407:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINTPTR_MAX__ 18446744073709551615UL__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2407 | # pragma message(HUNTER_INFO(__UINTPTR_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2411:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINTPTR_TYPE__ long unsigned int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2411 | # pragma message(HUNTER_INFO(__UINTPTR_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2415:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT_FAST16_MAX__ 65535__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2415 | # pragma message(HUNTER_INFO(__UINT_FAST16_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2419:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT_FAST16_TYPE__ unsigned short__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2419 | # pragma message(HUNTER_INFO(__UINT_FAST16_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2423:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT_FAST32_MAX__ 4294967295U__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2423 | # pragma message(HUNTER_INFO(__UINT_FAST32_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2427:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT_FAST32_TYPE__ unsigned int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2427 | # pragma message(HUNTER_INFO(__UINT_FAST32_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2431:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT_FAST64_MAX__ 18446744073709551615ULL__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2431 | # pragma message(HUNTER_INFO(__UINT_FAST64_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2435:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT_FAST64_TYPE__ long long unsigned int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2435 | # pragma message(HUNTER_INFO(__UINT_FAST64_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2439:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT_FAST8_MAX__ 255__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2439 | # pragma message(HUNTER_INFO(__UINT_FAST8_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2443:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT_FAST8_TYPE__ unsigned char__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2443 | # pragma message(HUNTER_INFO(__UINT_FAST8_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2447:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT_LEAST16_MAX__ 65535__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2447 | # pragma message(HUNTER_INFO(__UINT_LEAST16_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2451:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT_LEAST16_TYPE__ unsigned short__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2451 | # pragma message(HUNTER_INFO(__UINT_LEAST16_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2455:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT_LEAST32_MAX__ 4294967295U__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2455 | # pragma message(HUNTER_INFO(__UINT_LEAST32_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2459:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT_LEAST32_TYPE__ unsigned int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2459 | # pragma message(HUNTER_INFO(__UINT_LEAST32_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2463:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT_LEAST64_MAX__ 18446744073709551615ULL__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2463 | # pragma message(HUNTER_INFO(__UINT_LEAST64_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2467:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT_LEAST64_TYPE__ long long unsigned int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2467 | # pragma message(HUNTER_INFO(__UINT_LEAST64_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2471:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT_LEAST8_MAX__ 255__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2471 | # pragma message(HUNTER_INFO(__UINT_LEAST8_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2475:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __UINT_LEAST8_TYPE__ unsigned char__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2475 | # pragma message(HUNTER_INFO(__UINT_LEAST8_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2595:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __USER_LABEL_PREFIX__ ___HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2595 | # pragma message(HUNTER_INFO(__USER_LABEL_PREFIX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2655:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __VERSION__ "Apple LLVM 21.0.0 (clang-2100.1.1.101)"__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2655 | # pragma message(HUNTER_INFO(__VERSION__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2679:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __WCHAR_MAX__ 2147483647__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2679 | # pragma message(HUNTER_INFO(__WCHAR_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2687:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __WCHAR_TYPE__ int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2687 | # pragma message(HUNTER_INFO(__WCHAR_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2695:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __WCHAR_WIDTH__ 32__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2695 | # pragma message(HUNTER_INFO(__WCHAR_WIDTH__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2707:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __WINT_MAX__ 2147483647__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2707 | # pragma message(HUNTER_INFO(__WINT_MAX__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2715:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __WINT_TYPE__ int__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2715 | # pragma message(HUNTER_INFO(__WINT_TYPE__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2719:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __WINT_WIDTH__ 32__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2719 | # pragma message(HUNTER_INFO(__WINT_WIDTH__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2751:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __amd64 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2751 | # pragma message(HUNTER_INFO(__amd64))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2755:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __amd64__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2755 | # pragma message(HUNTER_INFO(__amd64__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2763:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __apple_build_version__ 21000101__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2763 | # pragma message(HUNTER_INFO(__apple_build_version__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2787:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __block __attribute__((__blocks__(byref)))__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2787 | # pragma message(HUNTER_INFO(__block))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2795:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __clang__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2795 | # pragma message(HUNTER_INFO(__clang__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2799:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __clang_major__ 21__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2799 | # pragma message(HUNTER_INFO(__clang_major__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2803:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __clang_minor__ 0__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2803 | # pragma message(HUNTER_INFO(__clang_minor__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2807:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __clang_patchlevel__ 0__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2807 | # pragma message(HUNTER_INFO(__clang_patchlevel__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2811:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __clang_version__ "21.0.0 (clang-2100.1.1.101)"__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2811 | # pragma message(HUNTER_INFO(__clang_version__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2815:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __code_model_small__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2815 | # pragma message(HUNTER_INFO(__code_model_small__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2843:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __core2 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2843 | # pragma message(HUNTER_INFO(__core2))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2847:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __core2__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2847 | # pragma message(HUNTER_INFO(__core2__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2851:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cplusplus 201703L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2851 | # pragma message(HUNTER_INFO(__cplusplus))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2863:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_aggregate_nsdmi 201304L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2863 | # pragma message(HUNTER_INFO(__cpp_aggregate_nsdmi))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2867:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_alias_templates 200704L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2867 | # pragma message(HUNTER_INFO(__cpp_alias_templates))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2871:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_attributes 200809L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2871 | # pragma message(HUNTER_INFO(__cpp_attributes))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2875:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_binary_literals 201304L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2875 | # pragma message(HUNTER_INFO(__cpp_binary_literals))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2883:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_constexpr 201603L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2883 | # pragma message(HUNTER_INFO(__cpp_constexpr))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2887:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_decltype 200707L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2887 | # pragma message(HUNTER_INFO(__cpp_decltype))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2891:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_decltype_auto 201304L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2891 | # pragma message(HUNTER_INFO(__cpp_decltype_auto))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2895:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_delegating_constructors 200604L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2895 | # pragma message(HUNTER_INFO(__cpp_delegating_constructors))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2899:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_digit_separators 201309L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2899 | # pragma message(HUNTER_INFO(__cpp_digit_separators))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2903:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_exceptions 199711L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2903 | # pragma message(HUNTER_INFO(__cpp_exceptions))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2907:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_generic_lambdas 201304L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2907 | # pragma message(HUNTER_INFO(__cpp_generic_lambdas))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2911:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_hex_float 201603L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2911 | # pragma message(HUNTER_INFO(__cpp_hex_float))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2915:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_inheriting_constructors 201511L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2915 | # pragma message(HUNTER_INFO(__cpp_inheriting_constructors))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2919:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_init_captures 201304L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2919 | # pragma message(HUNTER_INFO(__cpp_init_captures))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2923:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_initializer_lists 200806L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2923 | # pragma message(HUNTER_INFO(__cpp_initializer_lists))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2927:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_lambdas 200907L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2927 | # pragma message(HUNTER_INFO(__cpp_lambdas))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2931:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_nsdmi 200809L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2931 | # pragma message(HUNTER_INFO(__cpp_nsdmi))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2935:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_range_based_for 201603L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2935 | # pragma message(HUNTER_INFO(__cpp_range_based_for))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2939:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_raw_strings 200710L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2939 | # pragma message(HUNTER_INFO(__cpp_raw_strings))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2943:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_ref_qualifiers 200710L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2943 | # pragma message(HUNTER_INFO(__cpp_ref_qualifiers))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2947:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_return_type_deduction 201304L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2947 | # pragma message(HUNTER_INFO(__cpp_return_type_deduction))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2951:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_rtti 199711L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2951 | # pragma message(HUNTER_INFO(__cpp_rtti))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2967:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_static_assert 202306L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2967 | # pragma message(HUNTER_INFO(__cpp_static_assert))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2971:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_unicode_characters 200704L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2971 | # pragma message(HUNTER_INFO(__cpp_unicode_characters))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2975:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_unicode_literals 200710L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2975 | # pragma message(HUNTER_INFO(__cpp_unicode_literals))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2979:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_user_defined_literals 200809L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2979 | # pragma message(HUNTER_INFO(__cpp_user_defined_literals))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2983:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_variable_templates 201304L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2983 | # pragma message(HUNTER_INFO(__cpp_variable_templates))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:2987:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __cpp_variadic_templates 200704L__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         2987 | # pragma message(HUNTER_INFO(__cpp_variadic_templates))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:3067:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __llvm__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         3067 | # pragma message(HUNTER_INFO(__llvm__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:3139:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __pic__ 2__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         3139 | # pragma message(HUNTER_INFO(__pic__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:3171:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __private_extern__ extern__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         3171 | # pragma message(HUNTER_INFO(__private_extern__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:3219:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __strong __HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         3219 | # pragma message(HUNTER_INFO(__strong))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:3243:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __tune_core2__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         3243 | # pragma message(HUNTER_INFO(__tune_core2__))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:3259:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __unsafe_unretained __HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         3259 | # pragma message(HUNTER_INFO(__unsafe_unretained))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:3263:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __weak __attribute__((objc_gc(weak)))__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         3263 | # pragma message(HUNTER_INFO(__weak))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:3267:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __x86_64 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         3267 | # pragma message(HUNTER_INFO(__x86_64))
+              |          ^
+        /Users/jbaylina/.hunter/_Base/Download/Hunter/0.26.0/b194453/Unpacked/scripts/ShowPredefined.cpp:3271:10: warning: __HUNTER_MACRO_CHECK_BEGIN__#define __x86_64__ 1__HUNTER_MACRO_CHECK_END__ [-W#pragma-messages]
+         3271 | # pragma message(HUNTER_INFO(__x86_64__))
+              |          ^
+        277 warnings generated.
+        Linking CXX executable cmTC_5b4ca
+        /usr/local/bin/cmake -E cmake_link_script CMakeFiles/cmTC_5b4ca.dir/link.txt --verbose=1
+        /usr/bin/c++  -arch x86_64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/cmTC_5b4ca.dir/ShowPredefined.cpp.o -o cmTC_5b4ca
+        gmake[2]: Leaving directory '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/_test/CMakeFiles/CMakeTmp'
+        gmake[1]: Leaving directory '/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_3rdParty/Hunter/toolchain/_builds/_test/CMakeFiles/CMakeTmp'
+        
+      exitCode: 0
+...

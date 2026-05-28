@@ -106,7 +106,7 @@ fn read_be(bytes: &[u8]) -> Result<usize> {
 }
 
 /// Hex-prefix decode → (nibbles along this segment, is_leaf flag).
-fn hp_decode(encoded: &[u8]) -> (Vec<u8>, bool) {
+pub fn hp_decode(encoded: &[u8]) -> (Vec<u8>, bool) {
     if encoded.is_empty() {
         return (Vec::new(), false);
     }
@@ -124,7 +124,7 @@ fn hp_decode(encoded: &[u8]) -> (Vec<u8>, bool) {
     (nibbles, is_leaf)
 }
 
-fn nibbles_of(bytes: &[u8]) -> Vec<u8> {
+pub fn nibbles_of(bytes: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(2 * bytes.len());
     for &b in bytes {
         out.push(b >> 4);

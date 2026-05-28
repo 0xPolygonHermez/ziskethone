@@ -36,6 +36,9 @@ public:
     // Take `tx_idx` and touch the account for EIP-2929 warm tracking
     // (same pattern as Storages). `tx_idx` is the per-block EVM-frame
     // counter that ZiskStateDB bumps for each tx + each system call.
+    // These accessors do NOT journal the cold→warm transition; if the
+    // calling frame is revertible, the caller must emit a warm entry
+    // via `Journal::log_account_warm` BEFORE invoking these.
     evmc::uint256be balance   (const evmc::address& addr, uint64_t tx_idx);
     uint64_t        nonce     (const evmc::address& addr, uint64_t tx_idx);
     evmc::bytes32   code_hash (const evmc::address& addr, uint64_t tx_idx);
@@ -71,10 +74,15 @@ public:
                         uint64_t tx_idx);
 
     // By-index write accessors. Skip the hashmap lookup; useful for the
-    // journal's rollback path where the index is already known.
-    void set_balance_at  (size_t idx, const evmc::uint256be& v);
-    void set_nonce_at    (size_t idx, uint64_t v);
-    void set_code_hash_at(size_t idx, const evmc::bytes32& v);
+    // journal's rollback path where the index is already known. Atomic:
+    // they set the field value AND `last_tx_idx` in one call, so the
+    // same setter handles both forward writes (caller passes the
+    // current `tx_counter_`) and journal rollback (caller passes the
+    // pre-write `old_last_tx_idx` so the slot's warmth is restored
+    // alongside the value).
+    void set_balance_at  (size_t idx, const evmc::uint256be& v, uint64_t tx_idx);
+    void set_nonce_at    (size_t idx, uint64_t                v, uint64_t tx_idx);
+    void set_code_hash_at(size_t idx, const evmc::bytes32&    v, uint64_t tx_idx);
 
     // Look up the array index of `addr`. Aborts the guest via zeg::fatal
     // if the address isn't in the table — the guest is supposed to have
@@ -82,20 +90,42 @@ public:
     // is a hard input-completeness bug, not a recoverable case.
     size_t index_of(const evmc::address& addr) const;
 
+    // Non-fataling probe — true iff `addr` is in the table.
+    bool contains(const evmc::address& addr) const noexcept {
+        return index_.find(addr) != index_.end();
+    }
+
     // ----- per-tx warm/cold tracking (EIP-2929) -----
     //
     // Same shape as Storages: `mark_touched_at` bumps `last_tx_idx`
     // iff `tx_idx > last_tx_idx` (idempotent in-tx); `is_warm_at`
     // tells the caller whether the account was already touched in
-    // tx `tx_idx`. `last_tx_idx` is NOT journaled — warm state
-    // survives intra-tx reverts per EIP-2929. Unlike Storages we
-    // don't keep a per-tx-original snapshot for the field values:
-    // the EVM has no SSTORE-like status for balance/nonce/code_hash,
-    // so the EIP-2200 machinery is irrelevant here.
-    void mark_touched_at(size_t idx, uint64_t tx_idx) noexcept;
-    bool is_warm_at     (size_t idx, uint64_t tx_idx) const noexcept;
+    // tx `tx_idx`. Warm state IS journaled — but the journaling
+    // happens at the caller (ZiskStateDB), which captures the
+    // pre-write `last_tx_idx_at(idx)` via `Journal::log_account_warm`
+    // BEFORE bumping. The table layer is journal-free; the rollback
+    // path uses `set_warm_at` (below) to restore a prior (cooler)
+    // `last_tx_idx`, and the value setters above to restore the
+    // field + warmth atomically. Unlike Storages we don't keep a
+    // per-tx-original snapshot for balance/nonce/code_hash: the EVM
+    // has no SSTORE-like status for these, so EIP-2200 is irrelevant.
+    void     mark_touched_at(size_t idx, uint64_t tx_idx) noexcept;
+    bool     is_warm_at     (size_t idx, uint64_t tx_idx) const noexcept;
+    uint64_t last_tx_idx_at (size_t idx) const noexcept;
+
+    // Unconditional setter for `last_tx_idx`. Used by the journal's
+    // rollback path to restore the pre-write value (which may be
+    // smaller than the current one — `mark_touched_at` only bumps up).
+    void     set_warm_at    (size_t idx, uint64_t tx_idx) noexcept;
 
     uint64_t size() const noexcept { return originals_.size(); }
+
+    // Walk every account flagged read-only in the input stream and
+    // assert balance / nonce / code_hash still match their originals.
+    // Read-only accounts are part of the witness but the prover claims
+    // they are not mutated; if execution wrote to one, the new state
+    // root would diverge silently. Aborts via zeg::fatal on mismatch.
+    void check_read_only_unchanged() const;
 
 private:
     // Zero-copy view into one 136-byte record. Wire layout:
@@ -146,9 +176,9 @@ private:
     // from `View` unless the matching dirty flag is set, in which case
     // the value here wins. `last_tx_idx` tracks EIP-2929 warm state:
     // `mark_touched_at` bumps it on first access in a tx; the field
-    // is NOT journaled (warm state survives intra-tx reverts).
-    // `last_tx_idx == 0` is the never-touched sentinel; tx_idx
-    // starts at 1.
+    // IS journaled via Journal::log_account_warm so a reverted frame
+    // restores the prior (possibly cold) value. `last_tx_idx == 0` is
+    // the never-touched sentinel; tx_idx starts at 1.
     struct Mods {
         bool balance_dirty   : 1 = false;
         bool nonce_dirty     : 1 = false;

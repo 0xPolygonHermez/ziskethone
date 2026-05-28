@@ -14,20 +14,32 @@ Journal::Checkpoint Journal::checkpoint() {
     return entries_.size() - 1;
 }
 
-void Journal::log_nonce(size_t idx, uint64_t old_value) {
-    entries_.emplace_back(NonceEntry{idx, old_value});
+void Journal::log_nonce(size_t idx, uint64_t old_value,
+                        uint64_t old_last_tx_idx) {
+    entries_.emplace_back(NonceEntry{idx, old_value, old_last_tx_idx});
 }
 
-void Journal::log_balance(size_t idx, const evmc::uint256be& old_value) {
-    entries_.emplace_back(BalanceEntry{idx, old_value});
+void Journal::log_balance(size_t idx, const evmc::uint256be& old_value,
+                          uint64_t old_last_tx_idx) {
+    entries_.emplace_back(BalanceEntry{idx, old_value, old_last_tx_idx});
 }
 
-void Journal::log_code_hash(size_t idx, const evmc::bytes32& old_value) {
-    entries_.emplace_back(CodeHashEntry{idx, old_value});
+void Journal::log_code_hash(size_t idx, const evmc::bytes32& old_value,
+                            uint64_t old_last_tx_idx) {
+    entries_.emplace_back(CodeHashEntry{idx, old_value, old_last_tx_idx});
 }
 
-void Journal::log_storage(size_t idx, const evmc::bytes32& old_value) {
-    entries_.emplace_back(StorageEntry{idx, old_value});
+void Journal::log_storage(size_t idx, const evmc::bytes32& old_value,
+                          uint64_t old_last_tx_idx) {
+    entries_.emplace_back(StorageEntry{idx, old_value, old_last_tx_idx});
+}
+
+void Journal::log_account_warm(size_t idx, uint64_t old_last_tx_idx) {
+    entries_.emplace_back(AccountWarmEntry{idx, old_last_tx_idx});
+}
+
+void Journal::log_storage_warm(size_t idx, uint64_t old_last_tx_idx) {
+    entries_.emplace_back(StorageWarmEntry{idx, old_last_tx_idx});
 }
 
 void Journal::log_transient(const evmc::address&  address,
@@ -49,13 +61,17 @@ void Journal::rollback(Checkpoint        cp,
         std::visit([&](const auto& e) {
             using T = std::decay_t<decltype(e)>;
             if constexpr (std::is_same_v<T, NonceEntry>) {
-                accounts.set_nonce_at(e.idx, e.old_value);
+                accounts.set_nonce_at(e.idx, e.old_value, e.old_last_tx_idx);
             } else if constexpr (std::is_same_v<T, BalanceEntry>) {
-                accounts.set_balance_at(e.idx, e.old_value);
+                accounts.set_balance_at(e.idx, e.old_value, e.old_last_tx_idx);
             } else if constexpr (std::is_same_v<T, CodeHashEntry>) {
-                accounts.set_code_hash_at(e.idx, e.old_value);
+                accounts.set_code_hash_at(e.idx, e.old_value, e.old_last_tx_idx);
             } else if constexpr (std::is_same_v<T, StorageEntry>) {
-                storages.set_value_at(e.idx, e.old_value);
+                storages.set_value_at(e.idx, e.old_value, e.old_last_tx_idx);
+            } else if constexpr (std::is_same_v<T, AccountWarmEntry>) {
+                accounts.set_warm_at(e.idx, e.old_last_tx_idx);
+            } else if constexpr (std::is_same_v<T, StorageWarmEntry>) {
+                storages.set_warm_at(e.idx, e.old_last_tx_idx);
             } else if constexpr (std::is_same_v<T, TransientEntry>) {
                 transient.restore(e.address, e.position,
                                   e.was_present, e.old_value);

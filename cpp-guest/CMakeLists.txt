@@ -48,6 +48,32 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# ----- secp256k1_ecdsa_verify backend ---------------------------------------
+#
+# The cpp-guest declares one external syscall in zeg/zisk_crypto.hpp.
+# SECP_BACKEND chooses which implementation provides it on the host:
+#
+#   zisk-libc       Link the real ZisK lib-c (GMP + NASM-tuned secp256k1
+#                   at /Users/.../zisk/lib-c/c/). Requires nasm + GMP +
+#                   x86-64 with ADX. Closest match to what the zkVM
+#                   target ultimately runs.
+#   libsecp256k1    Wrap Bitcoin's libsecp256k1 (Homebrew) with a thin
+#                   C-ABI shim. Default on macOS — Rosetta doesn't
+#                   translate the ADX/BMI2 instructions ZisK lib-c uses.
+#   stub            Link the weak host stub that aborts on first use.
+#                   Useful for builds without GMP / libsecp256k1.
+if(APPLE)
+    set(_SECP_DEFAULT "libsecp256k1")
+else()
+    set(_SECP_DEFAULT "zisk-libc")
+endif()
+set(SECP_BACKEND "${_SECP_DEFAULT}" CACHE STRING
+    "secp256k1_ecdsa_verify backend: zisk-libc | libsecp256k1 | stub")
+set_property(CACHE SECP_BACKEND PROPERTY STRINGS
+             zisk-libc libsecp256k1 stub)
+set(ZISK_LIBC_SRC "$ENV{HOME}/git/zisk/zisk/lib-c/c" CACHE PATH
+    "Path to the ZisK lib-c source tree (used when SECP_BACKEND=zisk-libc).")
+
 # Static link for evmone + every transitive lib it pulls.
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(EVMONE_TESTING       OFF CACHE BOOL "" FORCE)
@@ -55,6 +81,20 @@ set(EVMONE_FUZZING       OFF CACHE BOOL "" FORCE)
 set(EVMONE_PRECOMPILES_SILKPRE OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(${evmone_SOURCE_DIR} ${evmone_BINARY_DIR})
+
+# evmone::state provides `is_precompile` + `call_precompile` (ECRECOVER,
+# SHA256, RIPEMD160, IDENTITY, MODEXP, BN254 ops, BLAKE2F, KZG-PE, BLS12,
+# P256). It's only built automatically when EVMONE_TESTING=ON; we add it
+# manually because the cpp-guest needs precompile dispatch but doesn't
+# want the rest of evmone's test infrastructure (GoogleTest etc.). Pure
+# `evmone::precompiles` + `evmc::evmc_cpp` deps; no test-only requirements.
+add_subdirectory(${evmone_SOURCE_DIR}/test/state ${evmone_BINARY_DIR}/test_state EXCLUDE_FROM_ALL)
+# state's CMakeLists exports `PUBLIC ${PROJECT_SOURCE_DIR}` for its
+# include path, but PROJECT_SOURCE_DIR there resolves to OUR project
+# (cpp-guest) because there's no `project()` call inside test/state.
+# Override the PUBLIC include path to point at evmone's source root so
+# `#include <test/state/precompiles.hpp>` resolves.
+target_include_directories(evmone-state PUBLIC ${evmone_SOURCE_DIR})
 
 # ----- guest executable ------------------------------------------------------
 #
@@ -66,7 +106,7 @@ add_subdirectory(${evmone_SOURCE_DIR} ${evmone_BINARY_DIR})
 # link target gives us both the EVM and the `evmc::Host` interface that
 # ZiskStateDB implements.
 
-add_executable(zisk_eth_guest
+set(GUEST_SOURCES
     src/main.cpp
     src/fatal.cpp
     src/accounts.cpp
@@ -89,10 +129,94 @@ add_executable(zisk_eth_guest
     src/transactions.cpp
     src/transient_storage.cpp
     src/zisk_crypto.cpp
-    src/zisk_crypto_host_stub.cpp
     src/zisk_state_db.cpp
 )
+# Wire the chosen backend. Only one source-side provider object is
+# included: the weak host stub would otherwise satisfy the symbol
+# before the linker visits any archive (weak objects in the main link
+# line win over archive-member resolution).
+if(SECP_BACKEND STREQUAL "stub")
+    list(APPEND GUEST_SOURCES src/zisk_crypto_host_stub.cpp)
+elseif(SECP_BACKEND STREQUAL "libsecp256k1")
+    list(APPEND GUEST_SOURCES src/zisk_crypto_libsecp256k1.cpp)
+elseif(SECP_BACKEND STREQUAL "zisk-libc")
+    # No extra source — secp256k1_ecdsa_verify comes from libziskc.a
+    # linked below.
+else()
+    message(FATAL_ERROR "SECP_BACKEND must be zisk-libc | libsecp256k1 | stub (got ${SECP_BACKEND})")
+endif()
+
+add_executable(zisk_eth_guest ${GUEST_SOURCES})
 
 target_include_directories(zisk_eth_guest PUBLIC include)
 target_compile_options(zisk_eth_guest PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(zisk_eth_guest PRIVATE evmone evmone::precompiles)
+target_link_libraries(zisk_eth_guest PRIVATE evmone evmone::precompiles evmone::state)
+
+if(SECP_BACKEND STREQUAL "libsecp256k1")
+    find_path(SECP256K1_INCLUDE_DIR secp256k1.h
+              HINTS /usr/local/include /usr/local/include2 /opt/homebrew/include)
+    find_library(SECP256K1_LIBRARY secp256k1
+              HINTS /usr/local/lib /opt/homebrew/lib)
+    if(NOT SECP256K1_INCLUDE_DIR OR NOT SECP256K1_LIBRARY)
+        message(FATAL_ERROR
+            "SECP_BACKEND=libsecp256k1 but libsecp256k1 not found. "
+            "brew install secp256k1.")
+    endif()
+
+    # The found include dir may be a chaotic shared directory (e.g.
+    # /usr/local/include2 on this machine has hundreds of unrelated
+    # headers that conflict with system files). Stage just
+    # secp256k1.h into an isolated build-tree dir to avoid include-path
+    # pollution.
+    set(SECP256K1_STAGED_DIR ${CMAKE_BINARY_DIR}/secp256k1_include)
+    file(MAKE_DIRECTORY ${SECP256K1_STAGED_DIR})
+    configure_file(${SECP256K1_INCLUDE_DIR}/secp256k1.h
+                   ${SECP256K1_STAGED_DIR}/secp256k1.h
+                   COPYONLY)
+
+    target_include_directories(zisk_eth_guest PRIVATE ${SECP256K1_STAGED_DIR})
+    target_link_libraries(zisk_eth_guest PRIVATE ${SECP256K1_LIBRARY})
+endif()
+
+if(SECP_BACKEND STREQUAL "zisk-libc")
+    if(APPLE)
+        set(_HOST_PLATFORM darwin)
+    elseif(UNIX)
+        set(_HOST_PLATFORM linux)
+    else()
+        message(FATAL_ERROR
+            "SECP_BACKEND=zisk-libc only supports macOS / Linux hosts.")
+    endif()
+
+    set(ZISKC_BUILD_DIR ${CMAKE_BINARY_DIR}/ziskc)
+    set(ZISKC_LIBRARY   ${ZISKC_BUILD_DIR}/libziskc.a)
+    add_custom_command(
+        OUTPUT  ${ZISKC_LIBRARY}
+        COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/build-ziskc.sh
+                     ${ZISK_LIBC_SRC}
+                     ${ZISKC_BUILD_DIR}
+                     ${_HOST_PLATFORM}
+        DEPENDS ${ZISK_LIBC_SRC}/src/ec/ec.cpp  # canary; rebuild on any touch
+        COMMENT "Building ZisK lib-c (libziskc.a) from ${ZISK_LIBC_SRC}"
+        VERBATIM
+    )
+    add_custom_target(ziskc DEPENDS ${ZISKC_LIBRARY})
+    add_dependencies(zisk_eth_guest ziskc)
+
+    # GMP discovery — Homebrew on Intel macOS = /usr/local; Apple
+    # Silicon = /opt/homebrew; Linux relies on the default search path.
+    find_path(GMP_INCLUDE_DIR  gmpxx.h HINTS /usr/local/include /opt/homebrew/include)
+    find_library(GMP_LIBRARY   gmp     HINTS /usr/local/lib     /opt/homebrew/lib)
+    find_library(GMPXX_LIBRARY gmpxx   HINTS /usr/local/lib     /opt/homebrew/lib)
+    if(NOT GMP_INCLUDE_DIR OR NOT GMP_LIBRARY OR NOT GMPXX_LIBRARY)
+        message(FATAL_ERROR
+            "SECP_BACKEND=zisk-libc but GMP not found. brew install gmp (macOS) "
+            "or apt-get install libgmp-dev (Linux).")
+    endif()
+
+    target_include_directories(zisk_eth_guest PRIVATE ${GMP_INCLUDE_DIR})
+    target_link_libraries(zisk_eth_guest PRIVATE
+        ${ZISKC_LIBRARY}
+        ${GMPXX_LIBRARY}
+        ${GMP_LIBRARY})
+endif()

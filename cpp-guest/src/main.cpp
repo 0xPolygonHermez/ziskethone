@@ -21,6 +21,7 @@
 #include "zeg/accounts.hpp"
 #include "zeg/binary_format.hpp"     // kMagic
 #include "zeg/block_header.hpp"
+#include "zeg/keccak.hpp"
 #include "zeg/consensus_info.hpp"
 #include "zeg/contracts.hpp"
 #include "zeg/fatal.hpp"
@@ -69,6 +70,7 @@ int main(int argc, char** argv) {
         zeg::fatal("usage: zisk_eth_guest <input-file>");
     }
     const uint8_t* cursor = read_input_stream(argv[1]);
+    const uint8_t* file_base = cursor - 8;  // back up past the magic+pad
 
     // 2. Parse the six input-stream collections at main level. Stream-
     //    order matters and must match the prover's write order:
@@ -83,13 +85,18 @@ int main(int argc, char** argv) {
     zeg::PreviousBlocks previous_blocks (cursor);
 
     // 3. Anchor the ancestor chain to the block being computed.
-    //    PreviousBlocks already verifies block[i].parent_hash ==
-    //    hash(block[i+1]) internally; we still need the chain's tip
-    //    (block[0]) to match the current block's parent_hash. Skipped
-    //    when the prover supplied no ancestors.
-    if (!previous_blocks.empty() &&
-        consensus.parent_hash() != previous_blocks.hash(0)) {
-        zeg::fatal("PreviousBlocks: hash(block[0]) != consensus.parent_hash()");
+    //    PreviousBlocks[0] must be the parent — every BLOCKHASH
+    //    invocation that walks depth d reads index d-1, and the
+    //    reconstructed header below uses previous_blocks.hash(0) as
+    //    parent_hash. Tie it to our parent notion via state_root:
+    //    consensus.parent_hash() carries the parent's state root in
+    //    this guest's convention, so it must equal block[0]'s
+    //    state_root.
+    if (previous_blocks.empty()) {
+        zeg::fatal("PreviousBlocks: must include at least the parent block");
+    }
+    if (previous_blocks.at(0).state_root() != consensus.parent_hash()) {
+        zeg::fatal("PreviousBlocks: block[0].state_root != consensus.parent_state_root");
     }
 
     // 4. Construct the state DB. ZiskStateDB borrows the five
@@ -102,7 +109,30 @@ int main(int argc, char** argv) {
     //    post-block side-effects. `state` owns the evmone VM and
     //    journals every state write so a revert at any depth rolls
     //    back cleanly.
-    state.execute_block(transactions);
+    //
+    // DEBUG stage selector via `ZEG_STAGE`. Allows running a subset of
+    // the pipeline to isolate which stage produces the divergence:
+    //   none  → skip everything (walker/cache sanity test).
+    //   pre   → just pre_execute_block (EIP-4788/2935 system calls).
+    //   txs   → pre + process_transactions (no withdrawals / requests).
+    //   post  → pre + post  (no txs).
+    //   full  → everything (default; same as unset).
+    const char* stage = std::getenv("ZEG_STAGE");
+    const bool stage_set = stage != nullptr;
+    const bool skip_exec = stage_set && std::strcmp(stage, "none") == 0;
+    if (!stage_set || std::strcmp(stage, "full") == 0) {
+        state.execute_block(transactions);
+    } else if (std::strcmp(stage, "pre") == 0) {
+        state.pre_execute_block_pub();
+    } else if (std::strcmp(stage, "txs") == 0) {
+        state.pre_execute_block_pub();
+        state.process_transactions_pub(transactions);
+    } else if (std::strcmp(stage, "post") == 0) {
+        state.pre_execute_block_pub();
+        state.post_execute_block_pub();
+    } else if (std::strcmp(stage, "none") != 0) {
+        zeg::fatal("ZEG_STAGE: unknown value");
+    }
 
     // 6. Verify the pre-execution state root against the parent
     //    anchor. In this guest's convention `consensus.parent_hash()`
@@ -111,9 +141,51 @@ int main(int argc, char** argv) {
     //    trie once with the original values, caches the result, and
     //    records the per-NodeR cache entries the new-root pass will
     //    reuse. `cursor` is advanced past every byte consumed.
+    if (std::getenv("ZEG_DUMP_SROOT_OFFSET") != nullptr) {
+        std::fprintf(stderr, "SROOT_OFFSET=%zu\n", (size_t)(cursor - file_base));
+    }
     zeg::StateRoot state_root(cursor, accounts, storages);
     if (state_root.old_state_root() != consensus.parent_hash()) {
         zeg::fatal("pre-execution state root mismatch");
+    }
+
+    // 6'. Read-only witness invariant: every account and storage slot
+    //     the input stream marked read-only must be unchanged after
+    //     execution. The new-state-root walk skips re-hashing read-only
+    //     subtrees by reusing the cached pre-execution nodes — if the
+    //     EVM did write through to one of those rows, the new root
+    //     would silently embed the old value and diverge from the
+    //     correct post-state. Fatal here pins the failure to the
+    //     mutation that caused it rather than to a downstream mismatch.
+    accounts.check_read_only_unchanged();
+    storages.check_read_only_unchanged();
+
+    // DEBUG: full dump of post-execution state for Python MPT reference.
+    if (std::getenv("ZEG_DUMP_ALL") != nullptr) {
+        for (uint64_t i = 0; i < accounts.size(); ++i) {
+            const auto& a = accounts.address_at(i);
+            std::fprintf(stderr, "ACCT %llu addr=", (unsigned long long)i);
+            for (uint8_t b : a.bytes) std::fprintf(stderr, "%02x", b);
+            std::fprintf(stderr, " nonce=%llu balance=", (unsigned long long)accounts.nonce_at(i));
+            const auto bal = accounts.balance_at(i);
+            for (uint8_t b : bal.bytes) std::fprintf(stderr, "%02x", b);
+            std::fprintf(stderr, " ch=");
+            const auto ch = accounts.code_hash_at(i);
+            for (uint8_t b : ch.bytes) std::fprintf(stderr, "%02x", b);
+            std::fprintf(stderr, " ro=%d\n", (int)accounts.is_read_only_at(i));
+        }
+        for (uint64_t i = 0; i < storages.size(); ++i) {
+            const auto& a = storages.address_at(i);
+            const auto& p = storages.position_at(i);
+            const auto  v = storages.value_at(i);
+            std::fprintf(stderr, "SLOT %llu addr=", (unsigned long long)i);
+            for (uint8_t b : a.bytes) std::fprintf(stderr, "%02x", b);
+            std::fprintf(stderr, " pos=");
+            for (uint8_t b : p.bytes) std::fprintf(stderr, "%02x", b);
+            std::fprintf(stderr, " val=");
+            for (uint8_t b : v.bytes) std::fprintf(stderr, "%02x", b);
+            std::fprintf(stderr, " ro=%d\n", (int)storages.is_read_only_at(i));
+        }
     }
 
     // 7. Compute the post-execution state root. calculate_new_state_root
@@ -122,6 +194,21 @@ int main(int argc, char** argv) {
     //    prover-supplied root; instead it feeds step 7' as the
     //    `state_root` field of the reconstructed header.
     const evmc::bytes32 new_state_root = state_root.calculate_new_state_root();
+
+    // DEBUG: in `none` mode no mutations were applied — the new walk
+    // must reproduce the pre-execution root byte-for-byte.
+    if (skip_exec) {
+        if (new_state_root != state_root.old_state_root()) {
+            zeg::fatal("ZEG_STAGE=none: new_state_root != old_state_root");
+        }
+        std::fprintf(stderr, "ZEG_STAGE=none OK — new == old\n");
+    }
+    if (stage_set) {
+        std::fprintf(stderr, "ZEG_STAGE=%s new_state_root=0x", stage);
+        for (uint8_t b : new_state_root.bytes) std::fprintf(stderr, "%02x", b);
+        std::fprintf(stderr, "\n");
+        return 0;
+    }
 
     // 7'. Compute the execution-layer block hash of the block under
     //     proof: keccak256(RLP(header)) over the 21 Pectra header
@@ -141,7 +228,7 @@ int main(int argc, char** argv) {
     //     will eventually wire `execution_block_hash` into the
     //     guest's public output.
     const zeg::BlockHeader header{
-        .parent_hash              = consensus.parent_hash(),
+        .parent_hash              = previous_blocks.hash(0),
         .ommers_hash              = kEmptyOmmersHash,
         .coinbase                 = consensus.beneficiary(),
         .state_root               = new_state_root,
@@ -163,6 +250,49 @@ int main(int argc, char** argv) {
         .parent_beacon_block_root = consensus.parent_beacon_block_root(),
         .requests_hash            = state.requests_hash(),
     };
+    // DEBUG: dump every header field so we can compare against chain.
+    {
+        auto dump32 = [](const char* name, const evmc::bytes32& v) {
+            std::fprintf(stderr, "HDR %-25s 0x", name);
+            for (int i = 0; i < 32; ++i) std::fprintf(stderr, "%02x", v.bytes[i]);
+            std::fprintf(stderr, "\n");
+        };
+        auto dump_u256 = [](const char* name, const evmc::uint256be& v) {
+            std::fprintf(stderr, "HDR %-25s 0x", name);
+            for (int i = 0; i < 32; ++i) std::fprintf(stderr, "%02x", v.bytes[i]);
+            std::fprintf(stderr, "\n");
+        };
+        dump32("parent_hash", header.parent_hash);
+        dump32("ommers_hash", header.ommers_hash);
+        std::fprintf(stderr, "HDR %-25s 0x", "coinbase");
+        for (int i = 0; i < 20; ++i) std::fprintf(stderr, "%02x", header.coinbase.bytes[i]);
+        std::fprintf(stderr, "\n");
+        dump32("state_root", header.state_root);
+        dump32("transactions_root", header.transactions_root);
+        dump32("receipts_root", header.receipts_root);
+        std::fprintf(stderr, "HDR logs_bloom_keccak       0x");
+        const auto bh = zeg::keccak256_bytes32(header.logs_bloom.data(), 256);
+        for (int i = 0; i < 32; ++i) std::fprintf(stderr, "%02x", bh.bytes[i]);
+        std::fprintf(stderr, "\n");
+        dump_u256("difficulty", header.difficulty);
+        std::fprintf(stderr, "HDR %-25s %llu\n", "number", (unsigned long long)header.number);
+        std::fprintf(stderr, "HDR %-25s %llu\n", "gas_limit", (unsigned long long)header.gas_limit);
+        std::fprintf(stderr, "HDR %-25s %llu\n", "gas_used", (unsigned long long)header.gas_used);
+        std::fprintf(stderr, "HDR %-25s %llu\n", "timestamp", (unsigned long long)header.timestamp);
+        std::fprintf(stderr, "HDR %-25s len=%zu data=0x", "extra_data", header.extra_data.size());
+        for (auto b : header.extra_data) std::fprintf(stderr, "%02x", b);
+        std::fprintf(stderr, "\n");
+        dump32("prev_randao", header.prev_randao);
+        std::fprintf(stderr, "HDR %-25s 0x", "nonce");
+        for (int i = 0; i < 8; ++i) std::fprintf(stderr, "%02x", header.nonce[i]);
+        std::fprintf(stderr, "\n");
+        dump_u256("base_fee_per_gas", header.base_fee_per_gas);
+        dump32("withdrawals_root", header.withdrawals_root);
+        std::fprintf(stderr, "HDR %-25s %llu\n", "blob_gas_used", (unsigned long long)header.blob_gas_used);
+        std::fprintf(stderr, "HDR %-25s %llu\n", "excess_blob_gas", (unsigned long long)header.excess_blob_gas);
+        dump32("parent_beacon_block_root", header.parent_beacon_block_root);
+        dump32("requests_hash", header.requests_hash);
+    }
     const evmc::bytes32 execution_block_hash =
         zeg::compute_block_header_hash(header);
 

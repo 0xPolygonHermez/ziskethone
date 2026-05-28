@@ -1,10 +1,16 @@
 #include "zeg/zisk_state_db.hpp"
 
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
 #include <evmone/evmone.h>  // evmc_create_evmone for the owned VM instance
 #include <intx/intx.hpp>    // 256-bit add for selfdestruct balance transfer
+#include <test/state/precompiles.hpp>  // evmone::state::call_precompile
+#include <lib/evmone/vm.hpp>        // evmone::VM for tracer attachment
+#include <lib/evmone/tracing.hpp>   // create_instruction_tracer
+#include <fstream>
 
 #include "zeg/bloom.hpp"
 #include "zeg/config.hpp"
@@ -84,7 +90,8 @@ ZiskStateDB::ZiskStateDB(Accounts&             accounts,
       contracts_(contracts),
       previous_blocks_(previous_blocks),
       storages_(storages),
-      vm_(evmc_create_evmone()) {}
+      vm_raw_(evmc_create_evmone()),
+      vm_(vm_raw_) {}
 
 // ===== evmc::Host overrides =====
 //
@@ -134,8 +141,8 @@ evmc_storage_status ZiskStateDB::set_storage(const evmc::address& addr,
     const auto& original = storages_.tx_original_at(idx);
     const auto  current  = storages_.value_at(idx);
 
-    journal_.log_storage(idx, current);
-    storages_.set_value_at(idx, value);
+    journal_.log_storage(idx, current, storages_.last_tx_idx_at(idx));
+    storages_.set_value_at(idx, value, tx_counter_);
 
     return compute_storage_status(original, current, value);
 }
@@ -207,17 +214,31 @@ bool ZiskStateDB::selfdestruct(const evmc::address& addr,
     // the reverse order they were written.
     const size_t src_idx = accounts_.index_of(addr);
     const size_t dst_idx = accounts_.index_of(beneficiary);
-    journal_.log_balance(src_idx, accounts_.balance_at(src_idx));
-    journal_.log_balance(dst_idx, accounts_.balance_at(dst_idx));
+    journal_.log_balance(src_idx, accounts_.balance_at(src_idx),
+                         accounts_.last_tx_idx_at(src_idx));
+    journal_.log_balance(dst_idx, accounts_.balance_at(dst_idx),
+                         accounts_.last_tx_idx_at(dst_idx));
 
     const auto src_u = intx::be::load<intx::uint256>(accounts_.balance_at(src_idx));
     const auto dst_u = intx::be::load<intx::uint256>(accounts_.balance_at(dst_idx));
-    accounts_.set_balance_at(dst_idx, intx::be::store<evmc::uint256be>(dst_u + src_u));
-    accounts_.set_balance_at(src_idx, evmc::uint256be{});
+    accounts_.set_balance_at(dst_idx,
+                             intx::be::store<evmc::uint256be>(dst_u + src_u),
+                             tx_counter_);
+    accounts_.set_balance_at(src_idx, evmc::uint256be{}, tx_counter_);
     return false;
 }
 
 evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
+    // Precompile dispatch. Mirror the test/state host check: only a
+    // straight CALL (not a DELEGATECALL into the precompile address)
+    // hits the precompile dispatcher — DELEGATECALL into a precompile
+    // address runs the caller's code with the precompile's "code"
+    // (which is empty), per EVM semantics.
+    if ((msg.flags & EVMC_DELEGATED) == 0 &&
+        evmone::state::is_precompile(EVMC_OSAKA, msg.code_address)) {
+        return evmone::state::call_precompile(EVMC_OSAKA, msg);
+    }
+
     // Snapshot state up front. Any non-success status from the nested
     // frame rolls back every write made under it.
     const auto cp = checkpoint();
@@ -272,19 +293,20 @@ evmc::bytes32 ZiskStateDB::get_block_hash(int64_t block_number) const noexcept {
     if (diff < 1 || diff > 256) {
         return {};
     }
-    // Walk the parent_hash chain rather than the pre-computed hashes_
-    // array. depth 1 = current block's parent, which ConsensusInfo
-    // carries directly. depth d ≥ 2 reuses the parent_hash field on
-    // PreviousBlocks[d-2] (since that block's parent IS the depth-d
-    // ancestor). Out-of-range = zero, matching the EVM convention.
-    if (diff == 1) {
-        return consensus_.parent_hash();
-    }
-    const size_t idx = static_cast<size_t>(diff - 2);
+    // PreviousBlocks[0] is the parent; PreviousBlocks[i] is the (i+1)-th
+    // ancestor. The recomputed hash array carries each block's true
+    // execution-layer hash (RLP+keccak over the canonical header), so
+    // depth d directly maps to index d-1. Out-of-range (prover didn't
+    // ship that ancestor) = zero, matching the EVM convention.
+    //
+    // NB: consensus.parent_hash() is the parent's STATE_ROOT in this
+    // guest's binary format (used as the pre-execution root anchor),
+    // NOT the parent's block hash — never use it for BLOCKHASH.
+    const size_t idx = static_cast<size_t>(diff - 1);
     if (idx >= previous_blocks_.size()) {
         return {};
     }
-    return previous_blocks_.at(idx).parent_hash();
+    return previous_blocks_.hash(idx);
 }
 
 void ZiskStateDB::emit_log(const evmc::address& addr,
@@ -308,8 +330,21 @@ evmc_access_status ZiskStateDB::access_account(const evmc::address& addr) noexce
     // touched in this tx (last_tx_idx == tx_counter_). Either way,
     // touch it now so the next access sees it warm. Same pattern as
     // access_storage.
+    //
+    // EIP-2929 precompile carve-out: ALL precompiles are inherently
+    // warm at every access, regardless of whether the host's Accounts
+    // table includes them. Short-circuit here so callers don't need
+    // to inject precompile entries into the prestate.
+    if (evmone::state::is_precompile(EVMC_OSAKA, addr)) {
+        return EVMC_ACCESS_WARM;
+    }
     const size_t idx      = accounts_.index_of(addr);
     const bool   was_warm = accounts_.is_warm_at(idx, tx_counter_);
+    if (!was_warm) {
+        // Journal the cold→warm transition so a reverted EVM frame
+        // restores cold-ness (EIP-2929 / EIP-2200 gas accounting).
+        journal_.log_account_warm(idx, accounts_.last_tx_idx_at(idx));
+    }
     accounts_.mark_touched_at(idx, tx_counter_);
     return was_warm ? EVMC_ACCESS_WARM : EVMC_ACCESS_COLD;
 }
@@ -321,6 +356,11 @@ evmc_access_status ZiskStateDB::access_storage(const evmc::address& addr,
     // so the next access sees it warm.
     const size_t idx       = storages_.index_of(addr, key);
     const bool   was_warm  = storages_.is_warm_at(idx, tx_counter_);
+    if (!was_warm) {
+        // Journal the cold→warm transition so a reverted EVM frame
+        // restores cold-ness (EIP-2929 / EIP-2200 gas accounting).
+        journal_.log_storage_warm(idx, storages_.last_tx_idx_at(idx));
+    }
     storages_.mark_touched_at(idx, tx_counter_);
     return was_warm ? EVMC_ACCESS_WARM : EVMC_ACCESS_COLD;
 }
@@ -415,16 +455,31 @@ void ZiskStateDB::transfer_value(const evmc::address& from,
                                  const evmc::uint256be& value) noexcept {
     const size_t from_idx = accounts_.index_of(from);
     const size_t to_idx   = accounts_.index_of(to);
-    journal_.log_balance(from_idx, accounts_.balance_at(from_idx));
-    journal_.log_balance(to_idx,   accounts_.balance_at(to_idx));
+
+    // Self-transfer is a no-op (debit and credit cancel). Without this
+    // guard the two `set_balance_at` calls below would target the same
+    // slot — the second overwrites the first and leaves the account
+    // net-credited by `value` instead of unchanged.
+    if (from_idx == to_idx) {
+        return;
+    }
+
+    journal_.log_balance(from_idx, accounts_.balance_at(from_idx),
+                         accounts_.last_tx_idx_at(from_idx));
+    journal_.log_balance(to_idx,   accounts_.balance_at(to_idx),
+                         accounts_.last_tx_idx_at(to_idx));
 
     const auto from_u = intx::be::load<intx::uint256>(accounts_.balance_at(from_idx));
     const auto to_u   = intx::be::load<intx::uint256>(accounts_.balance_at(to_idx));
     const auto v_u    = intx::be::load<intx::uint256>(value);
 
     // The EVM gated the call on `from_u >= v_u`; we don't re-check.
-    accounts_.set_balance_at(from_idx, intx::be::store<evmc::uint256be>(from_u - v_u));
-    accounts_.set_balance_at(to_idx,   intx::be::store<evmc::uint256be>(to_u   + v_u));
+    accounts_.set_balance_at(from_idx,
+                             intx::be::store<evmc::uint256be>(from_u - v_u),
+                             tx_counter_);
+    accounts_.set_balance_at(to_idx,
+                             intx::be::store<evmc::uint256be>(to_u   + v_u),
+                             tx_counter_);
 }
 
 evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
@@ -443,14 +498,28 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
         derive_create_address(msg, sender_nonce_pre, init_code, init_size);
 
     // 2. Bump sender nonce (journaled).
-    journal_.log_nonce(sender_idx, sender_nonce_pre);
-    accounts_.set_nonce_at(sender_idx, sender_nonce_pre + 1);
+    journal_.log_nonce(sender_idx, sender_nonce_pre,
+                       accounts_.last_tx_idx_at(sender_idx));
+    accounts_.set_nonce_at(sender_idx, sender_nonce_pre + 1, tx_counter_);
 
     // 3. EIP-684 collision check + initialize the new account (nonce
     //    = 1 + value transfer). Returns false on collision.
     if (!init_create_account(new_addr, msg)) {
         rollback(cp);
         return evmc::Result{EVMC_FAILURE, 0, 0, nullptr, 0};
+    }
+
+    // EIP-2929: the new contract address is added to accessed_addresses
+    // at creation time, so subsequent EXTCODE*/CALL on it within this
+    // tx is WARM (100 gas) rather than COLD (2600 gas). Journaled —
+    // if the surrounding frame reverts, the warming is undone.
+    {
+        const size_t na_idx = accounts_.index_of(new_addr);
+        if (!accounts_.is_warm_at(na_idx, tx_counter_)) {
+            journal_.log_account_warm(na_idx,
+                                      accounts_.last_tx_idx_at(na_idx));
+        }
+        accounts_.mark_touched_at(na_idx, tx_counter_);
     }
 
     // 4. Execute the init code with the new address as the recipient.
@@ -462,6 +531,19 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
         rollback(cp);
         return result;
     }
+
+    // EIP-2 code-deposit cost (200 gas per byte of deployed code).
+    // Charged AFTER the init code's RETURN, deducted from result's
+    // remaining gas. If the leftover gas can't cover the deposit, the
+    // whole CREATE fails (per EIP-2 / Homestead+ semantics).
+    constexpr int64_t CODE_DEPOSIT_COST = 200;
+    const int64_t deposit =
+        static_cast<int64_t>(result.output_size) * CODE_DEPOSIT_COST;
+    if (result.gas_left < deposit) {
+        rollback(cp);
+        return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0};
+    }
+    result.gas_left -= deposit;
 
     // 5. Register the deployed code on the new account and stamp the
     //    derived address on the result.
@@ -498,8 +580,9 @@ bool ZiskStateDB::init_create_account(const evmc::address& new_addr,
     // Initialize the new account: nonce = 1 (post EIP-161) and the
     // value transfer. Both go through the journal so a revert unwinds
     // them.
-    journal_.log_nonce(new_idx, accounts_.nonce_at(new_idx));
-    accounts_.set_nonce_at(new_idx, 1);
+    journal_.log_nonce(new_idx, accounts_.nonce_at(new_idx),
+                       accounts_.last_tx_idx_at(new_idx));
+    accounts_.set_nonce_at(new_idx, 1, tx_counter_);
 
     if (intx::be::load<intx::uint256>(msg.value) != 0) {
         transfer_value(msg.sender, new_addr, msg.value);
@@ -516,8 +599,21 @@ void ZiskStateDB::register_deployed_code(const evmc::address& new_addr,
     const size_t new_idx = accounts_.index_of(new_addr);
     const auto deployed_hash =
         keccak256_bytes32(result.output_data, result.output_size);
-    journal_.log_code_hash(new_idx, accounts_.code_hash_at(new_idx));
-    accounts_.set_code_hash_at(new_idx, deployed_hash);
+    const char* trace_env = std::getenv("ZEG_TRACE_TX");
+    if (trace_env != nullptr &&
+        tx_counter_ == static_cast<uint64_t>(std::atoi(trace_env) + 1)) {
+        std::fprintf(stderr, "DBG deployed addr=0x");
+        for (int i = 0; i < 20; ++i) std::fprintf(stderr, "%02x", new_addr.bytes[i]);
+        std::fprintf(stderr, " hash=0x");
+        for (int i = 0; i < 32; ++i) std::fprintf(stderr, "%02x", deployed_hash.bytes[i]);
+        std::fprintf(stderr, " size=%zu code=0x", result.output_size);
+        for (size_t i = 0; i < result.output_size && i < 60; ++i)
+            std::fprintf(stderr, "%02x", result.output_data[i]);
+        std::fprintf(stderr, "\n");
+    }
+    journal_.log_code_hash(new_idx, accounts_.code_hash_at(new_idx),
+                           accounts_.last_tx_idx_at(new_idx));
+    accounts_.set_code_hash_at(new_idx, deployed_hash, tx_counter_);
 }
 
 void ZiskStateDB::pre_execute_block() noexcept {
@@ -563,10 +659,19 @@ void ZiskStateDB::pre_execute_block() noexcept {
     // The contract stores hashes indexed by (block_number) so
     // BLOCKHASH can reach further back than the opcode's 256-block
     // window via the predeploy.
+    //
+    // NOTE: `consensus_.parent_hash()` is the parent's STATE ROOT in
+    // this guest's binary format (see get_block_hash() above) — NOT
+    // the parent's block hash. The actual block hash lives in
+    // `previous_blocks_[0]` (the parent), where the EVM BLOCKHASH
+    // opcode reads it. Passing parent_hash() here was a silent bug:
+    // the call would succeed but the contract would store the wrong
+    // value, producing a state-trie divergence the test only catches
+    // via post-state-root mismatch.
     {
-        const auto& parent = consensus_.parent_hash();
+        const auto parent_block_hash = previous_blocks_.hash(0);
         (void)system_call(kHistoryStorageAddress,
-                          std::span<const uint8_t>{parent.bytes, 32});
+                          std::span<const uint8_t>{parent_block_hash.bytes, 32});
     }
 }
 
@@ -581,6 +686,21 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         transient_.reset();
 
         const auto& tx = transactions.at(i);
+
+        // EIP-2929 / EIP-3651 / EIP-2930 / EIP-7702 pre-warming.
+        // Marking these warm BEFORE the EVM starts means the first
+        // access by the EVM charges WARM cost (100) instead of
+        // COLD (2600 for accounts, 2100 for slots).
+        pre_warm_for_tx(tx);
+
+        // DEBUG: attach an evmone instruction tracer for the target tx.
+        static std::ofstream trace_out;
+        auto* vm_ev = static_cast<evmone::VM*>(vm_raw_);
+        const char* trace_env = std::getenv("ZEG_TRACE_TX");
+        if (trace_env != nullptr && i == static_cast<size_t>(std::atoi(trace_env))) {
+            if (!trace_out.is_open()) trace_out.open("/tmp/cpp_tx_trace.jsonl");
+            vm_ev->add_tracer(evmone::create_instruction_tracer(trace_out));
+        }
 
         // Push the receipt for this tx up front. emit_log appends to
         // tx_receipts_.back().logs during execution; finalize_receipt
@@ -614,11 +734,99 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         }
 
         const uint64_t gas_used = settle_tx_gas(tx, result, sender_idx, auth_refund);
+        std::fprintf(stderr, "TX %zu gas_used=%llu status=%d\n",
+                     i, (unsigned long long)gas_used,
+                     (int)result.status_code);
         finalize_receipt(result, gas_used);
+
+        // Detach tracer after the traced tx so later txs don't trace.
+        if (trace_env != nullptr && i == static_cast<size_t>(std::atoi(trace_env))) {
+            vm_ev->remove_tracers();
+            trace_out.flush();
+            trace_out.close();
+        }
     }
 }
 
 // ----- per-tx pipeline helpers ----------------------------------------------
+
+void ZiskStateDB::pre_warm_for_tx(const Transactions::View& tx) noexcept {
+    auto warm_addr = [&](const evmc::address& a) {
+        // Precompiles are inherently warm — no Accounts entry needed.
+        if (evmone::state::is_precompile(EVMC_OSAKA, a)) {
+            return;
+        }
+        // EIP-2930 lets a tx pre-declare addrs/slots it might touch
+        // but never actually access (paying for the warming up front
+        // is the trade-off). If our prestate doesn't have the addr —
+        // because the EVM never reached it — skip; nothing to warm.
+        if (!accounts_.contains(a)) {
+            return;
+        }
+        const size_t idx = accounts_.index_of(a);
+        accounts_.mark_touched_at(idx, tx_counter_);
+    };
+
+    // tx.origin (EIP-2929) + coinbase (EIP-3651, Shanghai+) + tx.to.
+    warm_addr(tx.sender());
+    warm_addr(consensus_.beneficiary());
+    if (tx.to() != nullptr) {
+        warm_addr(*tx.to());
+    }
+
+    // EIP-2930 access list: [[addr, [slot_keys...]], ...] — present on
+    // Type-1 (AccessList), Type-2 (DynamicFee), Type-3 (Blob), Type-4
+    // (SetCode), Type-5 (Osaka initcode) txs. Legacy txs have no list.
+    const auto access_rlp = tx.access_list_rlp();
+    if (!access_rlp.empty()) {
+        const auto outer = rlp::decode_item(access_rlp);
+        if (outer.kind != rlp::ItemKind::List) {
+            fatal("access_list_rlp: not a list");
+        }
+        rlp::ListIter it{outer.payload};
+        while (it.has_next()) {
+            const auto entry = it.next();
+            if (entry.kind != rlp::ItemKind::List) {
+                fatal("access_list entry not a list");
+            }
+            rlp::ListIter eit{entry.payload};
+            if (!eit.has_next()) fatal("access_list entry missing addr");
+            const auto addr_item = eit.next();
+            if (addr_item.kind != rlp::ItemKind::String ||
+                addr_item.payload.size() != 20) {
+                fatal("access_list addr not 20-byte string");
+            }
+            evmc::address a;
+            std::memcpy(a.bytes, addr_item.payload.data(), 20);
+            warm_addr(a);
+
+            if (!eit.has_next()) fatal("access_list entry missing keys");
+            const auto keys_item = eit.next();
+            if (keys_item.kind != rlp::ItemKind::List) {
+                fatal("access_list keys not a list");
+            }
+            rlp::ListIter kit{keys_item.payload};
+            while (kit.has_next()) {
+                const auto k = kit.next();
+                if (k.kind != rlp::ItemKind::String ||
+                    k.payload.size() != 32) {
+                    fatal("access_list slot key not 32-byte string");
+                }
+                evmc::bytes32 slot;
+                std::memcpy(slot.bytes, k.payload.data(), 32);
+                if (!storages_.contains(a, slot)) {
+                    continue;  // unused access-list slot; skip.
+                }
+                const size_t sidx = storages_.index_of(a, slot);
+                storages_.mark_touched_at(sidx, tx_counter_);
+            }
+        }
+    }
+
+    // EIP-7702 authority addresses are pre-warmed during
+    // apply_authorization_list (which is called right after this
+    // helper but before EVM execution — also OK).
+}
 
 evmc_tx_context ZiskStateDB::build_per_tx_context(
         const Transactions::View&      tx,
@@ -628,14 +836,26 @@ evmc_tx_context ZiskStateDB::build_per_tx_context(
 
     auto ctx      = tx_context_;
     ctx.tx_origin = tx.sender();
-    // Effective gas-price approximation. Proper EIP-1559 form is
-    // min(max_fee_per_gas, base_fee + max_priority_fee); using
-    // max_fee_per_gas as an upper bound is a TODO for accurate gas
-    // accounting.
-    ctx.tx_gas_price = (tx.type() == TxType::Legacy ||
-                        tx.type() == TxType::AccessList)
-                           ? tx.gas_price()
-                           : tx.max_fee_per_gas();
+    // Effective gas price per EIP-1559:
+    //   legacy / access-list:  gas_price (no separate priority field)
+    //   typed (1559+):         min(max_fee_per_gas,
+    //                              base_fee + max_priority_fee_per_gas)
+    // The GASPRICE opcode returns this value; mis-computing it changes
+    // execution paths in contracts that branch on `tx.gasprice`.
+    if (tx.type() == TxType::Legacy || tx.type() == TxType::AccessList) {
+        ctx.tx_gas_price = tx.gas_price();
+    } else {
+        const auto base_fee = intx::be::load<intx::uint256>(
+            consensus_.base_fee_per_gas());
+        const auto priority = intx::be::load<intx::uint256>(
+            tx.max_priority_fee_per_gas());
+        const auto max_fee  = intx::be::load<intx::uint256>(
+            tx.max_fee_per_gas());
+        const auto eff = (base_fee + priority < max_fee)
+                             ? (base_fee + priority)
+                             : max_fee;
+        ctx.tx_gas_price = intx::be::store<evmc::uint256be>(eff);
+    }
 
     // EIP-4844 blob_hashes — only Type-3 carries them; other types
     // leave the pair zeroed.
@@ -709,7 +929,8 @@ int64_t ZiskStateDB::apply_pre_evm_accounting(const Transactions::View& tx,
         fatal("tx gas_limit below intrinsic gas");
     }
 
-    accounts_.set_nonce_at(sender_idx, accounts_.nonce_at(sender_idx) + 1);
+    accounts_.set_nonce_at(sender_idx, accounts_.nonce_at(sender_idx) + 1,
+                           tx_counter_);
 
     const auto eff_gas_price_u =
         intx::be::load<intx::uint256>(tx_context_.tx_gas_price);
@@ -738,7 +959,8 @@ int64_t ZiskStateDB::apply_pre_evm_accounting(const Transactions::View& tx,
         fatal("tx sender balance below upfront cost");
     }
     accounts_.set_balance_at(sender_idx,
-        intx::be::store<evmc::uint256be>(bal_u - upfront_u));
+        intx::be::store<evmc::uint256be>(bal_u - upfront_u),
+        tx_counter_);
 
     return intrinsic_gas;
 }
@@ -833,6 +1055,13 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item&          auth
 
     // Signer must be in the witness with the matching nonce.
     const size_t signer_idx = accounts_.index_of(signer);
+
+    // EIP-7702: every recovered authority address is added to the
+    // tx-level access list (pre-warmed) regardless of whether the
+    // auth's other validity checks pass. Do it here, BEFORE the nonce
+    // check, so a nonce-mismatched auth still warms its signer.
+    accounts_.mark_touched_at(signer_idx, tx_counter_);
+
     if (accounts_.nonce_at(signer_idx) != a_nonce) {
         return 0;
     }
@@ -840,23 +1069,40 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item&          auth
     // EIP-7702 refund: PER_EMPTY_ACCOUNT_COST minus
     // PER_AUTH_BASE_COST (25000 − 12500 = 12500) per auth whose
     // signer's account already had state. Read BEFORE the mutation
-    // below.
-    const bool signer_was_non_empty =
+    // below. "Has state" is the EIP-161 non-empty predicate:
+    // nonce != 0 OR balance != 0 OR code != EMPTY — same shape as
+    // `account_exists`. Forgetting the balance leg under-refunds
+    // for signers that only hold ether (no nonce / no code).
+    bool signer_was_non_empty =
         accounts_.nonce_at(signer_idx) != 0 ||
         accounts_.code_hash_at(signer_idx) != EMPTY_CODE_HASH;
+    if (!signer_was_non_empty) {
+        const auto bal = accounts_.balance_at(signer_idx);
+        for (uint8_t b : bal.bytes) {
+            if (b != 0) { signer_was_non_empty = true; break; }
+        }
+    }
 
-    // Bump signer's nonce + set delegation code_hash =
-    // keccak(0xef0100 || delegate). Raw setters — these changes
-    // survive any EVM revert below.
-    accounts_.set_nonce_at(signer_idx, a_nonce + 1);
-    uint8_t delegation[23];
-    delegation[0] = 0xef;
-    delegation[1] = 0x01;
-    delegation[2] = 0x00;
-    std::memcpy(delegation + 3, delegate.bytes, 20);
-    const auto delegation_hash = keccak256_bytes32(
-        delegation, sizeof(delegation));
-    accounts_.set_code_hash_at(signer_idx, delegation_hash);
+    // Bump signer's nonce + set delegation code_hash. Raw setters —
+    // these changes survive any EVM revert below.
+    accounts_.set_nonce_at(signer_idx, a_nonce + 1, tx_counter_);
+
+    // EIP-7702 carve-out: delegate == 0x000...000 means CLEAR the
+    // delegation rather than install a stub. Set code_hash back to
+    // EMPTY_CODE_HASH.
+    constexpr evmc::address kZeroAddress{};
+    if (delegate == kZeroAddress) {
+        accounts_.set_code_hash_at(signer_idx, EMPTY_CODE_HASH, tx_counter_);
+    } else {
+        uint8_t delegation[23];
+        delegation[0] = 0xef;
+        delegation[1] = 0x01;
+        delegation[2] = 0x00;
+        std::memcpy(delegation + 3, delegate.bytes, 20);
+        const auto delegation_hash = keccak256_bytes32(
+            delegation, sizeof(delegation));
+        accounts_.set_code_hash_at(signer_idx, delegation_hash, tx_counter_);
+    }
 
     return signer_was_non_empty ? 12500 : 0;
 }
@@ -897,21 +1143,44 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
 
         // Initialize the new account (nonce = 1) and transfer value.
         // Both go through the journal so a revert unwinds them.
-        journal_.log_nonce(new_idx, accounts_.nonce_at(new_idx));
-        accounts_.set_nonce_at(new_idx, 1);
+        journal_.log_nonce(new_idx, accounts_.nonce_at(new_idx),
+                           accounts_.last_tx_idx_at(new_idx));
+        accounts_.set_nonce_at(new_idx, 1, tx_counter_);
         if (intx::be::load<intx::uint256>(msg.value) != 0) {
             transfer_value(msg.sender, new_addr, msg.value);
         }
+
+        // EIP-2929: newly-created contract is added to the access list.
+        // Journaled for consistency with the nested-CREATE path; at
+        // top level there's no enclosing checkpoint to roll back, so
+        // the entry is unused — but emitting it keeps the invariant
+        // "every warming inside a frame is journaled" uniform.
+        if (!accounts_.is_warm_at(new_idx, tx_counter_)) {
+            journal_.log_account_warm(new_idx,
+                                      accounts_.last_tx_idx_at(new_idx));
+        }
+        accounts_.mark_touched_at(new_idx, tx_counter_);
 
         auto result = vm_.execute(*this, EVMC_OSAKA, msg,
                                   entry_code.data(), entry_code.size());
 
         if (result.status_code == EVMC_SUCCESS) {
+            // EIP-2 code deposit cost (200 / byte). Deducted from
+            // the CREATE frame's remaining gas; OOG if insufficient.
+            constexpr int64_t CODE_DEPOSIT_COST = 200;
+            const int64_t deposit =
+                static_cast<int64_t>(result.output_size) * CODE_DEPOSIT_COST;
+            if (result.gas_left < deposit) {
+                return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0};
+            }
+            result.gas_left -= deposit;
+
             const auto deployed_hash = keccak256_bytes32(
                 result.output_data, result.output_size);
             journal_.log_code_hash(new_idx,
-                                   accounts_.code_hash_at(new_idx));
-            accounts_.set_code_hash_at(new_idx, deployed_hash);
+                                   accounts_.code_hash_at(new_idx),
+                                   accounts_.last_tx_idx_at(new_idx));
+            accounts_.set_code_hash_at(new_idx, deployed_hash, tx_counter_);
             result.create_address = new_addr;
         }
         return result;
@@ -923,7 +1192,21 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
     msg.code_address = *tx.to();
     msg.input_data   = tx.data().data();
     msg.input_size   = tx.data().size();
-    const auto entry_code = this->code(msg.recipient);
+    auto entry_code = this->code(msg.recipient);
+
+    // EIP-7702 top-level delegation: if the recipient is a delegated
+    // EOA (code starts with 0xef0100 || delegate), execute the
+    // delegate's code instead of the 23-byte stub. evmone follows
+    // delegation automatically for CALL/STATICCALL/etc. opcodes
+    // inside execution, but NOT for the entry code we hand it for
+    // the top-level frame — that's our responsibility.
+    if (entry_code.size() >= 23 &&
+        entry_code[0] == 0xef && entry_code[1] == 0x01 && entry_code[2] == 0x00) {
+        evmc::address delegate;
+        std::memcpy(delegate.bytes, entry_code.data() + 3, 20);
+        msg.code_address = delegate;
+        entry_code = this->code(delegate);
+    }
 
     if (intx::be::load<intx::uint256>(msg.value) != 0) {
         transfer_value(msg.sender, msg.recipient, msg.value);
@@ -950,9 +1233,25 @@ uint64_t ZiskStateDB::settle_tx_gas(const Transactions::View& tx,
     const int64_t refund_pre_cap = result.gas_refund + auth_refund;
     const int64_t refund         =
         (refund_pre_cap < max_refund) ? refund_pre_cap : max_refund;
-    const int64_t gas_remaining  = gas_left + refund;
-    const int64_t gas_used       =
-        static_cast<int64_t>(tx.gas_limit()) - gas_remaining;
+    const int64_t gas_remaining_raw = gas_left + refund;
+    int64_t gas_used = static_cast<int64_t>(tx.gas_limit()) - gas_remaining_raw;
+
+    // EIP-7623 (Prague): calldata-cost floor. tokens = zero_bytes * 1
+    // + non_zero_bytes * 4; floor = 21000 + tokens * 10. The tx must
+    // be charged at least the floor — this kicks in for txs with
+    // large calldata but low execution (e.g. early-reverting calls).
+    {
+        int64_t tokens = 0;
+        for (uint8_t b : tx.data()) {
+            tokens += (b == 0) ? 1 : 4;
+        }
+        const int64_t floor_gas = 21000 + tokens * 10;
+        if (gas_used < floor_gas) {
+            gas_used = floor_gas;
+        }
+    }
+    const int64_t gas_remaining =
+        static_cast<int64_t>(tx.gas_limit()) - gas_used;
 
     const auto eff_gas_price_u =
         intx::be::load<intx::uint256>(tx_context_.tx_gas_price);
@@ -964,7 +1263,8 @@ uint64_t ZiskStateDB::settle_tx_gas(const Transactions::View& tx,
         const auto bal_u =
             intx::be::load<intx::uint256>(accounts_.balance_at(sender_idx));
         accounts_.set_balance_at(sender_idx,
-            intx::be::store<evmc::uint256be>(bal_u + credit_u));
+            intx::be::store<evmc::uint256be>(bal_u + credit_u),
+            tx_counter_);
     }
 
     // Pay coinbase the priority-fee portion only (EIP-1559: the
@@ -984,7 +1284,8 @@ uint64_t ZiskStateDB::settle_tx_gas(const Transactions::View& tx,
         const auto bal_u =
             intx::be::load<intx::uint256>(accounts_.balance_at(coinbase_idx));
         accounts_.set_balance_at(coinbase_idx,
-            intx::be::store<evmc::uint256be>(bal_u + fee_u));
+            intx::be::store<evmc::uint256be>(bal_u + fee_u),
+            tx_counter_);
     }
 
     return static_cast<uint64_t>(gas_used);
@@ -1032,7 +1333,8 @@ void ZiskStateDB::credit_withdrawals() noexcept {
         const auto credit_u =
             intx::uint256{w.amount_gwei()} * gwei_to_wei;
         accounts_.set_balance_at(idx,
-            intx::be::store<evmc::uint256be>(bal_u + credit_u));
+            intx::be::store<evmc::uint256be>(bal_u + credit_u),
+            tx_counter_);
     }
 }
 

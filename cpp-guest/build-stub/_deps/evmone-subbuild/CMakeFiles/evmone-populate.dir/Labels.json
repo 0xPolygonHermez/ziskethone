@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-subbuild/CMakeFiles/evmone-populate"
+		},
+		{
+			"file" : "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-subbuild/CMakeFiles/evmone-populate.rule"
+		},
+		{
+			"file" : "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-subbuild/CMakeFiles/evmone-populate-complete.rule"
+		},
+		{
+			"file" : "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-subbuild/evmone-populate-prefix/src/evmone-populate-stamp/evmone-populate-build.rule"
+		},
+		{
+			"file" : "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-subbuild/evmone-populate-prefix/src/evmone-populate-stamp/evmone-populate-configure.rule"
+		},
+		{
+			"file" : "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-subbuild/evmone-populate-prefix/src/evmone-populate-stamp/evmone-populate-download.rule"
+		},
+		{
+			"file" : "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-subbuild/evmone-populate-prefix/src/evmone-populate-stamp/evmone-populate-install.rule"
+		},
+		{
+			"file" : "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-subbuild/evmone-populate-prefix/src/evmone-populate-stamp/evmone-populate-mkdir.rule"
+		},
+		{
+			"file" : "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-subbuild/evmone-populate-prefix/src/evmone-populate-stamp/evmone-populate-patch.rule"
+		},
+		{
+			"file" : "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-subbuild/evmone-populate-prefix/src/evmone-populate-stamp/evmone-populate-test.rule"
+		},
+		{
+			"file" : "/Users/jbaylina/git/zisk/zisk_eth_guest/cpp-guest/build-stub/_deps/evmone-subbuild/evmone-populate-prefix/src/evmone-populate-stamp/evmone-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"evmone-populate"
+		],
+		"name" : "evmone-populate"
+	}
+}

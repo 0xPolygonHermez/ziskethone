@@ -1,0 +1,2 @@
+/usr/bin/ar qc ../../../../lib/libevmone-standalone.a
+/usr/bin/ranlib ../../../../lib/libevmone-standalone.a

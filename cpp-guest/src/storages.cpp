@@ -1,5 +1,7 @@
 #include "zeg/storages.hpp"
 
+#include <cstdio>
+
 #include "zeg/fatal.hpp"
 #include "zeg/stream.hpp"
 
@@ -29,6 +31,11 @@ size_t Storages::index_of(const evmc::address& addr,
     return it->second;
 }
 
+bool Storages::contains(const evmc::address& addr,
+                        const evmc::bytes32& position) const noexcept {
+    return index_.find(Key{addr, position}) != index_.end();
+}
+
 evmc::bytes32 Storages::value(const evmc::address& addr,
                               const evmc::bytes32& position,
                               uint64_t              tx_idx) {
@@ -41,14 +48,14 @@ void Storages::set_value(const evmc::address& addr,
                          const evmc::bytes32& position,
                          const evmc::bytes32& v,
                          uint64_t              tx_idx) {
-    const size_t i = index_of(addr, position);
-    mark_touched_at(i, tx_idx);
-    set_value_at(i, v);
+    set_value_at(index_of(addr, position), v, tx_idx);
 }
 
-void Storages::set_value_at(size_t idx, const evmc::bytes32& v) {
-    mods_[idx].value = v;
-    mods_[idx].dirty = true;
+void Storages::set_value_at(size_t idx, const evmc::bytes32& v, uint64_t tx_idx) {
+    auto& m = mods_[idx];
+    m.value       = v;
+    m.dirty       = true;
+    m.last_tx_idx = tx_idx;
 }
 
 void Storages::mark_touched_at(size_t idx, uint64_t tx_idx) noexcept {
@@ -62,6 +69,17 @@ void Storages::mark_touched_at(size_t idx, uint64_t tx_idx) noexcept {
 
 bool Storages::is_warm_at(size_t idx, uint64_t tx_idx) const noexcept {
     return mods_[idx].last_tx_idx == tx_idx;
+}
+
+uint64_t Storages::last_tx_idx_at(size_t idx) const noexcept {
+    return mods_[idx].last_tx_idx;
+}
+
+void Storages::set_warm_at(size_t idx, uint64_t tx_idx) noexcept {
+    // Unconditional: unlike `mark_touched_at`, this can step
+    // `last_tx_idx` backward — used by the journal's rollback path
+    // to restore the pre-write value.
+    mods_[idx].last_tx_idx = tx_idx;
 }
 
 const evmc::bytes32& Storages::tx_original_at(size_t idx) const noexcept {
@@ -86,6 +104,20 @@ const evmc::bytes32& Storages::value_orig_at(size_t idx) const noexcept {
 
 bool Storages::is_read_only_at(size_t idx) const noexcept {
     return originals_[idx].is_read_only();
+}
+
+void Storages::check_read_only_unchanged() const {
+    for (size_t i = 0; i < originals_.size(); ++i) {
+        if (!originals_[i].is_read_only()) continue;
+        if (value_at(i) != originals_[i].value()) {
+            std::fprintf(stderr, "DBG read-only slot mutated idx=%zu addr=0x", i);
+            for (uint8_t b : originals_[i].address().bytes)  std::fprintf(stderr, "%02x", b);
+            std::fprintf(stderr, " pos=0x");
+            for (uint8_t b : originals_[i].position().bytes) std::fprintf(stderr, "%02x", b);
+            std::fprintf(stderr, "\n");
+            fatal("Storages::check_read_only_unchanged: value mutated");
+        }
+    }
 }
 
 } // namespace zeg

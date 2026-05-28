@@ -37,7 +37,10 @@ public:
     // present. Also touches the slot for tx `tx_idx` (snapshots the
     // pre-tx value into `tx_original_at(idx)` if this is the first
     // access in this tx) so the EVM sees the correct EIP-2929 warm
-    // state and EIP-2200 original on subsequent calls.
+    // state and EIP-2200 original on subsequent calls. The cold→warm
+    // transition is NOT journaled here; the caller (ZiskStateDB)
+    // captures it via `Journal::log_storage_warm` when running inside
+    // a revertible EVM frame.
     evmc::bytes32 value(const evmc::address& addr,
                         const evmc::bytes32& position,
                         uint64_t              tx_idx);
@@ -51,8 +54,11 @@ public:
                    uint64_t              tx_idx);
 
     // By-index write accessor. Skips the hashmap lookup; useful for the
-    // journal's rollback path where the index is already known.
-    void set_value_at(size_t idx, const evmc::bytes32& v);
+    // journal's rollback path where the index is already known. Atomic:
+    // sets the slot value AND `last_tx_idx` in one call, so the same
+    // setter handles both forward writes (caller passes `tx_counter_`)
+    // and journal rollback (caller passes the pre-write `old_last_tx_idx`).
+    void set_value_at(size_t idx, const evmc::bytes32& v, uint64_t tx_idx);
 
     // By-index read accessors. `value_at` returns the *current* value
     // (modification if dirty, else original); `value_orig_at` always
@@ -73,16 +79,42 @@ public:
     size_t index_of(const evmc::address& addr,
                     const evmc::bytes32& position) const;
 
+    // DBG: non-fataling probe — true iff (addr, position) is in the table.
+    bool contains(const evmc::address& addr,
+                  const evmc::bytes32& position) const noexcept;
+
     // ----- per-tx tracking (EIP-2929 warm/cold + EIP-2200 originals) -----
     //
     // When a tx first touches a slot, snapshot the current value into
     // `tx_original` and bump `last_tx_idx`. Idempotent within a tx.
-    // These fields are NEVER journaled — per EIP-2929 the warm state
-    // and per-tx-original survive intra-tx reverts.
+    // Warm state IS journaled — but the journaling happens at the
+    // caller (ZiskStateDB) via `Journal::log_storage_warm` BEFORE the
+    // bump. The table layer is journal-free; the rollback path uses
+    // `set_warm_at` (below) to restore a prior `last_tx_idx`, and the
+    // `set_value_at` overload above to restore both the slot value and
+    // warmth atomically. `tx_original` is not journaled — it's only
+    // consulted when `last_tx_idx == current_tx_idx`, which the
+    // restored `last_tx_idx` already gates correctly.
     void                 mark_touched_at(size_t idx, uint64_t tx_idx) noexcept;
 
     // True iff this slot was touched in tx `tx_idx` (= warm for it).
     bool                 is_warm_at(size_t idx, uint64_t tx_idx) const noexcept;
+
+    // Read the raw `last_tx_idx` field — used by ZiskStateDB to
+    // capture the pre-write value for the journal.
+    uint64_t             last_tx_idx_at(size_t idx) const noexcept;
+
+    // Unconditional setter for `last_tx_idx`. Used by the journal's
+    // rollback path to restore the pre-write value (which may be
+    // smaller than the current one — `mark_touched_at` only bumps up).
+    void                 set_warm_at(size_t idx, uint64_t tx_idx) noexcept;
+
+    // Walk every slot flagged read-only in the input stream and assert
+    // the current value still matches its original. Read-only slots
+    // are part of the witness but the prover claims they are not
+    // mutated; if execution wrote to one, the new storage trie would
+    // diverge silently. Aborts via zeg::fatal on mismatch.
+    void                 check_read_only_unchanged() const;
 
     // Value at the start of the tx that last touched this slot. Only
     // meaningful when `is_warm_at(idx, current_tx_idx) == true`.
@@ -129,10 +161,13 @@ private:
     // `last_tx_idx` / `tx_original` track EIP-2929 warm state and
     // EIP-2200 per-tx-original: on the first touch in a tx,
     // `mark_touched_at` snapshots the slot's current value into
-    // `tx_original` and bumps `last_tx_idx` to the tx counter. These
-    // two fields are NOT journaled — warm state survives intra-tx
-    // reverts per EIP-2929. `last_tx_idx == 0` is the never-touched
-    // sentinel; the tx counter starts at 1.
+    // `tx_original` and bumps `last_tx_idx` to the tx counter.
+    // `last_tx_idx` IS journaled via Journal::log_storage_warm so
+    // a reverted frame restores the prior (possibly cold) value.
+    // `tx_original` is not journaled — it's only consulted when
+    // `last_tx_idx == current_tx_idx`, which the journal restores.
+    // `last_tx_idx == 0` is the never-touched sentinel; the tx
+    // counter starts at 1.
     struct Mods {
         bool          dirty : 1   = false;
         evmc::bytes32 value{};

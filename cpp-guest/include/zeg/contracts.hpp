@@ -41,6 +41,11 @@ public:
     // a hard input-completeness bug).
     size_t index_of(const evmc::bytes32& hash) const;
 
+    // Non-fataling probe. Returns true iff `hash` is in the table.
+    bool has(const evmc::bytes32& hash) const noexcept {
+        return index_.find(hash) != index_.end();
+    }
+
     // Look up the full Contract record by keccak code hash. Same abort
     // semantics as `index_of`.
     const Contract& by_hash(const evmc::bytes32& hash) const {

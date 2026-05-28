@@ -187,6 +187,13 @@ public:
     // `transactions` was already parsed up front.
     void execute_block(const Transactions& transactions) noexcept;
 
+    // DEBUG: per-stage entry points exposed so a harness can run a
+    // subset of the pipeline and observe state-root divergence at
+    // each stage. Production code paths through `execute_block` only.
+    void pre_execute_block_pub () noexcept { pre_execute_block(); }
+    void process_transactions_pub(const Transactions& t) noexcept { process_transactions(t); }
+    void post_execute_block_pub() noexcept { post_execute_block(); }
+
 private:
     // ===== Private methods =====
 
@@ -239,6 +246,14 @@ private:
     // needs) and may mutate Accounts / Storages / the in-progress
     // receipt directly. `process_transactions` itself is the
     // orchestrator and stays small.
+
+    // EIP-2929 / 3651 / 2930 / 7702 pre-warming. Marks the addresses
+    // and slots that the spec considers warm-at-tx-start: tx sender,
+    // tx recipient, coinbase, precompiles, EIP-2930 access list,
+    // EIP-7702 authority addresses. Without this the EVM charges
+    // cold-access gas (~2500–2600 extra) on the first touch and the
+    // tx's gas_used diverges from chain.
+    void pre_warm_for_tx(const Transactions::View& tx) noexcept;
 
     // Build the per-tx evmc_tx_context from `tx_context_` (block-level
     // fields filled by pre_execute_block) + per-tx fields from `tx`.
@@ -318,6 +333,11 @@ private:
 
     evmc_tx_context       tx_context_{};
     Journal               journal_{};
+    // `vm_raw_` holds the underlying evmc_vm pointer so we can cast it
+    // to `evmone::VM*` for tracer attachment (the evmc::VM C++ wrapper
+    // keeps `m_instance` private and offers no accessor). `vm_` is
+    // initialised from this pointer in the constructor's init list.
+    evmc_vm*              vm_raw_;
     evmc::VM              vm_;
     // EIP-1153 transient storage. Reset at the start of every EVM
     // frame (each tx + each system call) by the call sites that bump

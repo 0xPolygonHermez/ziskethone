@@ -1,5 +1,6 @@
 #include "zeg/contracts.hpp"
 
+#include <cstdio>
 #include <cstring>
 
 #include <evmone_precompiles/keccak.hpp>

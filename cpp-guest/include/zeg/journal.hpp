@@ -39,14 +39,31 @@ public:
     // Push a checkpoint marker onto the stack and return its position.
     Checkpoint checkpoint();
 
-    // Record the pre-write value of one mutable field. Call BEFORE the
-    // corresponding write hits the Accounts/Storages tables. The `idx`
-    // is the row index into the corresponding table — keeps the entry
-    // small (8 B instead of 20 + maybe 32 for address + position).
-    void log_nonce    (size_t idx, uint64_t                old_value);
-    void log_balance  (size_t idx, const evmc::uint256be&  old_value);
-    void log_code_hash(size_t idx, const evmc::bytes32&    old_value);
-    void log_storage  (size_t idx, const evmc::bytes32&    old_value);
+    // Record the pre-write value of one mutable field PLUS the
+    // pre-write `last_tx_idx`. Call BEFORE the corresponding write
+    // hits the Accounts/Storages tables. Capturing the tx_idx
+    // alongside the value lets rollback restore both atomically
+    // through the matching `set_*_at(idx, value, tx_idx)` setter —
+    // no separate warm entry is needed for the same operation. The
+    // `idx` is the row index into the corresponding table.
+    void log_nonce    (size_t idx, uint64_t                old_value,
+                       uint64_t old_last_tx_idx);
+    void log_balance  (size_t idx, const evmc::uint256be&  old_value,
+                       uint64_t old_last_tx_idx);
+    void log_code_hash(size_t idx, const evmc::bytes32&    old_value,
+                       uint64_t old_last_tx_idx);
+    void log_storage  (size_t idx, const evmc::bytes32&    old_value,
+                       uint64_t old_last_tx_idx);
+
+    // EIP-2929 warm/cold state journaling for pure-access operations
+    // (access_account / access_storage that didn't also write a value).
+    // Without this the warm state would leak across reverted frames and
+    // subsequent SLOADs/CALLs would be charged warm instead of cold —
+    // a per-tx gas undercharge. For accesses paired with a value write,
+    // use the matching log_balance/nonce/code_hash/storage above
+    // (they capture both old_value AND old_last_tx_idx).
+    void log_account_warm(size_t idx, uint64_t old_last_tx_idx);
+    void log_storage_warm(size_t idx, uint64_t old_last_tx_idx);
 
     // EIP-1153 transient storage. Unlike persistent storage, the
     // transient map is dynamic — there's no fixed index for a slot —
@@ -73,10 +90,16 @@ public:
 
 private:
     struct CheckpointMarker {};
-    struct NonceEntry    { size_t idx; uint64_t                old_value; };
-    struct BalanceEntry  { size_t idx; evmc::uint256be         old_value; };
-    struct CodeHashEntry { size_t idx; evmc::bytes32           old_value; };
-    struct StorageEntry  { size_t idx; evmc::bytes32           old_value; };
+    struct NonceEntry    { size_t idx; uint64_t        old_value;
+                                       uint64_t        old_last_tx_idx; };
+    struct BalanceEntry  { size_t idx; evmc::uint256be old_value;
+                                       uint64_t        old_last_tx_idx; };
+    struct CodeHashEntry { size_t idx; evmc::bytes32   old_value;
+                                       uint64_t        old_last_tx_idx; };
+    struct StorageEntry  { size_t idx; evmc::bytes32   old_value;
+                                       uint64_t        old_last_tx_idx; };
+    struct AccountWarmEntry { size_t idx; uint64_t     old_last_tx_idx; };
+    struct StorageWarmEntry { size_t idx; uint64_t     old_last_tx_idx; };
     struct TransientEntry {
         evmc::address  address;
         evmc::bytes32  position;
@@ -90,6 +113,8 @@ private:
         BalanceEntry,
         CodeHashEntry,
         StorageEntry,
+        AccountWarmEntry,
+        StorageWarmEntry,
         TransientEntry>;
 
     std::vector<Entry> entries_;

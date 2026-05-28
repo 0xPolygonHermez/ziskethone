@@ -72,7 +72,13 @@ constexpr uint8_t kRequestTypeConsolidation = 0x02;
 // ===== EIP-4844 blob-gas constants =====
 
 constexpr uint64_t kMinBaseFeePerBlobGas      = 1;
-constexpr uint64_t kBlobBaseFeeUpdateFraction = 3338477;
+// BLOB_BASE_FEE_UPDATE_FRACTION changes per fork:
+//   * Cancun (EIP-4844): 3,338,477
+//   * Pectra (EIP-7691): 5,007,716
+//   * BPO1   (EIP-7892): 8,346,193
+//   * BPO2   (EIP-7892): 11,684,671   ← current mainnet
+// Hardcoded to the latest mainnet value; bump on each BPO fork.
+constexpr uint64_t kBlobBaseFeeUpdateFraction = 11684671;
 constexpr uint64_t kGasPerBlob                = 131072;
 
 } // namespace zeg

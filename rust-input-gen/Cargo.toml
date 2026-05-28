@@ -2,25 +2,29 @@
 name = "rust-input-gen"
 version = "0.1.0"
 edition = "2021"
-description = "Fetches Ethereum block data via RPC and writes a binary input file for the ZisK C++ guest."
+description = "Fetches Ethereum block data via RPC and writes a BINARY_FORMAT-conformant input file for the ZisK C++ guest."
 
 [[bin]]
 name = "input-gen"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4.5", features = ["derive", "env"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 anyhow = "1"
-thiserror = "1"
+clap = { version = "4.5", features = ["derive", "env"] }
+hex = "0.4"
+sha3 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-hex = "0.4"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-byteorder = "1.5"
-sha3 = "0.10"
 
-# Enable once we wire real RLP decoding / typed RPC responses:
-# alloy = { version = "0.3", features = ["rpc-types-eth", "consensus", "rlp"] }
+alloy = { version = "0.8", features = [
+    "providers",
+    "transport-http",
+    "rpc-types-eth",
+    "consensus",
+    "eips",
+    "k256",
+] }
+k256 = "0.13"  # VerifyingKey::to_encoded_point — recover 64 B uncompressed pubkey

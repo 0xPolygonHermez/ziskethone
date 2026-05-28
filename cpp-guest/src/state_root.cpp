@@ -2,6 +2,8 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <type_traits>
 #include <utility>
@@ -26,6 +28,7 @@ using HashR        = StateRoot::HashR;
 using ExtR         = StateRoot::ExtR;
 using AccountLeafR = StateRoot::AccountLeafR;
 using StorageLeafR = StateRoot::StorageLeafR;
+using PhantomLeafR = StateRoot::PhantomLeafR;
 using NodeR        = StateRoot::NodeR;
 using CacheEntry   = StateRoot::CacheEntry;
 
@@ -56,6 +59,12 @@ enum class Op : uint64_t {
     Leaf          = 3,
     NodeRW        = 4,
     NodeR         = 5,
+    /// Untouched sibling leaf the prover needs to re-position during a
+    /// structural split. Payload: u64 path_nib_count + nib_count×u64
+    /// (low 4 bits) + u64 value_len + value_len bytes (pad to 8). The
+    /// cpp-guest builds the leaf RLP from path + value at finalize time,
+    /// so the leaf's hash adapts as its path shortens via reduce_branch.
+    PhantomLeaf   = 6,
 };
 
 // Helper: construct a NodeR holding alternative `T`. We default-construct
@@ -232,6 +241,25 @@ evmc::bytes32 pack_extension(
     return keccak256_bytes32(rlp.data(), rlp.size());
 }
 
+rlp::Bytes build_phantom_leaf_rlp(
+    const std::vector<uint8_t>& path_nibbles,
+    const std::vector<uint8_t>& value_rlp)
+{
+    using rlp::BytesView;
+    const auto hp_bytes = hex_prefix(path_nibbles, /*leaf=*/true);
+    const auto hp_rlp   = rlp::encode(BytesView{hp_bytes});
+    const auto val_rlp  = rlp::encode(BytesView{value_rlp});
+    return rlp::encode_list({hp_rlp, val_rlp});
+}
+
+evmc::bytes32 pack_phantom_leaf(
+    const std::vector<uint8_t>& path_nibbles,
+    const std::vector<uint8_t>& value_rlp)
+{
+    const auto rlp = build_phantom_leaf_rlp(path_nibbles, value_rlp);
+    return keccak256_bytes32(rlp.data(), rlp.size());
+}
+
 // Return the bytes that should occupy this child's slot inside a parent
 // branch node. Implements the MPT cap function (Yellow Paper App. D):
 //   * EmptyR → RLP empty string (`{0x80}`).
@@ -272,6 +300,11 @@ rlp::Bytes pack_to_child_ref(const NodeR& r,
         } else if constexpr (std::is_same_v<T, StorageLeafR>) {
             const auto node_rlp = build_storage_leaf_rlp(
                 x.path_nibbles, storages, x.storage_idx, which);
+            if (node_rlp.size() < 32) return node_rlp;
+            const auto h = keccak256_bytes32(node_rlp.data(), node_rlp.size());
+            return rlp::encode(BytesView{h.bytes, sizeof(h.bytes)});
+        } else if constexpr (std::is_same_v<T, PhantomLeafR>) {
+            const auto node_rlp = build_phantom_leaf_rlp(x.path_nibbles, x.value_rlp);
             if (node_rlp.size() < 32) return node_rlp;
             const auto h = keccak256_bytes32(node_rlp.data(), node_rlp.size());
             return rlp::encode(BytesView{h.bytes, sizeof(h.bytes)});
@@ -351,6 +384,8 @@ evmc::bytes32 finalize(const NodeR& r,
                                      x.storage_root, which);
         } else if constexpr (std::is_same_v<T, StorageLeafR>) {
             return pack_storage_leaf(x.path_nibbles, storages, x.storage_idx, which);
+        } else if constexpr (std::is_same_v<T, PhantomLeafR>) {
+            return pack_phantom_leaf(x.path_nibbles, x.value_rlp);
         }
     }, r);
 }
@@ -381,6 +416,11 @@ NodeR reduce_branch(std::array<NodeR, 16> children, WalkContext& ctx) {
             StorageLeafR moved = std::move(*leaf);
             moved.path_nibbles.insert(moved.path_nibbles.begin(), nibble);
             return mk_node<StorageLeafR>(std::move(moved));
+        }
+        if (auto* leaf = std::get_if<PhantomLeafR>(&only)) {
+            PhantomLeafR moved = std::move(*leaf);
+            moved.path_nibbles.insert(moved.path_nibbles.begin(), nibble);
+            return mk_node<PhantomLeafR>(std::move(moved));
         }
         if (auto* h = std::get_if<HashR>(&only)) {
             return mk_node<ExtR>(std::vector<uint8_t>{nibble}, h->hash);
@@ -458,6 +498,14 @@ NodeR walk_node(
                     &addr, readonly_mode);
                 const evmc::bytes32 storage_root =
                     finalize(storage_subtree, ctx.accounts, ctx.storages, ctx.which);
+                if (std::getenv("ZEG_DUMP_SROOT") != nullptr
+                    && ctx.pass == WalkPass::NewRoot) {
+                    std::fprintf(stderr, "SROOT %llu addr=", (unsigned long long)idx);
+                    for (uint8_t b : addr.bytes) std::fprintf(stderr, "%02x", b);
+                    std::fprintf(stderr, " sroot=");
+                    for (uint8_t b : storage_root.bytes) std::fprintf(stderr, "%02x", b);
+                    std::fprintf(stderr, "\n");
+                }
 
                 const uint64_t nonce =
                     (ctx.which == ValueSet::Original) ? ctx.accounts.nonce_orig_at(idx)
@@ -514,6 +562,20 @@ NodeR walk_node(
                 return mk_node<StorageLeafR>(std::move(path),
                                              static_cast<size_t>(idx));
             }
+        }
+
+        case Op::PhantomLeaf: {
+            const uint64_t n = read_u64_le(cursor);
+            std::vector<uint8_t> path;
+            path.reserve(n);
+            for (uint64_t i = 0; i < n; ++i) {
+                path.push_back(static_cast<uint8_t>(read_u64_le(cursor) & 0x0f));
+            }
+            const uint64_t value_len = read_u64_le(cursor);
+            std::vector<uint8_t> value(cursor, cursor + value_len);
+            cursor += value_len;
+            align_to_u64(cursor, value_len);
+            return mk_node<PhantomLeafR>(std::move(path), std::move(value));
         }
 
         case Op::NodeR: {
