@@ -18,8 +18,8 @@
 # silkworm::precompile::ecrec_run (evmone 0.19's ECRECOVER routes there).
 cmake_minimum_required(VERSION 3.28)
 
-set(ZILKWORM_ROOT "/home/dappnode/zilkworm" CACHE PATH
-    "Path to the zilkworm checkout providing evmone 0.19 + silkworm_core.")
+set(ZILKWORM_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/zilkworm" CACHE PATH
+    "Path to the zilkworm checkout providing evmone 0.19 + silkworm_core. Defaults to the in-tree git submodule (third_party/zilkworm); override to point at an external checkout for development.")
 set(ZEG_GUEST_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 # Bootstrap Cable (the cmake helper bundled with evmone) before project() —
