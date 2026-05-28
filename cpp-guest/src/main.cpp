@@ -11,10 +11,15 @@
 
 #include <array>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <vector>
+
+#ifndef ZISK
+#include <cstdio>
+#include <fstream>
+#else
+#include "zisk_io.h"  // read_input(), set_output_u32() — bare-metal Zisk I/O
+#endif
 
 #include <evmc/evmc.hpp>
 
@@ -63,13 +68,20 @@ constexpr std::array<uint8_t, 8> kPostMergeNonce{};
 } // namespace
 
 int main(int argc, char** argv) {
-    // 1. Read the entire input stream from the file path passed on
-    //    the command line. `read_input_stream` checks the magic and
-    //    returns a cursor positioned past the 8-byte magic prefix.
+    // 1. Read the entire input stream. On the host the path comes from
+    //    argv[1]; on Zisk the input lives in the INPUT region and the
+    //    path argument is ignored. `read_input_stream` checks the magic
+    //    and returns a cursor positioned past the 8-byte magic prefix.
+#ifndef ZISK
     if (argc < 2) {
         zeg::fatal("usage: zisk_eth_guest <input-file>");
     }
     const uint8_t* cursor = read_input_stream(argv[1]);
+#else
+    (void)argc;
+    (void)argv;
+    const uint8_t* cursor = read_input_stream(nullptr);
+#endif
     const uint8_t* file_base = cursor - 8;  // back up past the magic+pad
 
     // 2. Parse the six input-stream collections at main level. Stream-
@@ -117,12 +129,21 @@ int main(int argc, char** argv) {
     //   txs   → pre + process_transactions (no withdrawals / requests).
     //   post  → pre + post  (no txs).
     //   full  → everything (default; same as unset).
+#ifndef ZISK
     const char* stage = std::getenv("ZEG_STAGE");
     const bool stage_set = stage != nullptr;
     const bool skip_exec = stage_set && std::strcmp(stage, "none") == 0;
+#else
+    // Bare-metal Zisk always runs the full pipeline; no env selector.
+    const char* stage = nullptr;
+    const bool stage_set = false;
+    const bool skip_exec = false;
+#endif
     if (!stage_set || std::strcmp(stage, "full") == 0) {
         state.execute_block(transactions);
-    } else if (std::strcmp(stage, "pre") == 0) {
+    }
+#ifndef ZISK
+    else if (std::strcmp(stage, "pre") == 0) {
         state.pre_execute_block_pub();
     } else if (std::strcmp(stage, "txs") == 0) {
         state.pre_execute_block_pub();
@@ -133,6 +154,7 @@ int main(int argc, char** argv) {
     } else if (std::strcmp(stage, "none") != 0) {
         zeg::fatal("ZEG_STAGE: unknown value");
     }
+#endif  // !ZISK
 
     // 6. Verify the pre-execution state root against the parent
     //    anchor. In this guest's convention `consensus.parent_hash()`
@@ -141,9 +163,11 @@ int main(int argc, char** argv) {
     //    trie once with the original values, caches the result, and
     //    records the per-NodeR cache entries the new-root pass will
     //    reuse. `cursor` is advanced past every byte consumed.
+#ifndef ZISK
     if (std::getenv("ZEG_DUMP_SROOT_OFFSET") != nullptr) {
         std::fprintf(stderr, "SROOT_OFFSET=%zu\n", (size_t)(cursor - file_base));
     }
+#endif
     zeg::StateRoot state_root(cursor, accounts, storages);
     if (state_root.old_state_root() != consensus.parent_hash()) {
         zeg::fatal("pre-execution state root mismatch");
@@ -161,6 +185,7 @@ int main(int argc, char** argv) {
     storages.check_read_only_unchanged();
 
     // DEBUG: full dump of post-execution state for Python MPT reference.
+#ifndef ZISK
     if (std::getenv("ZEG_DUMP_ALL") != nullptr) {
         for (uint64_t i = 0; i < accounts.size(); ++i) {
             const auto& a = accounts.address_at(i);
@@ -187,6 +212,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, " ro=%d\n", (int)storages.is_read_only_at(i));
         }
     }
+#endif  // !ZISK
 
     // 7. Compute the post-execution state root. calculate_new_state_root
     //    reuses the cache populated above — it does not consume from
@@ -197,6 +223,7 @@ int main(int argc, char** argv) {
 
     // DEBUG: in `none` mode no mutations were applied — the new walk
     // must reproduce the pre-execution root byte-for-byte.
+#ifndef ZISK
     if (skip_exec) {
         if (new_state_root != state_root.old_state_root()) {
             zeg::fatal("ZEG_STAGE=none: new_state_root != old_state_root");
@@ -209,6 +236,11 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "\n");
         return 0;
     }
+#else
+    (void)skip_exec;
+    (void)stage_set;
+    (void)stage;
+#endif
 
     // 7'. Compute the execution-layer block hash of the block under
     //     proof: keccak256(RLP(header)) over the 21 Pectra header
@@ -251,6 +283,7 @@ int main(int argc, char** argv) {
         .requests_hash            = state.requests_hash(),
     };
     // DEBUG: dump every header field so we can compare against chain.
+#ifndef ZISK
     {
         auto dump32 = [](const char* name, const evmc::bytes32& v) {
             std::fprintf(stderr, "HDR %-25s 0x", name);
@@ -293,6 +326,7 @@ int main(int argc, char** argv) {
         dump32("parent_beacon_block_root", header.parent_beacon_block_root);
         dump32("requests_hash", header.requests_hash);
     }
+#endif  // !ZISK
     const evmc::bytes32 execution_block_hash =
         zeg::compute_block_header_hash(header);
 
@@ -305,7 +339,8 @@ int main(int argc, char** argv) {
 
 namespace {
 
-// ----- Stubs (to be implemented as the guest is fleshed out) -----
+#ifndef ZISK
+// ----- Host I/O (file-backed) -----
 
 const uint8_t* read_input_stream(const char* path) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
@@ -349,5 +384,45 @@ void emit_public_output(const evmc::bytes32& value) {
     }
     std::printf("\n");
 }
+
+#else  // ZISK
+// ----- Bare-metal Zisk I/O -----
+
+// The ZEG0 input file is delivered verbatim in the Zisk INPUT region,
+// length-prefixed (see zisk_io.h read_input()). The payload base is
+// 8-byte aligned (payload starts at INPUT_ADDR + 16). We verify the
+// leading magic and return a cursor positioned 8 bytes in, exactly as
+// the host path does.
+const uint8_t* read_input_stream(const char* /*path*/) {
+    const zisk_input_t inp = read_input();
+    if (inp.len < 8) {
+        zeg::fatal("read_input_stream: input too small for magic");
+    }
+    const uint8_t* base = inp.ptr;
+
+    uint32_t magic;
+    std::memcpy(&magic, base, sizeof(magic));
+    if (magic != zeg::kMagic) {
+        zeg::fatal("read_input_stream: bad magic (expected ZEG0)");
+    }
+    // Skip magic + 4 B zero padding → 8-byte-aligned cursor.
+    return base + 8;
+}
+
+void emit_public_output(const evmc::bytes32& value) {
+    // Write the 32-byte block hash as 8 u32 public-output slots. Zisk
+    // stores each u32 slot to the output region in little-endian byte
+    // order, so to make the output file read back as the hash verbatim
+    // (byte 0 first) we pack each 4-byte group little-endian here: the
+    // slot's LE store then re-emits p[0],p[1],p[2],p[3] in order.
+    for (unsigned i = 0; i < 8; ++i) {
+        const uint8_t* p = value.bytes + i * 4;
+        const unsigned v =  unsigned(p[0])        | (unsigned(p[1]) << 8) |
+                           (unsigned(p[2]) << 16) | (unsigned(p[3]) << 24);
+        set_output_u32(i, v);
+    }
+}
+
+#endif  // ZISK
 
 } // namespace
