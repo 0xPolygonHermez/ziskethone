@@ -10,6 +10,14 @@
 #include "zeg/stream.hpp"
 #include "zeg/zisk_crypto.hpp"
 
+#ifdef ZISK
+// silkworm_core's syscall-accelerated secp256k1 public-key recovery. On the
+// Zisk target this lowers to the secp256k1_add (0x803) / secp256k1_dbl (0x804)
+// CSR syscalls (+ fcall sqrt/inv hints) via evmone's evmmax::secp256k1::ecrecover,
+// instead of the software EC math the previous secp256k1_ecdsa_verify used.
+#include <zilk_core/core/crypto/ecdsa.h>
+#endif
+
 namespace zeg {
 
 namespace {
@@ -202,6 +210,40 @@ evmc::bytes32 compute_signing_hash(const Transactions::View& v) {
     return keccak256_bytes32(preimage.data(), preimage.size());
 }
 
+#ifdef ZISK
+// ============================================================================
+// Sender recovery (file-local).
+//
+// Recovers the signer address directly from (signing_hash, r, s, recovery_id)
+// via silkworm_core's syscall-accelerated secp256k1 ecrecover. On the Zisk
+// target this lowers to the secp256k1_add / secp256k1_dbl CSR syscalls (plus
+// fcall sqrt/inv hints) inside evmone's evmmax::secp256k1::ecrecover, so the
+// EC point math runs in hardware instead of the previous software MSM.
+//
+// The prover still supplies a per-tx pubkey hint in the input stream (the
+// cursor advances past it in the constructor), but recovery no longer needs
+// it: ecrecover derives the canonical pubkey/address from the signature alone.
+// ============================================================================
+
+// Recover the signer address for `v`'s (r, s) signature over its signing
+// hash. `recovery_id` is the y-parity bit (0/1) of R. Aborts via zeg::fatal
+// if recovery fails (an invalid signature can't yield a valid block).
+evmc::address recover_sender(const Transactions::View& v, uint8_t recovery_id) {
+    const evmc::bytes32 z = compute_signing_hash(v);
+
+    // signature = r (32 B, BE) || s (32 B, BE); both already big-endian
+    // 32-byte words in the View, exactly the layout ecrecover expects.
+    uint8_t signature[64];
+    std::memcpy(signature,      v.r().bytes, 32);
+    std::memcpy(signature + 32, v.s().bytes, 32);
+
+    evmc::address sender;
+    if (!silkworm_recover_address(sender.bytes, z.bytes, signature, recovery_id)) {
+        fatal("Transactions: secp256k1 sender recovery failed");
+    }
+    return sender;
+}
+#else
 // ============================================================================
 // Signature verification + sender recovery (file-local).
 //
@@ -296,6 +338,7 @@ evmc::address verify_and_recover_sender(const Transactions::View& v,
     std::memcpy(sender.bytes, ph.bytes + 12, 20);
     return sender;
 }
+#endif
 
 } // namespace
 
@@ -551,7 +594,31 @@ Transactions::Transactions(const uint8_t*& cursor) {
         }
 
         v.transaction_hash_ = keccak256_bytes32(env, env_size);
+
+#ifdef ZISK
+        // Recovery-id (y-parity bit) of R, derived from the tx's v field:
+        //   * typed txs (EIP-2718): v_or_y_parity is already the 0/1 parity.
+        //   * legacy EIP-155:       v = chain_id*2 + 35 + parity → (v-35)&1.
+        //   * legacy pre-155:       v ∈ {27, 28}                → (v-27)&1.
+        const uint64_t vy = v.v_or_y_parity();
+        uint8_t recovery_id;
+        if (v.type_ != Type::Legacy) {
+            recovery_id = static_cast<uint8_t>(vy & 1);
+        } else if (vy >= 35) {
+            recovery_id = static_cast<uint8_t>((vy - 35) & 1);
+        } else {
+            recovery_id = static_cast<uint8_t>((vy - 27) & 1);
+        }
+
+        // The prover-supplied pubkey hint is no longer consumed by recovery
+        // (ecrecover derives the address from the signature directly); the
+        // cursor already advanced past its 64 bytes above to keep the input
+        // stream layout unchanged.
+        (void)pubkey;
+        v.sender_           = recover_sender(v, recovery_id);
+#else
         v.sender_           = verify_and_recover_sender(v, pubkey);
+#endif
 
         // MPT leaf: RLP(tx_index) → wire envelope verbatim.
         trie.insert(rlp::encode_u64(i),
