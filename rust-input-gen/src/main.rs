@@ -9,11 +9,13 @@
 
 use std::path::PathBuf;
 
+use alloy::primitives::B256;
 use anyhow::{Context, Result};
 use clap::Parser;
 use tracing::info;
 
 mod enrich;
+mod errors;
 mod mpt;
 mod rpc;
 mod sections;
@@ -22,8 +24,15 @@ mod touchset;
 mod verify;
 mod writer;
 
+use errors::ReorgDetected;
 use touchset::TouchSet;
 use writer::Writer;
+
+/// sysexits.h `EX_TEMPFAIL` — returned to the OS when we detect that
+/// the upstream node reorged during our run. `scripts/verify_blocks.py`
+/// recognizes this code and re-queues the block instead of recording
+/// a failure. Any other error keeps the existing non-zero exit (1).
+const EXIT_CODE_REORG: i32 = 75;
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -53,7 +62,7 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -62,6 +71,20 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
+    if let Err(err) = run(args).await {
+        // Distinguish reorg-class errors (transient, retryable) from
+        // every other failure so `scripts/verify_blocks.py` can
+        // auto-retry without recording a failure artifact.
+        if let Some(reorg) = err.downcast_ref::<ReorgDetected>() {
+            eprintln!("Error: {reorg}");
+            std::process::exit(EXIT_CODE_REORG);
+        }
+        eprintln!("Error: {err:?}");
+        std::process::exit(1);
+    }
+}
+
+async fn run(args: Args) -> Result<()> {
     info!(
         block = args.block,
         rpc = %args.rpc_url,
@@ -72,18 +95,26 @@ async fn main() -> Result<()> {
 
     let client = rpc::Client::new(&args.rpc_url)?;
 
-    // Fetch current + parent in parallel. Parent is needed both for
-    // ConsensusInfo.parent_hash (= parent.state_root) and as ancestor[0]
-    // of PreviousBlocks.
     if args.block == 0 {
         anyhow::bail!("block 0 has no parent; pick a later block");
     }
-    // Current block needs full transaction envelopes (Phase 3 reads
-    // them); parent only needs the header.
-    let (current, parent) = tokio::try_join!(
-        client.block_full(args.block),
-        client.block(args.block - 1),
-    )?;
+
+    // ---- (1) Discover the canonical anchor hash ----
+    //
+    // Single by-number call in the whole run. From this point on,
+    // every subsequent RPC is pinned to `block_hash` or `parent_hash`,
+    // so a mid-run reorg cannot silently corrupt our data — it shows
+    // up either as an RPC error (hash no longer canonical & pruned)
+    // or as the end-of-run reverify catching a hash drift.
+    let current = client.block_by_number_full(args.block).await?;
+    let block_hash: B256 = current.header.hash;
+    let parent_hash: B256 = current.header.parent_hash;
+    info!(
+        %block_hash,
+        %parent_hash,
+        "anchored block hash",
+    );
+
     {
         use alloy::rpc::types::BlockTransactions;
         if let BlockTransactions::Full(v) = &current.transactions {
@@ -91,23 +122,43 @@ async fn main() -> Result<()> {
             for (i, t) in v.iter().enumerate().take(5) {
                 println!("alloy tx[{i}] hash={} from={}", t.inner.tx_hash(), t.from);
             }
-            println!("... last alloy tx hash={}", v.last().unwrap().inner.tx_hash());
+            if let Some(last) = v.last() {
+                println!("... last alloy tx hash={}", last.inner.tx_hash());
+            }
         }
     }
-    info!(parent_state_root = %parent.header.state_root, "fetched current + parent");
 
-    // Parent is mandatory at ancestors[0] — cpp-guest derives parent's
-    // actual block hash (for BLOCKHASH and the reconstructed header)
-    // from this entry. Additional ancestors are loaded as requested.
+    // ---- (2) Parent block by hash (must follow step 1; we need its
+    //         hash). Header carries `parent.header.state_root` which
+    //         anchors every MPT walk below.
+    let parent = client.block_by_hash(parent_hash).await?;
+    info!(parent_state_root = %parent.header.state_root, "fetched parent header");
+
+    // ---- (3) Ancestor chain walked by parent-hash. This is
+    //         intrinsically reorg-immune: each fetched header's hash
+    //         must match the previous one's parent_hash by construction.
     let mut ancestors = vec![parent.clone()];
-    for i in 1..args.ancestors {
-        let n = args.block.checked_sub(1 + i);
-        let Some(n) = n else { break };
-        ancestors.push(client.block(n).await?);
+    let zero_hash = B256::ZERO;
+    while (ancestors.len() as u64) < args.ancestors {
+        let prev = ancestors.last().unwrap();
+        if prev.header.number == 0 {
+            // Reached genesis; no further ancestors exist.
+            break;
+        }
+        let next_hash = prev.header.parent_hash;
+        if next_hash == zero_hash {
+            // Defensive: should never happen for non-genesis headers,
+            // but a malformed node response shouldn't loop forever.
+            break;
+        }
+        let next = client.block_by_hash(next_hash).await?;
+        ancestors.push(next);
     }
     info!(count = ancestors.len(), "fetched ancestor chain");
 
-    // Phase 4: fetch all data sources in parallel.
+    // ---- (4) Phase 3: fetch all data sources in parallel, all
+    //         pinned to `block_hash`. See the original commentary
+    //         below for what each source provides.
     //
     //   * `prestateTracer` (non-diff) — every account + slot the EVM
     //     READ or WROTE during execution, with their block-start
@@ -119,17 +170,17 @@ async fn main() -> Result<()> {
     //     during the block. Drives the `is_read_only` flag in the
     //     binary's Accounts / Storages records.
     //
-    //   * `debug_executionWitness` — every MPT node touched during
-    //     execution (state + storage tries), the deployed code blobs,
-    //     and the keccak preimages for keys. Used both as the
+    //   * `debug_executionWitnessByHash` — every MPT node touched
+    //     during execution (state + storage tries), the deployed code
+    //     blobs, and the keccak preimages for keys. Used both as the
     //     canonical source for parent-state values AND to discover
     //     leaves the prestate tracer omits (notably: untouched-
     //     sibling leaves that the cpp-guest's state-root walker
     //     needs to reposition during structural splits).
     let (mut prestate, diff, witness) = tokio::try_join!(
-        client.prestate(args.block),
-        client.prestate_diff(args.block),
-        client.execution_witness(args.block),
+        client.prestate_by_hash(block_hash),
+        client.prestate_diff_by_hash(block_hash),
+        client.execution_witness_by_hash(block_hash),
     )?;
     info!(
         accounts = prestate.len(),
@@ -148,9 +199,15 @@ async fn main() -> Result<()> {
     // CALL these from `0xfffe`; the prestate tracer captures tx
     // execution only and misses pre/post-block system calls, so these
     // addresses aren't in the trace. Fetch their bytecode + the
-    // touched ring-buffer slots explicitly via RPC.
-    let system_contract_slots =
-        inject_system_contracts(&client, &mut prestate, args.block).await?;
+    // touched ring-buffer slots explicitly via RPC, all hash-pinned.
+    let system_contract_slots = inject_system_contracts(
+        &client,
+        &mut prestate,
+        &current,
+        block_hash,
+        parent_hash,
+    )
+    .await?;
     info!(
         accounts = prestate.len(),
         "added Pectra system-contract entries"
@@ -158,7 +215,7 @@ async fn main() -> Result<()> {
 
     // Withdrawal recipients (EIP-4895) — credited at block boundary
     // outside any tx, so the prestate tracer never sees them.
-    inject_withdrawal_recipients(&client, &mut prestate, &current, args.block).await?;
+    inject_withdrawal_recipients(&client, &mut prestate, &current, parent_hash).await?;
     info!(
         accounts = prestate.len(),
         "added withdrawal recipients"
@@ -169,7 +226,7 @@ async fn main() -> Result<()> {
     enrich::enrich_prestate_from_witness(
         &client,
         parent.header.state_root,
-        args.block,
+        parent_hash,
         &witness,
         &mut prestate,
     ).await?;
@@ -183,7 +240,7 @@ async fn main() -> Result<()> {
     enrich::enrich_state_leaves_from_witness(
         &client,
         parent.header.state_root,
-        args.block,
+        parent_hash,
         &witness,
         &mut prestate,
     ).await?;
@@ -220,6 +277,28 @@ async fn main() -> Result<()> {
         &diff,
         &touch,
     )?;
+
+    // ---- (5) End-of-run reorg reverify ----
+    //
+    // Belt-and-suspenders. Even though every fetch above was pinned
+    // to a hash, a node that pruned the side chain mid-run may have
+    // returned partial data for one of the hash-pinned calls. This
+    // final by-number lookup confirms the canonical chain still
+    // resolves `args.block` to our anchored `block_hash`. Run it
+    // BEFORE writing the file so a reorg never produces a corrupt
+    // artifact.
+    {
+        let now = client.block_by_number_full(args.block).await?;
+        if now.header.hash != block_hash || now.header.number != args.block {
+            return Err(ReorgDetected {
+                block: args.block,
+                expected: block_hash,
+                actual: Some(now.header.hash),
+                phase: "end-of-run reverify",
+            }
+            .into());
+        }
+    }
 
     // Encode.
     let mut w = Writer::new();
@@ -308,12 +387,12 @@ fn slot_u64(v: u64) -> alloy::primitives::B256 {
 /// prestate tracer never includes them — but the cpp-guest's
 /// `process_withdrawals` calls `accounts_.index_of(recipient)` and
 /// would fatal otherwise. Pre-block values (balance + nonce) come
-/// from the parent block via `eth_getBalance` / `eth_getTransactionCount`.
+/// from the parent block hash via `eth_getBalance` / `eth_getTransactionCount`.
 async fn inject_withdrawal_recipients(
     client: &rpc::Client,
     prestate: &mut rpc::Prestate,
     current: &alloy::rpc::types::Block,
-    block: u64,
+    parent_hash: B256,
 ) -> Result<()> {
     use alloy::primitives::Address;
 
@@ -329,10 +408,10 @@ async fn inject_withdrawal_recipients(
     for addr in uniq {
         let entry = prestate.entry(addr).or_default();
         if entry.balance.is_none() {
-            entry.balance = Some(client.balance(addr, block - 1).await?);
+            entry.balance = Some(client.balance_at_hash(addr, parent_hash).await?);
         }
         if entry.nonce.is_none() {
-            entry.nonce = Some(client.nonce(addr, block - 1).await?);
+            entry.nonce = Some(client.nonce_at_hash(addr, parent_hash).await?);
         }
     }
     Ok(())
@@ -341,11 +420,12 @@ async fn inject_withdrawal_recipients(
 async fn inject_system_contracts(
     client: &rpc::Client,
     prestate: &mut rpc::Prestate,
-    block: u64,
+    current: &alloy::rpc::types::Block,
+    block_hash: B256,
+    parent_hash: B256,
 ) -> Result<std::collections::BTreeSet<(alloy::primitives::Address, alloy::primitives::B256)>> {
     use alloy::primitives::Address;
 
-    let current = client.block(block).await?;
     let number    = current.header.number;
     let timestamp = current.header.timestamp;
 
@@ -358,19 +438,19 @@ async fn inject_system_contracts(
 
         if entry.code.is_none() {
             // Code is the same at any block once the EIP went live;
-            // fetch at the current block (no historical-state
+            // fetch at the current block hash (no historical-state
             // requirement under the node's pruning).
-            entry.code = Some(client.code(addr, block).await?);
+            entry.code = Some(client.code_at_hash(addr, block_hash).await?);
         }
         // Balance must come from chain — EIP-7002 (withdrawal-requests)
         // and EIP-7251 (consolidation-requests) accumulate per-request
         // fees, so the system contract's balance is non-zero on a live
         // chain. The block-start balance is the value at the parent.
         if entry.balance.is_none() {
-            entry.balance = Some(client.balance(addr, block - 1).await?);
+            entry.balance = Some(client.balance_at_hash(addr, parent_hash).await?);
         }
         if entry.nonce.is_none() {
-            entry.nonce = Some(client.nonce(addr, block - 1).await?);
+            entry.nonce = Some(client.nonce_at_hash(addr, parent_hash).await?);
         }
 
         for slot in (sc.slots)(number, timestamp) {
@@ -388,7 +468,7 @@ async fn inject_system_contracts(
             // wrong. The true block-start value is at parent-block
             // (= before this block's system call writes the new
             // ring-buffer entry).
-            let v = client.storage_at(addr, slot, block - 1).await?;
+            let v = client.storage_at_hash(addr, slot, parent_hash).await?;
             entry.storage.insert(slot, v);
         }
     }

@@ -4,7 +4,22 @@
       "Bash(awk ' *)",
       "Bash(cpp-guest/build/zisk_eth_guest)",
       "Bash(cpp-guest/build/zisk_eth_guest /tmp/badmagic.bin)",
-      "Bash(cpp-guest/build/zisk_eth_guest /tmp/goodmagic.bin)"
+      "Bash(cpp-guest/build/zisk_eth_guest /tmp/goodmagic.bin)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(cmake -S /Users/jbaylina/git/zisk/ziskethone/cpp-guest -B /Users/jbaylina/git/zisk/ziskethone/cpp-guest/build-debug -DCMAKE_BUILD_TYPE=Debug)",
+      "Bash(cmake --build /Users/jbaylina/git/zisk/ziskethone/cpp-guest/build --target zisk_eth_guest -j)",
+      "Bash(/Users/jbaylina/git/zisk/ziskethone/cpp-guest/build/zisk_eth_guest /Users/jbaylina/git/zisk/ziskethone/build/verify/25194029/input.bin)",
+      "Bash(echo \"release exit=$?\")",
+      "Bash(cmake --build /Users/jbaylina/git/zisk/ziskethone/cpp-guest/build-debug --target zisk_eth_guest -j)",
+      "Bash(/Users/jbaylina/git/zisk/ziskethone/cpp-guest/build-debug/zisk_eth_guest /Users/jbaylina/git/zisk/ziskethone/build/verify/25194029/input.bin)",
+      "Bash(echo \"debug exit=$?\")",
+      "Bash(cmake -S /Users/jbaylina/git/zisk/ziskethone/cpp-guest -B /Users/jbaylina/git/zisk/ziskethone/cpp-guest/build)",
+      "Bash(python3 -c \"import json; print\\(json.load\\(open\\('/Users/jbaylina/git/zisk/ziskethone/build/verify/25194029/chain.json'\\)\\)['hash']\\)\")",
+      "Bash(./cpp-guest/build/zisk_eth_guest build/verify/25200801/input.bin)",
+      "Bash(./cpp-guest/build/zisk_eth_guest build/verify/25199793/input.bin)",
+      "Bash(./cpp-guest/build/zisk_eth_guest build/verify/25200030/input.bin)",
+      "Bash(cmake --build cpp-guest/build-debug --target zisk_eth_guest -j)"
     ]
   }
 }

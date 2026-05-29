@@ -100,10 +100,19 @@ ZiskStateDB::ZiskStateDB(Accounts&             accounts,
 // (call, emit_log, access_account, access_storage) do real work.
 
 bool ZiskStateDB::account_exists(const evmc::address& addr) const noexcept {
-    // Stateless witness model: every queried account must be in the
-    // input. `index_of` aborts via zeg::fatal if not — the prover bug
-    // surfaces immediately. "Exists" semantically = non-empty (nonzero
-    // balance OR nonce OR non-empty code).
+    // STRICT witness model: a missing address is a fatal input gap,
+    // not a "non-existent account". Soft-phantoming here would let a
+    // malicious prover omit a real contract from the witness and force
+    // EXTCODEHASH / CALL / etc. to see it as non-existent (return 0,
+    // skip new-account cost, etc.). The honest-prover OOG-fast-path
+    // case for block 25194029 is handled upstream by `evmone-patch-01`
+    // (revm-aligned gas-check ordering): value-cost + account-creation
+    // OOG fires before access_account / get_target_address, so this
+    // path isn't reached for a target that the chain itself never
+    // materialized. If a future block triggers a fatal here, that's
+    // a real gap to fill in input-gen, not to paper over in the host.
+    // "Exists" semantically = non-empty (nonzero balance OR nonce OR
+    // non-empty code).
     const size_t idx = accounts_.index_of(addr);
     if (accounts_.nonce_at(idx) != 0) {
         return true;
@@ -178,6 +187,26 @@ size_t ZiskStateDB::get_code_size(const evmc::address& addr) const noexcept {
 }
 
 evmc::bytes32 ZiskStateDB::get_code_hash(const evmc::address& addr) const noexcept {
+    // EIP-1052: EXTCODEHASH of a non-existent (empty) account is 0,
+    // NOT keccak256("") (= EMPTY_CODE_HASH). "Empty" per EIP-161
+    // means nonce == 0 AND balance == 0 AND code_hash == EMPTY.
+    // Distinct from "account exists but has no deployed code", which
+    // correctly returns EMPTY_CODE_HASH.
+    //
+    // Block 25200801 tx 79 hit this: an OpenSea ERC-1155 storefront
+    // does `EXTCODEHASH(unused-addr) == 0` as a "is this an EOA?"
+    // check; returning EMPTY_CODE_HASH instead made the check fail
+    // and the tx took a different branch.
+    //
+    // We deliberately do NOT short-circuit on `!accounts_.contains(addr)`
+    // here — treating a witness-absent address as "non-existent" would
+    // let a malicious prover omit a real contract from the witness and
+    // make us return 0, taking the wrong branch for an EXTCODEHASH==0
+    // check. `account_exists` (strict: calls index_of which fatals on
+    // missing) is the gate that forces the prover to supply the addr.
+    if (!account_exists(addr)) {
+        return {};
+    }
     return const_cast<Accounts&>(accounts_).code_hash(addr, tx_counter_);
 }
 
@@ -597,10 +626,22 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
                        accounts_.last_tx_idx_at(sender_idx));
     accounts_.set_nonce_at(sender_idx, sender_nonce_pre + 1, tx_counter_);
 
+    // 2'. Per EVM spec (post-EIP-161 / EIP-684), the sender's nonce
+    //     bump above persists through every CREATE-internal failure
+    //     mode below — collision, init-code revert/OOG, EIP-2 code-
+    //     deposit OOG. So we anchor our local rollbacks on a fresh
+    //     checkpoint taken AFTER the bump rather than on `cp` (which
+    //     pre-dates it). The caller's `cp` still subsumes the bump,
+    //     so an outer-frame revert (parent CALL/CREATE reverts, tx
+    //     reverts) correctly unbumps. Miss-handled previously: block
+    //     25199793 tx 337 — CREATE -> inner CREATE2 that failed left
+    //     the inner-CREATE2 sender's nonce at 1 instead of 2.
+    const auto cp_after_bump = checkpoint();
+
     // 3. EIP-684 collision check + initialize the new account (nonce
     //    = 1 + value transfer). Returns false on collision.
     if (!init_create_account(new_addr, msg)) {
-        rollback(cp);
+        rollback(cp_after_bump);
         return evmc::Result{EVMC_FAILURE, 0, 0, nullptr, 0};
     }
 
@@ -627,7 +668,7 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     auto result = vm_.execute(*this, EVMC_OSAKA, create_msg,
                               init_code, init_size);
     if (result.status_code != EVMC_SUCCESS) {
-        rollback(cp);
+        rollback(cp_after_bump);
         return result;
     }
 
@@ -639,7 +680,7 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     const int64_t deposit =
         static_cast<int64_t>(result.output_size) * CODE_DEPOSIT_COST;
     if (result.gas_left < deposit) {
-        rollback(cp);
+        rollback(cp_after_bump);
         return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0};
     }
     result.gas_left -= deposit;

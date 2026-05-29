@@ -42,7 +42,7 @@ use crate::rpc::{self, AccountPrestate, ExecutionWitness, Prestate};
 pub async fn build_prestate_from_witness(
     client: &rpc::Client,
     parent_state_root: B256,
-    block: u64,
+    parent_hash: B256,
     witness: &ExecutionWitness,
 ) -> Result<Prestate> {
     // Index nodes by their keccak hash for fast traversal.
@@ -109,7 +109,7 @@ pub async fn build_prestate_from_witness(
             if let Some(c) = codes_by_hash.get(&code_hash) {
                 entry.code = Some(c.clone());
             } else {
-                let c = client.code(addr, block - 1).await?;
+                let c = client.code_at_hash(addr, parent_hash).await?;
                 if keccak256(&c) != code_hash {
                     bail!(
                         "build_prestate: eth_getCode for {} returned code hashing to {} != chain leaf's {}",
@@ -167,7 +167,7 @@ pub async fn build_prestate_from_witness(
 pub async fn enrich_state_leaves_from_witness(
     client: &rpc::Client,
     parent_state_root: B256,
-    block: u64,
+    parent_hash: B256,
     witness: &ExecutionWitness,
     prestate: &mut Prestate,
 ) -> Result<usize> {
@@ -215,7 +215,7 @@ pub async fn enrich_state_leaves_from_witness(
             if let Some(c) = codes_by_hash.get(&code_hash) {
                 entry.code = Some(c.clone());
             } else {
-                let c = client.code(addr, block - 1).await?;
+                let c = client.code_at_hash(addr, parent_hash).await?;
                 if keccak256(&c) != code_hash {
                     bail!(
                         "enrich_state_leaves: eth_getCode for {} hashes to {} != chain leaf's {}",
@@ -335,7 +335,7 @@ fn tx_access_list(env: &alloy::consensus::TxEnvelope) -> Vec<(Address, Vec<B256>
 pub async fn enrich_prestate_from_witness(
     client: &rpc::Client,
     parent_state_root: B256,
-    block: u64,
+    parent_hash: B256,
     witness: &ExecutionWitness,
     prestate: &mut Prestate,
 ) -> Result<usize> {
@@ -389,7 +389,7 @@ pub async fn enrich_prestate_from_witness(
                 entry.code = Some(c.clone());
             } else {
                 // Not in witness.codes — fetch from chain.
-                let c = client.code(addr, block - 1).await?;
+                let c = client.code_at_hash(addr, parent_hash).await?;
                 if keccak256(&c) != code_hash {
                     bail!(
                         "enrich: eth_getCode for {} returned code hashing to {} != chain leaf's {}",

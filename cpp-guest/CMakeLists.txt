@@ -31,6 +31,46 @@ if(NOT evmone_POPULATED)
     FetchContent_Populate(evmone)
 endif()
 
+# Apply our local evmone patches. Both align evmone's CALL gas accounting
+# with revm's behavior so a stateless witness recorded by reth/revm is
+# sufficient for evmone — no extra host calls outside the witness:
+#   01: Reorder CALL gas checks to charge CALL_VALUE_COST first, then cold
+#       access, then ACCOUNT_CREATION_COST, then the EIP-7702 delegation
+#       probe — mirrors revm's `load_acc_and_calc_gas`. A value-bearing
+#       CALL destined to OOG no longer invokes any host state query.
+#   02: In get_delegate_address, fast-bail via host.get_code_hash before
+#       calling host.copy_code — an EOA (or any account with empty code)
+#       can never carry an EIP-7702 designator. Mirrors revm's
+#       `Bytecode::eip7702_address(account.code)` short-circuit.
+# Each patch is checked with `git apply --reverse --check` first; if it
+# is already applied we skip — that keeps the configure step idempotent
+# across rebuilds.
+set(_evmone_patches
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/01-evmone-revm-aligned-call-gas-order.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/02-evmone-delegation-eoa-fastpath.patch"
+)
+find_program(GIT_EXECUTABLE git REQUIRED)
+foreach(_patch IN LISTS _evmone_patches)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} apply --reverse --check "${_patch}"
+        WORKING_DIRECTORY "${evmone_SOURCE_DIR}"
+        RESULT_VARIABLE _already_applied
+        OUTPUT_QUIET ERROR_QUIET)
+    if(NOT _already_applied EQUAL 0)
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} apply "${_patch}"
+            WORKING_DIRECTORY "${evmone_SOURCE_DIR}"
+            RESULT_VARIABLE _apply_rc)
+        if(NOT _apply_rc EQUAL 0)
+            message(FATAL_ERROR
+                "Failed to apply evmone patch ${_patch} (rc=${_apply_rc})")
+        endif()
+        message(STATUS "Applied evmone patch: ${_patch}")
+    else()
+        message(STATUS "evmone patch already applied: ${_patch}")
+    endif()
+endforeach()
+
 # Pull evmone's Cable/Hunter setup into *this* CMakeLists scope before we
 # call project(), so Hunter is happy and Cable's toolchain configuration
 # takes effect on our build too.
