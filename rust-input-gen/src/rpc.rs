@@ -5,10 +5,21 @@
 //! EIP1186AccountProofResponse) so encoders can read fields directly.
 //! The prestate-tracer responses are parsed via `serde_json::Value`
 //! since the wire shape differs slightly between clients.
+//!
+//! All "address state at X" methods take a block HASH (`B256`),
+//! never a number. Reasoning: between calls during a single
+//! input-gen run (~10s), the upstream node may reorg; addressing by
+//! number would silently let different calls resolve to different
+//! canonical blocks. Pinning every call to a hash captured once at
+//! startup makes a mid-run reorg either invisible (the hash still
+//! resolves on a non-pruning node) or detectable (the hash is no
+//! longer in the canonical chain → call errors). `block_by_number_*`
+//! is the single startup-only escape hatch used to discover the
+//! anchor hash itself.
 
 use std::collections::{BTreeMap, HashSet};
 
-use alloy::eips::BlockId;
+use alloy::eips::{BlockId, RpcBlockHash};
 use alloy::primitives::{Address, Bytes, B256, U256};
 use alloy::providers::{Provider, ProviderBuilder, RootProvider};
 use alloy::rpc::types::{
@@ -18,6 +29,8 @@ use alloy::transports::http::{Client as HttpClient, Http};
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
 use tracing::warn;
+
+use crate::errors::ReorgDetected;
 
 pub struct Client {
     provider: RootProvider<Http<HttpClient>>,
@@ -58,6 +71,45 @@ pub struct ExecutionWitness {
     pub keys:  Vec<Bytes>,
 }
 
+/// Helper: wrap a `B256` block hash as the `BlockId` needed by
+/// alloy's per-call `.block_id(...)` builders. `require_canonical`
+/// is `false` so the node can answer even for a hash that's no
+/// longer on the canonical chain (i.e. a reorged-out block whose
+/// trie state hasn't been pruned yet) — main.rs catches that case
+/// via the end-of-run reverify.
+fn id(hash: B256) -> BlockId {
+    BlockId::Hash(RpcBlockHash::from_hash(hash, Some(false)))
+}
+
+/// Map an `anyhow::Error` to `ReorgDetected` if its display string
+/// indicates the node lost track of our anchored hash. Reth/Erigon
+/// surface this as JSON-RPC error -32001 with message "block not
+/// found: hash <...>"; geth uses "header not found". Either way,
+/// the hash was canonical when we captured it earlier in this run,
+/// so the only explanation is a reorg — convert to the typed error
+/// so `main.rs` exits 75 (EX_TEMPFAIL) and `verify_blocks.py`
+/// auto-retries the same block.
+fn promote_not_found_to_reorg(
+    err: anyhow::Error,
+    hash: B256,
+    phase: &'static str,
+) -> anyhow::Error {
+    let msg = format!("{err:#}").to_lowercase();
+    if msg.contains("block not found")
+        || msg.contains("header not found")
+        || msg.contains("unknown block")
+    {
+        return ReorgDetected {
+            block: 0, // we don't always know the number at this point
+            expected: hash,
+            actual: None,
+            phase,
+        }
+        .into();
+    }
+    err
+}
+
 impl Client {
     /// Build an HTTP provider against `url`.
     pub fn new(url: &str) -> Result<Self> {
@@ -68,25 +120,11 @@ impl Client {
         Ok(Self { provider })
     }
 
-    /// `eth_getBlockByNumber(n, false)` — header + tx hash list. Fast;
-    /// used for the parent and earlier ancestors where we only need
-    /// the header fields.
-    pub async fn block(&self, number: u64) -> Result<Block> {
-        self.provider
-            .get_block_by_number(
-                BlockNumberOrTag::Number(number),
-                BlockTransactionsKind::Hashes,
-            )
-            .await
-            .with_context(|| format!("eth_getBlockByNumber({number})"))?
-            .ok_or_else(|| anyhow!("block {number} not found"))
-    }
-
     /// `eth_getBlockByNumber(n, true)` — header + full canonical
-    /// transaction envelopes. Used for the current block so the
-    /// `Transactions` encoder can re-emit the wire envelopes and
-    /// recover sender pubkeys.
-    pub async fn block_full(&self, number: u64) -> Result<Block> {
+    /// transaction envelopes. **Use this only once per run** to
+    /// discover the canonical block hash that anchors every other
+    /// call. After that, switch to `block_by_hash_full` / `block_by_hash`.
+    pub async fn block_by_number_full(&self, number: u64) -> Result<Block> {
         self.provider
             .get_block_by_number(
                 BlockNumberOrTag::Number(number),
@@ -97,24 +135,75 @@ impl Client {
             .ok_or_else(|| anyhow!("block {number} not found"))
     }
 
-    /// `debug_traceBlockByNumber(block, prestateTracer)` — non-diff
+    /// `eth_getBlockByHash(hash, false)` — header + tx hash list.
+    /// Used for parent and earlier ancestors via parent-hash chain
+    /// walking.
+    pub async fn block_by_hash(&self, hash: B256) -> Result<Block> {
+        self.provider
+            .get_block_by_hash(hash, BlockTransactionsKind::Hashes)
+            .await
+            .map_err(|e| {
+                promote_not_found_to_reorg(
+                    anyhow::Error::from(e).context(format!("eth_getBlockByHash({hash})")),
+                    hash,
+                    "eth_getBlockByHash",
+                )
+            })?
+            .ok_or_else(|| {
+                // Reth returns `Ok(None)` for an unknown hash; same
+                // semantic as "block not found" RPC error.
+                anyhow::Error::new(ReorgDetected {
+                    block: 0,
+                    expected: hash,
+                    actual: None,
+                    phase: "eth_getBlockByHash (Ok(None))",
+                })
+            })
+    }
+
+    /// `eth_getBlockByHash(hash, true)` — header + full canonical
+    /// transaction envelopes. Used to re-fetch the anchor block at
+    /// end-of-run for the reorg reverify, and (rarely) when a caller
+    /// needs full tx data for an ancestor.
+    pub async fn block_by_hash_full(&self, hash: B256) -> Result<Block> {
+        self.provider
+            .get_block_by_hash(hash, BlockTransactionsKind::Full)
+            .await
+            .map_err(|e| {
+                promote_not_found_to_reorg(
+                    anyhow::Error::from(e).context(format!("eth_getBlockByHash({hash}, full)")),
+                    hash,
+                    "eth_getBlockByHash full",
+                )
+            })?
+            .ok_or_else(|| {
+                anyhow::Error::new(ReorgDetected {
+                    block: 0,
+                    expected: hash,
+                    actual: None,
+                    phase: "eth_getBlockByHash full (Ok(None))",
+                })
+            })
+    }
+
+    /// `debug_traceBlockByHash(hash, prestateTracer)` — non-diff
     /// mode. Returns the union of every (account → balance/nonce/code/
     /// storage) the block's txs touched, with **block-start** values
     /// (i.e. the first observed value per (addr, slot) wins across
     /// the per-tx traces).
-    pub async fn prestate(&self, block: u64) -> Result<Prestate> {
-        let raw = self.debug_trace_prestate(block, false).await?;
+    pub async fn prestate_by_hash(&self, hash: B256) -> Result<Prestate> {
+        let raw = self.debug_trace_prestate_by_hash(hash, false).await?;
         Ok(merge_prestate_traces(&raw, /*first_wins=*/ true))
     }
 
-    /// `debug_traceBlockByNumber(block, prestateTracer, diffMode=true)`.
+    /// `debug_traceBlockByHash(hash, prestateTracer, diffMode=true)`.
     /// Returns aggregated `pre` and `post` maps covering only the
     /// fields that changed during the block.
-    pub async fn prestate_diff(&self, block: u64) -> Result<PrestateDiff> {
-        let raw = self.debug_trace_prestate(block, true).await?;
+    pub async fn prestate_diff_by_hash(&self, hash: B256) -> Result<PrestateDiff> {
+        let raw = self.debug_trace_prestate_by_hash(hash, true).await?;
         let traces = raw
             .as_array()
-            .ok_or_else(|| anyhow!("debug_traceBlockByNumber: expected array"))?;
+            .ok_or_else(|| anyhow!("debug_traceBlockByHash: expected array"))?;
         let mut diff = PrestateDiff::default();
         for tx in traces {
             let inner = tx.get("result").unwrap_or(tx);
@@ -130,82 +219,187 @@ impl Client {
         Ok(diff)
     }
 
-    /// `eth_getProof(addr, slots)` at `block`. Returns the canonical
-    /// block-end balance/nonce/code_hash/storage_hash + per-slot
-    /// proof+value. We call this at `parent_block` to read the
-    /// block-START state for the touched account.
-    pub async fn account_proof(
+    /// `eth_getProof(addr, slots)` pinned to `hash`. Returns the
+    /// canonical block-end balance/nonce/code_hash/storage_hash +
+    /// per-slot proof+value. We call this at the parent block hash to
+    /// read the block-START state for the touched account.
+    pub async fn account_proof_at_hash(
         &self,
         addr: Address,
         slots: Vec<B256>,
-        block: u64,
+        hash: B256,
     ) -> Result<EIP1186AccountProofResponse> {
         self.provider
             .get_proof(addr, slots)
-            .block_id(BlockId::Number(BlockNumberOrTag::Number(block)))
+            .block_id(id(hash))
             .await
-            .with_context(|| format!("eth_getProof({addr}) @ block {block}"))
+            .map_err(|e| {
+                promote_not_found_to_reorg(
+                    anyhow::Error::from(e).context(format!("eth_getProof({addr}) @ {hash}")),
+                    hash,
+                    "eth_getProof",
+                )
+            })
     }
 
-    /// `eth_getCode(addr, block)`. Used as a fallback when the
-    /// prestate tracer didn't include the bytecode for an account
+    /// `eth_getCode(addr)` pinned to `hash`. Used as a fallback when
+    /// the prestate tracer didn't include the bytecode for an account
     /// known to have code (e.g. newly-deployed contracts).
-    pub async fn code(&self, addr: Address, block: u64) -> Result<Bytes> {
+    pub async fn code_at_hash(&self, addr: Address, hash: B256) -> Result<Bytes> {
         self.provider
             .get_code_at(addr)
-            .block_id(BlockId::Number(BlockNumberOrTag::Number(block)))
+            .block_id(id(hash))
             .await
-            .with_context(|| format!("eth_getCode({addr}) @ block {block}"))
+            .map_err(|e| {
+                promote_not_found_to_reorg(
+                    anyhow::Error::from(e).context(format!("eth_getCode({addr}) @ {hash}")),
+                    hash,
+                    "eth_getCode",
+                )
+            })
     }
 
-    /// `eth_getBalance(addr, block)`. Used to inject pre-block balances
-    /// for withdrawal recipients (the prestate tracer misses them).
-    pub async fn balance(&self, addr: Address, block: u64) -> Result<alloy::primitives::U256> {
+    /// `eth_getBalance(addr)` pinned to `hash`. Used to inject
+    /// pre-block balances for withdrawal recipients (the prestate
+    /// tracer misses them).
+    pub async fn balance_at_hash(&self, addr: Address, hash: B256) -> Result<U256> {
         self.provider
             .get_balance(addr)
-            .block_id(BlockId::Number(BlockNumberOrTag::Number(block)))
+            .block_id(id(hash))
             .await
-            .with_context(|| format!("eth_getBalance({addr}) @ block {block}"))
+            .map_err(|e| {
+                promote_not_found_to_reorg(
+                    anyhow::Error::from(e).context(format!("eth_getBalance({addr}) @ {hash}")),
+                    hash,
+                    "eth_getBalance",
+                )
+            })
     }
 
-    /// `eth_getStorageAt(addr, slot, block)`. Used to inject the
-    /// canonical block-start values for the Pectra system contracts'
-    /// pre-allocated slots (the ring-buffer entries written by prior
-    /// blocks).
-    pub async fn storage_at(&self, addr: Address, slot: B256, block: u64) -> Result<B256> {
+    /// `eth_getStorageAt(addr, slot)` pinned to `hash`. Used to
+    /// inject the canonical block-start values for the Pectra system
+    /// contracts' pre-allocated slots (the ring-buffer entries written
+    /// by prior blocks).
+    pub async fn storage_at_hash(
+        &self,
+        addr: Address,
+        slot: B256,
+        hash: B256,
+    ) -> Result<B256> {
         self.provider
             .get_storage_at(addr, slot.into())
-            .block_id(BlockId::Number(BlockNumberOrTag::Number(block)))
+            .block_id(id(hash))
             .await
             .map(B256::from)
-            .with_context(|| format!("eth_getStorageAt({addr},{slot}) @ block {block}"))
+            .map_err(|e| {
+                promote_not_found_to_reorg(
+                    anyhow::Error::from(e)
+                        .context(format!("eth_getStorageAt({addr},{slot}) @ {hash}")),
+                    hash,
+                    "eth_getStorageAt",
+                )
+            })
     }
 
-    /// `eth_getTransactionCount(addr, block)` — i.e. the account's
-    /// nonce. Used together with `balance` to inject withdrawal
-    /// recipients into the prestate.
-    pub async fn nonce(&self, addr: Address, block: u64) -> Result<u64> {
+    /// `eth_getTransactionCount(addr)` pinned to `hash` — i.e. the
+    /// account's nonce. Used together with `balance_at_hash` to
+    /// inject withdrawal recipients into the prestate.
+    pub async fn nonce_at_hash(&self, addr: Address, hash: B256) -> Result<u64> {
         self.provider
             .get_transaction_count(addr)
-            .block_id(BlockId::Number(BlockNumberOrTag::Number(block)))
+            .block_id(id(hash))
             .await
-            .with_context(|| format!("eth_getTransactionCount({addr}) @ block {block}"))
+            .map_err(|e| {
+                promote_not_found_to_reorg(
+                    anyhow::Error::from(e)
+                        .context(format!("eth_getTransactionCount({addr}) @ {hash}")),
+                    hash,
+                    "eth_getTransactionCount",
+                )
+            })
     }
 
-    /// `debug_executionWitness(block)` — Reth/Erigon. Returns the raw
-    /// MPT nodes (`state`), deployed bytecodes (`codes`), and pre-image
-    /// keys (`keys`, 20-byte addresses and 32-byte storage slots whose
-    /// keccak appears as a key in the tries). Sufficient for stateless
-    /// re-execution + state-root reconstruction including
-    /// untouched-sibling leaves that share trie prefixes with our
-    /// touched keys.
-    pub async fn execution_witness(&self, block: u64) -> Result<ExecutionWitness> {
-        let block_hex = format!("0x{block:x}");
+    /// Execution witness for a block, pinned to `hash`.
+    ///
+    /// Returns the raw MPT nodes (`state`), deployed bytecodes
+    /// (`codes`), and pre-image keys (`keys`). Sufficient for
+    /// stateless re-execution + state-root reconstruction.
+    ///
+    /// reth (≤ this project's compatible range) only exposes
+    /// `debug_executionWitness(block_number)` — no `*ByHash`
+    /// variant exists. We bracket the by-number call with two
+    /// hash lookups: resolve `hash → number` immediately before,
+    /// and re-confirm `number → hash` immediately after. If the
+    /// canonical chain at `number` ever resolves to a different
+    /// hash, we surface `ReorgDetected` instead of returning data
+    /// from a stale fork.
+    pub async fn execution_witness_by_hash(&self, hash: B256) -> Result<ExecutionWitness> {
+        // (a) Resolve hash → number. Confirms the hash is on the
+        // canonical chain right now; if the node already pruned this
+        // side branch we'll get "block not found", which we elevate
+        // to ReorgDetected so the caller retries cleanly.
+        let pre = self
+            .provider
+            .get_block_by_hash(hash, BlockTransactionsKind::Hashes)
+            .await
+            .map_err(|e| {
+                promote_not_found_to_reorg(
+                    anyhow::Error::from(e)
+                        .context(format!("eth_getBlockByHash({hash}) pre-witness")),
+                    hash,
+                    "pre-witness block_by_hash",
+                )
+            })?
+            .ok_or_else(|| {
+                anyhow::Error::new(ReorgDetected {
+                    block: 0,
+                    expected: hash,
+                    actual: None,
+                    phase: "pre-witness block_by_hash (Ok(None))",
+                })
+            })?;
+        let number = pre.header.number;
+
+        // (b) Issue the by-number witness call.
+        let block_hex = format!("0x{number:x}");
         let v: Value = self
             .provider
             .raw_request("debug_executionWitness".into(), (block_hex,))
             .await
-            .with_context(|| format!("debug_executionWitness({block})"))?;
+            .map_err(|e| {
+                promote_not_found_to_reorg(
+                    anyhow::Error::from(e)
+                        .context(format!("debug_executionWitness({number})")),
+                    hash,
+                    "debug_executionWitness",
+                )
+            })?;
+
+        // (c) Re-confirm canonical block at `number` still has our hash.
+        let post = self
+            .provider
+            .get_block_by_number(
+                BlockNumberOrTag::Number(number),
+                BlockTransactionsKind::Hashes,
+            )
+            .await
+            .with_context(|| format!("eth_getBlockByNumber({number}) post-witness"))?
+            .ok_or_else(|| ReorgDetected {
+                block: number,
+                expected: hash,
+                actual: None,
+                phase: "post-witness eth_getBlockByNumber",
+            })?;
+        if post.header.hash != hash {
+            return Err(ReorgDetected {
+                block: number,
+                expected: hash,
+                actual: Some(post.header.hash),
+                phase: "post-witness hash drifted",
+            }
+            .into());
+        }
+
         Ok(ExecutionWitness {
             state: decode_hex_array(&v, "state")?,
             codes: decode_hex_array(&v, "codes")?,
@@ -215,9 +409,12 @@ impl Client {
 
     // ---- private ----------------------------------------------------------
 
-    async fn debug_trace_prestate(&self, block: u64, diff_mode: bool) -> Result<Value> {
-
-        let block_hex = format!("0x{block:x}");
+    async fn debug_trace_prestate_by_hash(
+        &self,
+        hash: B256,
+        diff_mode: bool,
+    ) -> Result<Value> {
+        let hash_hex = format!("0x{:x}", hash);
         let config = if diff_mode {
             json!({
                 "tracer": "prestateTracer",
@@ -228,12 +425,22 @@ impl Client {
         };
         self.provider
             .raw_request(
-                "debug_traceBlockByNumber".into(),
-                (block_hex, config),
+                "debug_traceBlockByHash".into(),
+                (hash_hex, config),
             )
             .await
-            .with_context(|| {
-                format!("debug_traceBlockByNumber({block}, diffMode={diff_mode})")
+            .map_err(|e| {
+                promote_not_found_to_reorg(
+                    anyhow::Error::from(e).context(format!(
+                        "debug_traceBlockByHash({hash}, diffMode={diff_mode})"
+                    )),
+                    hash,
+                    if diff_mode {
+                        "debug_traceBlockByHash (diff)"
+                    } else {
+                        "debug_traceBlockByHash"
+                    },
+                )
             })
     }
 }

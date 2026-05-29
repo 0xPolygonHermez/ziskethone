@@ -1,0 +1,78 @@
+diff --git a/lib/evmone/instructions_calls.cpp b/lib/evmone/instructions_calls.cpp
+index 6a243bac..dc8406e5 100644
+--- a/lib/evmone/instructions_calls.cpp
++++ b/lib/evmone/instructions_calls.cpp
+@@ -81,12 +81,49 @@ Result call_impl(StackTop stack, int64_t gas_left, ExecutionState& state) noexce
+     stack.push(0);  // Assume failure.
+     state.return_data.clear();
+ 
++    // (1) Charge CALL_VALUE_COST first — no state access yet. Mirrors revm's
++    // `gas!(interpreter, transfer_value_cost())` in load_acc_and_calc_gas, so
++    // a value-bearing CALL that's destined to OOG never queries the host for
++    // the target. Stateless hosts (reth's debug_executionWitness, ZK provers)
++    // never need to include addresses the EVM didn't materially read.
++    if constexpr (HAS_VALUE_ARG)
++    {
++        if constexpr (Op == OP_CALL)
++        {
++            if (has_value && state.in_static_mode())
++                return {EVMC_STATIC_MODE_VIOLATION, gas_left};
++        }
++        if (has_value)
++        {
++            if ((gas_left -= CALL_VALUE_COST) < 0)
++                return {EVMC_OUT_OF_GAS, gas_left};
++        }
++    }
++
++    // (2) Cold-access surcharge on dst.
+     if (state.rev >= EVMC_BERLIN && state.host.access_account(dst) == EVMC_ACCESS_COLD)
+     {
+         if ((gas_left -= instr::additional_cold_account_access_cost) < 0)
+             return {EVMC_OUT_OF_GAS, gas_left};
+     }
+ 
++    // (3) Account-creation cost — charged BEFORE the delegation probe, matching
++    // revm's ordering in load_account_delegated (is_empty check precedes the
++    // eip7702_address branch).
++    if constexpr (HAS_VALUE_ARG)
++    {
++        if constexpr (Op == OP_CALL)
++        {
++            if ((has_value || state.rev < EVMC_SPURIOUS_DRAGON)
++                && !state.host.account_exists(dst))
++            {
++                if ((gas_left -= ACCOUNT_CREATION_COST) < 0)
++                    return {EVMC_OUT_OF_GAS, gas_left};
++            }
++        }
++    }
++
++    // (4) Delegation probe — only reached after all prior gas checks pass.
+     const auto target_addr_or_result = get_target_address(dst, gas_left, state);
+     if (const auto* result = std::get_if<Result>(&target_addr_or_result))
+         return *result;
+@@ -124,23 +161,6 @@ Result call_impl(StackTop stack, int64_t gas_left, ExecutionState& state) noexce
+         msg.input_size = input_size;
+     }
+ 
+-    if constexpr (HAS_VALUE_ARG)
+-    {
+-        auto cost = has_value ? CALL_VALUE_COST : 0;
+-
+-        if constexpr (Op == OP_CALL)
+-        {
+-            if (has_value && state.in_static_mode())
+-                return {EVMC_STATIC_MODE_VIOLATION, gas_left};
+-
+-            if ((has_value || state.rev < EVMC_SPURIOUS_DRAGON) && !state.host.account_exists(dst))
+-                cost += ACCOUNT_CREATION_COST;
+-        }
+-
+-        if ((gas_left -= cost) < 0)
+-            return {EVMC_OUT_OF_GAS, gas_left};
+-    }
+-
+     msg.gas = std::numeric_limits<int64_t>::max();
+     if (gas < msg.gas)
+         msg.gas = static_cast<int64_t>(gas);

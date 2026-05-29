@@ -1,0 +1,39 @@
+diff --git a/lib/evmone/delegation.cpp b/lib/evmone/delegation.cpp
+index cb39733c..0570468a 100644
+--- a/lib/evmone/delegation.cpp
++++ b/lib/evmone/delegation.cpp
+@@ -6,10 +6,33 @@
+ 
+ namespace evmone
+ {
++namespace
++{
++// keccak256("") — the code_hash of any account with no deployed code (every
++// EOA and every account whose code was never set). Mirrors the constant
++// embedded in evmc and revm; kept local to avoid pulling a wider header.
++constexpr evmc::bytes32 EMPTY_CODE_HASH{{
++    0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c,
++    0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03, 0xc0,
++    0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b,
++    0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85, 0xa4, 0x70,
++}};
++}  // namespace
++
+ std::optional<evmc::address> get_delegate_address(
+     const evmc::HostInterface& host, const evmc::address& addr) noexcept
+ {
+-    // Load the code prefix up to the delegation designation size.
++    // Fast path mirroring revm's `Bytecode::eip7702_address(account.code)`:
++    // an account with no code can never carry the EIP-7702 designator, so we
++    // can skip the (potentially expensive / witness-requiring) copy_code call
++    // entirely. The host's get_code_hash for an EOA or non-existent account
++    // returns keccak256("") (or zero, for hosts that distinguish "absent" from
++    // "empty"); both signal "no code, no delegation possible".
++    const auto code_hash = host.get_code_hash(addr);
++    if (code_hash == EMPTY_CODE_HASH || code_hash == evmc::bytes32{})
++        return {};
++
++    // Slow path: load the code prefix up to the delegation designation size.
+     // The HostInterface::copy_code() copies up to the addr's code size
+     // and returns the number of bytes copied.
+     uint8_t designation_buffer[std::size(DELEGATION_MAGIC) + sizeof(evmc::address)];

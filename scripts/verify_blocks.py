@@ -197,6 +197,14 @@ def main():
         sys.exit(0)
     signal.signal(signal.SIGINT, on_sigint)
 
+    # Per-block reorg-retry counter. input-gen exits 75 (EX_TEMPFAIL)
+    # when it detects the node reorged mid-run; we just re-queue the
+    # same target. Cap retries so a chronically-flapping node doesn't
+    # spin forever.
+    REORG_EXIT_CODE = 75
+    MAX_REORG_RETRIES = 5
+    reorg_retries: dict[int, int] = {}
+
     while True:
         try:
             target = wait_for_new_block(args.rpc_url, last_processed,
@@ -234,6 +242,25 @@ def main():
         ig_rc = run_input_gen(args.rpc_url, target, input_bin, input_log,
                               args.input_gen_timeout)
         signal.signal(signal.SIGINT, on_sigint)
+        # Reorg-class failure: input-gen detected a mid-run reorg.
+        # Re-queue the block (do NOT advance last_processed, do NOT
+        # write a failure artifact), with a small backoff. Capped to
+        # avoid a hot-spin if the node is constantly reorging.
+        if ig_rc == REORG_EXIT_CODE:
+            retries = reorg_retries.get(target, 0) + 1
+            if retries <= MAX_REORG_RETRIES:
+                reorg_retries[target] = retries
+                print(f"[reorg] block {target} — chain reorged mid-run "
+                      f"(retry {retries}/{MAX_REORG_RETRIES}), waiting...")
+                time.sleep(args.poll_sec)
+                continue
+            # Out of retries — fall through to normal failure handling.
+            reorg_retries.pop(target, None)
+            print(f"[reorg] block {target} — exceeded {MAX_REORG_RETRIES} "
+                  f"retries, recording as failure.", file=sys.stderr)
+        # Successful (or terminal-fail) input-gen: clear any retry
+        # counter so a future re-encounter starts fresh.
+        reorg_retries.pop(target, None)
         if ig_rc != 0:
             md = write_failure(art_dir, "INPUT-GEN-FAIL", target, chain_hash,
                                None, parent_hash, head_block(args.rpc_url),
@@ -261,6 +288,31 @@ def main():
                 failure_path = md
                 failure_kind = "GUEST-CRASH"
             elif cpp_hash != chain_hash:
+                # Reorg check before declaring a real mismatch.
+                # `chain_hash` was snapshotted before input-gen ran;
+                # if the chain reorged in between, cpp_hash may match
+                # the NEW canonical block at `target` even though the
+                # stale chain.json shows the orphaned one. Re-fetch
+                # and compare. If still a mismatch — real bug.
+                try:
+                    fresh_b = chain_block(args.rpc_url, target)
+                    fresh_hash = fresh_b["hash"].lower()
+                except Exception as e:
+                    print(f"[warn] reorg recheck failed: {e}", file=sys.stderr)
+                    fresh_hash = chain_hash  # treat as unchanged
+                if fresh_hash != chain_hash:
+                    # Reorg happened — refresh the stored chain.json
+                    # so the artifact reflects current chain state,
+                    # then re-compare.
+                    chain_b   = fresh_b
+                    chain_hash  = fresh_hash
+                    parent_hash = chain_b["parentHash"].lower()
+                    chain_path.write_text(json.dumps(chain_b, indent=2))
+                if cpp_hash == chain_hash:
+                    print(f"[OK]   block {target} hash={cpp_hash} "
+                          f"(after chain.json refresh for reorg)")
+                    last_processed = target
+                    continue
                 md = write_failure(art_dir, "HASH-MISMATCH", target, chain_hash,
                                    cpp_hash, parent_hash,
                                    head_block(args.rpc_url))
