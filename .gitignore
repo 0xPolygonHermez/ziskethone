@@ -4,7 +4,7 @@ target/
 Cargo.lock
 
 # C++ / CMake
-cpp-guest/build/
+cpp-guest/build*/
 cpp-guest/cmake-build-*/
 *.o
 *.obj

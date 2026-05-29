@@ -1,2 +1,0 @@
-/usr/bin/ar qc libevmone-state.a "CMakeFiles/evmone-state.dir/block.cpp.o" "CMakeFiles/evmone-state.dir/bloom_filter.cpp.o" "CMakeFiles/evmone-state.dir/ethash_difficulty.cpp.o" "CMakeFiles/evmone-state.dir/host.cpp.o" "CMakeFiles/evmone-state.dir/precompiles.cpp.o" "CMakeFiles/evmone-state.dir/requests.cpp.o" "CMakeFiles/evmone-state.dir/state.cpp.o" "CMakeFiles/evmone-state.dir/system_contracts.cpp.o"
-/usr/bin/ranlib libevmone-state.a

@@ -1,4 +1,0 @@
-CREATE /Users/jbaylina/git/zisk/ziskethone/cpp-guest/build-debug/lib/libevmone-standalone.a
-ADDLIB /Users/jbaylina/git/zisk/ziskethone/cpp-guest/build-debug/lib/libevmone.a
-ADDLIB /Users/jbaylina/git/zisk/ziskethone/cpp-guest/build-debug/_deps/evmone-build/lib/evmone_precompiles/libevmone_precompiles.a
-SAVE

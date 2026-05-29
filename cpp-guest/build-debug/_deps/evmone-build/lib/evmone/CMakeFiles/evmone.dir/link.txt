@@ -1,2 +1,0 @@
-/usr/bin/ar qc ../../../../lib/libevmone.a CMakeFiles/evmone.dir/advanced_analysis.cpp.o CMakeFiles/evmone.dir/advanced_execution.cpp.o CMakeFiles/evmone.dir/advanced_instructions.cpp.o CMakeFiles/evmone.dir/baseline_analysis.cpp.o CMakeFiles/evmone.dir/baseline_execution.cpp.o CMakeFiles/evmone.dir/baseline_instruction_table.cpp.o CMakeFiles/evmone.dir/delegation.cpp.o CMakeFiles/evmone.dir/instructions_calls.cpp.o CMakeFiles/evmone.dir/instructions_storage.cpp.o CMakeFiles/evmone.dir/tracing.cpp.o CMakeFiles/evmone.dir/vm.cpp.o
-/usr/bin/ranlib ../../../../lib/libevmone.a
