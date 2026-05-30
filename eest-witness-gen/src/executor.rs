@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use alloy_consensus::BlockHeader as _;
-use alloy_primitives::B256;
+use alloy_primitives::{keccak256, Address, Bytes, B256};
 use alloy_rlp::Decodable;
 use alloy_rpc_types_debug::ExecutionWitness;
 use anyhow::{Context, Result};
@@ -25,9 +25,11 @@ use reth_evm_ethereum::EthEvmConfig;
 use reth_primitives_traits::{RecoveredBlock, SealedBlock};
 use reth_provider::{
     test_utils::create_test_provider_factory_with_chain_spec, BlockWriter,
-    DatabaseProviderFactory, ExecutionOutcome, OriginalValuesKnown, StateWriteConfig,
-    StateWriter, StaticFileProviderFactory, StaticFileSegment, StaticFileWriter,
+    DatabaseProviderFactory, ExecutionOutcome, HistoryWriter, OriginalValuesKnown,
+    StateProofProvider, StateProviderFactory, StateWriteConfig, StateWriter,
+    StaticFileProviderFactory, StaticFileSegment, StaticFileWriter,
 };
+use reth_trie::{HashedPostState, KeccakKeyHasher};
 use reth_revm::{database::StateProviderDatabase, witness::ExecutionWitnessRecord};
 use reth_trie::ExecutionWitnessMode;
 use revm::database::BundleState;
@@ -122,6 +124,12 @@ pub fn run_fixture(
     let executor_provider = EthEvmConfig::ethereum(chain_spec.clone());
     let mut out = Vec::with_capacity(test.blocks.len());
 
+    // Track the input state root for each iteration so we can
+    // inject its trie root node into the witness (reth's recorder
+    // omits the root because it assumes a stateful consumer).
+    // Block 0's input state == genesis state root.
+    let mut input_state_root: B256 = test.genesis_block_header.state_root;
+
     for (idx, fixture_block) in test.blocks.iter().enumerate() {
         let block_number = (idx + 1) as u64;
 
@@ -160,19 +168,108 @@ pub fn run_fixture(
             .with_context(|| format!("execute block {idx}"))?;
 
         // ---- (4) Materialize the witness in RPC shape ----
-        let exec_witness = witness_record
+        let mut exec_witness = witness_record
             .into_execution_witness(&state.database.0, &provider, block_number, mode)
             .with_context(|| format!("into_execution_witness {idx}"))?;
 
+        // ---- (4') Inject the INPUT (parent) state-root node ----
+        //
+        // reth's witness only contains nodes that the EVM
+        // materially traversed FROM the root downward — the root
+        // node itself is omitted because reth's own state DB has
+        // it cached. cpp-guest's verifier is purely stateless and
+        // needs the root as the explicit entry point of every
+        // trie walk. We synthesize it via a no-op account proof:
+        // the first entry of any AccountProof IS the trie root
+        // node. `input_state_root` is the post-block-(N-1) state
+        // root (or genesis state root for block 0).
+        // Merge nodes from a comprehensive multiproof for every
+        // touched address+slot. reth's into_execution_witness only
+        // emits nodes for state mutations; cpp-guest's verifier
+        // walks the parent trie for every account in the prestate,
+        // so we explicitly proof every address (and its touched
+        // slots) at the INPUT state and merge.
+        let mut already: std::collections::HashSet<B256> = exec_witness
+            .state
+            .iter()
+            .map(|n| keccak256(n.as_ref()))
+            .collect();
+
+        let touched_addrs: std::collections::BTreeSet<Address> = exec_witness
+            .keys
+            .iter()
+            .filter(|k| k.len() == 20)
+            .map(|k| Address::from_slice(k))
+            .collect();
+        let touched_slots: Vec<B256> = exec_witness
+            .keys
+            .iter()
+            .filter(|k| k.len() == 32)
+            .map(|k| B256::from_slice(k))
+            .collect();
+
+        // Build a MultiProofTargets map: each touched address ->
+        // every touched slot (we don't know which slot belongs to
+        // which contract, so we ask for all-by-all; reth handles
+        // non-existent (addr, slot) pairs by returning sibling
+        // nodes, which are also useful).
+        use alloy_primitives::map::B256Set;
+        use reth_trie::MultiProofTargets;
+        let mut targets = MultiProofTargets::default();
+        let hashed_slots: B256Set = touched_slots
+            .iter()
+            .map(|s| keccak256::<&[u8]>(s.as_slice()))
+            .collect();
+        for addr in &touched_addrs {
+            targets.insert(keccak256::<&[u8]>(addr.as_slice()), hashed_slots.clone());
+        }
+
+        match state.database.0.multiproof(Default::default(), targets) {
+            Ok(mp) => {
+                for (_path, node) in mp.account_subtree.into_inner() {
+                    let h = keccak256(node.as_ref());
+                    if already.insert(h) {
+                        exec_witness.state.push(Bytes::from(node.to_vec()));
+                    }
+                }
+                for (_addr, subtree) in mp.storages {
+                    for (_path, node) in subtree.subtree.into_inner() {
+                        let h = keccak256(node.as_ref());
+                        if already.insert(h) {
+                            exec_witness.state.push(Bytes::from(node.to_vec()));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(idx, "multiproof failed: {e:#}");
+            }
+        }
+
         // ---- (5) Commit post-state to the provider for the next
-        // block. We clone `output.state` first because both the
-        // `ExecutionOutcome` (which `write_state` consumes) and our
-        // returned `ExecutedBlock` need it.
+        // block. Three writes mirror ef-tests' run_case: write the
+        // bundle into plain state tables, write the hashed state
+        // into the trie tables (so subsequent `proof()` queries see
+        // the new state), and update history indices.
         let bundle_state = output.state.clone();
+        let hashed_state =
+            HashedPostState::from_bundle_state::<KeccakKeyHasher>(bundle_state.state());
         let outcome = ExecutionOutcome::single(recovered.header().number(), output);
         provider
             .write_state(&outcome, OriginalValuesKnown::Yes, StateWriteConfig::default())
             .with_context(|| format!("write_state {idx}"))?;
+        provider
+            .write_hashed_state(&hashed_state.into_sorted())
+            .with_context(|| format!("write_hashed_state {idx}"))?;
+        provider
+            .update_history_indices(
+                recovered.header().number()..=recovered.header().number(),
+            )
+            .with_context(|| format!("update_history_indices {idx}"))?;
+
+        // Advance input_state_root for the next iteration: block
+        // N+1's input state == block N's post-execution state.
+        input_state_root = recovered.header().state_root();
 
         let computed_hash = recovered.hash();
         out.push(ExecutedBlock {
