@@ -1,0 +1,65 @@
+[package]
+name = "eest-witness-gen"
+version = "0.1.0"
+edition = "2021"
+description = "Loads an EEST blockchain fixture, executes it through reth, captures the execution witness, and emits an OfflineSources manifest the cpp-guest pipeline can consume via `input-gen-from-manifest`."
+
+[[bin]]
+name = "eest-witness-gen"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Match reth v2.2.0's split-crate alloy versions. Pinned exact to
+# match reth's workspace pins (Cargo.toml at the reth tag); a minor
+# drift here would force Cargo to resolve two alloy major versions
+# and shadow the reth-internal types.
+alloy-primitives = { version = "=1.5.6", default-features = false, features = ["std", "serde"] }
+alloy-consensus = { version = "=2.0.4", default-features = false, features = ["serde"] }
+alloy-eips = { version = "=2.0.4", default-features = false, features = ["serde"] }
+alloy-genesis = { version = "=2.0.4", default-features = false }
+alloy-rlp = "=0.3.13"
+alloy-rpc-types-debug = { version = "=2.0.4", default-features = false }
+alloy-rpc-types-eth = { version = "=2.0.4", default-features = false, features = ["serde"] }
+
+# revm for the State<DB> witness-recording type. Feature flags are
+# inherited from reth's own revm pull (it enables c-kzg / blst /
+# secp256k1 etc.) — listing them redundantly here causes Cargo to
+# attempt to resolve two different links=ckzg crates.
+revm = { version = "=38.0.0", default-features = false, features = ["std"] }
+
+# Reth crates needed for the in-memory executor + witness recording.
+# Pulled as git deps because reth isn't on crates.io. Pinning to a
+# tag (v2.2.0 = April 2026 stable) gives a known-good API surface;
+# first build takes ~10 min and ~150 transitive crates.
+reth-chainspec       = { git = "https://github.com/paradigmxyz/reth", tag = "v2.2.0" }
+reth-ethereum-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v2.2.0" }
+reth-evm             = { git = "https://github.com/paradigmxyz/reth", tag = "v2.2.0" }
+reth-evm-ethereum    = { git = "https://github.com/paradigmxyz/reth", tag = "v2.2.0" }
+reth-revm            = { git = "https://github.com/paradigmxyz/reth", tag = "v2.2.0", features = ["witness"] }
+reth-trie            = { git = "https://github.com/paradigmxyz/reth", tag = "v2.2.0" }
+reth-db-common       = { git = "https://github.com/paradigmxyz/reth", tag = "v2.2.0" }
+reth-provider        = { git = "https://github.com/paradigmxyz/reth", tag = "v2.2.0", features = ["test-utils"] }
+# reth-primitives-traits is published to crates.io (not a workspace
+# member at v2.2.0). Reth's workspace pins this exact version, so
+# Cargo's resolver can keep one copy across the dep graph.
+reth-primitives-traits = "=0.3.1"
+
+# NOTE on the manifest contract:
+#
+# `eest-witness-gen` emits JSON that `rust-input-gen`'s
+# `input-gen-from-manifest` deserializes as an `OfflineSources`.
+# The Rust types are mirrored locally (see src/manifest.rs) instead
+# of imported from rust-input-gen because that crate is pinned to
+# alloy 0.8 (umbrella), while reth v2.2.0 requires the alloy 1.5/2.0
+# split crates above — the two are mutually-incompatible in one dep
+# graph. End-to-end shape compat is enforced by the round-trip:
+# eest-witness-gen → input-gen-from-manifest → cpp-guest must
+# reproduce the fixture's `lastblockhash`.

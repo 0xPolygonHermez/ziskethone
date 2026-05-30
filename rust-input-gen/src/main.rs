@@ -14,19 +14,10 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use tracing::info;
 
-mod enrich;
-mod errors;
-mod mpt;
-mod rpc;
-mod sections;
-mod state_root;
-mod touchset;
-mod verify;
-mod writer;
-
-use errors::ReorgDetected;
-use touchset::TouchSet;
-use writer::Writer;
+use rust_input_gen::enrich;
+use rust_input_gen::errors::ReorgDetected;
+use rust_input_gen::offline::{build_binary, OfflineSources};
+use rust_input_gen::rpc;
 
 /// sysexits.h `EX_TEMPFAIL` — returned to the OS when we detect that
 /// the upstream node reorged during our run. `scripts/verify_blocks.py`
@@ -59,6 +50,16 @@ struct Args {
     /// Output binary path.
     #[arg(long, default_value = "build/block_input.bin")]
     output: PathBuf,
+
+    /// Optionally dump the fully-resolved `OfflineSources` bundle
+    /// (everything the encoder reads) to a JSON manifest at this
+    /// path. Replaying the same manifest through `input-gen-from-
+    /// manifest` produces a byte-identical input.bin — useful for
+    /// recording mainnet fixtures for the EEST-style offline test
+    /// pipeline, and for diagnosing reproducibility issues without
+    /// keeping a live RPC reachable.
+    #[arg(long)]
+    dump_manifest: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -99,6 +100,37 @@ async fn run(args: Args) -> Result<()> {
         anyhow::bail!("block 0 has no parent; pick a later block");
     }
 
+    let sources = fetch_offline_sources_online(&client, args.block, args.ancestors).await?;
+
+    if let Some(manifest_path) = &args.dump_manifest {
+        if let Some(parent_dir) = manifest_path.parent() {
+            std::fs::create_dir_all(parent_dir)
+                .with_context(|| format!("creating manifest dir {}", parent_dir.display()))?;
+        }
+        let json = serde_json::to_string(&sources).context("serializing OfflineSources")?;
+        std::fs::write(manifest_path, &json)
+            .with_context(|| format!("writing manifest {}", manifest_path.display()))?;
+        info!(
+            path = %manifest_path.display(),
+            bytes = json.len(),
+            "wrote OfflineSources manifest",
+        );
+    }
+
+    build_binary(&sources, &args.output)
+}
+
+/// Live-RPC adapter: fetch everything `OfflineSources` needs from
+/// the node, with all the reorg-safety guarantees (hash pinning,
+/// parent-hash chain walk, end-of-run reverify). Returns a fully
+/// resolved bundle that `offline::build_binary` can encode without
+/// further network access.
+async fn fetch_offline_sources_online(
+    client: &rpc::Client,
+    block: u64,
+    ancestors_depth: u64,
+) -> Result<OfflineSources> {
+
     // ---- (1) Discover the canonical anchor hash ----
     //
     // Single by-number call in the whole run. From this point on,
@@ -106,7 +138,7 @@ async fn run(args: Args) -> Result<()> {
     // so a mid-run reorg cannot silently corrupt our data — it shows
     // up either as an RPC error (hash no longer canonical & pruned)
     // or as the end-of-run reverify catching a hash drift.
-    let current = client.block_by_number_full(args.block).await?;
+    let current = client.block_by_number_full(block).await?;
     let block_hash: B256 = current.header.hash;
     let parent_hash: B256 = current.header.parent_hash;
     info!(
@@ -139,7 +171,7 @@ async fn run(args: Args) -> Result<()> {
     //         must match the previous one's parent_hash by construction.
     let mut ancestors = vec![parent.clone()];
     let zero_hash = B256::ZERO;
-    while (ancestors.len() as u64) < args.ancestors {
+    while (ancestors.len() as u64) < ancestors_depth {
         let prev = ancestors.last().unwrap();
         if prev.header.number == 0 {
             // Reached genesis; no further ancestors exist.
@@ -201,7 +233,7 @@ async fn run(args: Args) -> Result<()> {
     // addresses aren't in the trace. Fetch their bytecode + the
     // touched ring-buffer slots explicitly via RPC, all hash-pinned.
     let system_contract_slots = inject_system_contracts(
-        &client,
+        client,
         &mut prestate,
         &current,
         block_hash,
@@ -215,7 +247,7 @@ async fn run(args: Args) -> Result<()> {
 
     // Withdrawal recipients (EIP-4895) — credited at block boundary
     // outside any tx, so the prestate tracer never sees them.
-    inject_withdrawal_recipients(&client, &mut prestate, &current, parent_hash).await?;
+    inject_withdrawal_recipients(client, &mut prestate, &current, parent_hash).await?;
     info!(
         accounts = prestate.len(),
         "added withdrawal recipients"
@@ -224,7 +256,7 @@ async fn run(args: Args) -> Result<()> {
     // Patch existing prestate entries with canonical values from the
     // parent state trie (the tracer omits unread fields).
     enrich::enrich_prestate_from_witness(
-        &client,
+        client,
         parent.header.state_root,
         parent_hash,
         &witness,
@@ -238,7 +270,7 @@ async fn run(args: Args) -> Result<()> {
     // can reference it via `Op::Leaf <idx>` and never needs the
     // legacy `Op::PhantomLeaf` carry-bytes trick.
     enrich::enrich_state_leaves_from_witness(
-        &client,
+        client,
         parent.header.state_root,
         parent_hash,
         &witness,
@@ -257,41 +289,21 @@ async fn run(args: Args) -> Result<()> {
         &mut prestate,
     )?;
 
-    // Single source of ordering for Accounts / Storages / StateRoot.
-    let touch = TouchSet::build(&prestate, &diff);
-    info!(
-        accounts = touch.addrs.len(),
-        slots = touch.slots.len(),
-        "built TouchSet",
-    );
-
-    // Verifier: walk the parent state trie from the witness and
-    // compare every touched account/slot value against what we'd
-    // write. Prints `state account VALUE mismatch` / `storage VALUE
-    // mismatch` for each discrepancy — pin-points which entry breaks
-    // the cpp-guest's `old_state_root` recomputation.
-    verify::check(
-        parent.header.state_root,
-        &witness,
-        &prestate,
-        &diff,
-        &touch,
-    )?;
-
     // ---- (5) End-of-run reorg reverify ----
     //
     // Belt-and-suspenders. Even though every fetch above was pinned
     // to a hash, a node that pruned the side chain mid-run may have
     // returned partial data for one of the hash-pinned calls. This
     // final by-number lookup confirms the canonical chain still
-    // resolves `args.block` to our anchored `block_hash`. Run it
-    // BEFORE writing the file so a reorg never produces a corrupt
-    // artifact.
+    // resolves `block` to our anchored `block_hash`. Run it BEFORE
+    // returning so a reorg never produces a corrupt OfflineSources
+    // (which the caller might persist to disk via the manifest
+    // pathway).
     {
-        let now = client.block_by_number_full(args.block).await?;
-        if now.header.hash != block_hash || now.header.number != args.block {
+        let now = client.block_by_number_full(block).await?;
+        if now.header.hash != block_hash || now.header.number != block {
             return Err(ReorgDetected {
-                block: args.block,
+                block,
                 expected: block_hash,
                 actual: Some(now.header.hash),
                 phase: "end-of-run reverify",
@@ -300,33 +312,15 @@ async fn run(args: Args) -> Result<()> {
         }
     }
 
-    // Encode.
-    let mut w = Writer::new();
-    sections::write_magic(&mut w);
-    sections::write_consensus_info(&mut w, &current, &parent);
-    sections::write_transactions(&mut w, &current)?;
-    sections::write_accounts(&mut w, &prestate, &diff, &touch, &current)?;
-    sections::write_contracts(&mut w, &prestate, &diff, &current)?;
-    sections::write_storages(&mut w, &prestate, &diff, &touch, &system_contract_slots)?;
-    sections::write_previous_blocks(&mut w, &ancestors);
-    state_root::write(
-        &mut w,
-        parent.header.state_root,
-        &witness.state,
-        &touch,
-        &diff,
-    )?;
-
-    let bytes = w.into_bytes();
-    if let Some(parent_dir) = args.output.parent() {
-        std::fs::create_dir_all(parent_dir)
-            .with_context(|| format!("creating output dir {}", parent_dir.display()))?;
-    }
-    std::fs::write(&args.output, &bytes)
-        .with_context(|| format!("writing {}", args.output.display()))?;
-
-    info!(path = %args.output.display(), bytes = bytes.len(), "wrote input file");
-    Ok(())
+    Ok(OfflineSources {
+        current,
+        parent,
+        ancestors,
+        prestate,
+        diff,
+        witness,
+        system_contract_slots,
+    })
 }
 
 /// Pectra system contracts the cpp-guest's `pre_execute_block` /

@@ -1,3 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["rust-input-gen"]
+members = [
+    "rust-input-gen",
+]
+# `eest-witness-gen` is intentionally NOT a workspace member.
+# It pulls reth (alloy 1.5/2.0, revm 38, c-kzg 2.x) while rust-input-gen
+# is on alloy 0.8 / c-kzg 1.x — Cargo can't satisfy both inside one
+# resolver because `c-kzg` declares `links = "ckzg"` and two versions
+# of a links-bearing package can't coexist. Excluding eest-witness-gen
+# gives it its own Cargo.lock and target/, isolating the two graphs.
+exclude = ["eest-witness-gen"]

@@ -8,6 +8,10 @@ description = "Fetches Ethereum block data via RPC and writes a BINARY_FORMAT-co
 name = "input-gen"
 path = "src/main.rs"
 
+[[bin]]
+name = "input-gen-from-manifest"
+path = "src/bin/from_manifest.rs"
+
 [dependencies]
 anyhow = "1"
 thiserror = "1"
