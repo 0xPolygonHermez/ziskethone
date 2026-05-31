@@ -661,6 +661,17 @@ void ZiskStateDB::execute_block(const Transactions& transactions) noexcept {
         }
         requests_hash_ = sha256_bytes32(concatenated.data(), concatenated.size());
     }
+
+    // EIP-7685 validity: the recomputed requests_hash must match the
+    // value declared in the block header. A mismatch means the block's
+    // requests (deposits/withdrawals/consolidations) are invalid or the
+    // declared hash is wrong — reject the block. Only meaningful for
+    // Pectra+ (field_count >= 21); the header omits requests_hash before
+    // that fork, mirroring block_header.cpp's RLP gate.
+    if (consensus_.field_count() >= 21 &&
+        requests_hash_ != consensus_.requests_hash()) {
+        fatal("requests_hash mismatch (invalid block requests)");
+    }
 }
 
 // ===== Private methods =====

@@ -75,9 +75,12 @@ const evmc::uint256be& ConsensusInfo::base_fee_per_gas() const noexcept {
 uint64_t ConsensusInfo::excess_blob_gas() const noexcept {
     return u64_at(header_ + kExcessBlobGasOffset);
 }
+const evmc::bytes32& ConsensusInfo::requests_hash() const noexcept {
+    return *reinterpret_cast<const evmc::bytes32*>(header_ + kRequestsHashOffset);
+}
 
 // ============================================================================
-// Constructor — fixed 232 B prefix + N × 48 B withdrawal records.
+// Constructor — fixed 264 B prefix + N × 48 B withdrawal records.
 // ============================================================================
 
 ConsensusInfo::ConsensusInfo(const uint8_t*& cursor) {

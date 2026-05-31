@@ -63,7 +63,7 @@ Per-block consensus-layer inputs for the **current** block (the one
 being executed). Schema at
 [`consensus_info.hpp`](cpp-guest/include/zeg/consensus_info.hpp).
 
-### Fixed 232-byte header prefix
+### Fixed 264-byte header prefix
 
 | Offset | Size | Field                       | Type / encoding         |
 |-------:|-----:|-----------------------------|-------------------------|
@@ -80,7 +80,8 @@ being executed). Schema at
 |    184 |   32 | `base_fee_per_gas`          | `uint256be` (32-byte big-endian) |
 |    216 |    8 | `withdrawals_count`         | `u64`                   |
 |    224 |    8 | `excess_blob_gas`           | `u64` (EIP-4844)        |
-|    232 |      | **end of fixed prefix**     |                         |
+|    232 |   32 | `requests_hash`             | `bytes32` (EIP-7685; zero pre-Pectra). cpp-guest cross-checks its recomputed value against this and rejects the block on mismatch |
+|    264 |      | **end of fixed prefix**     |                         |
 
 `chain_id` is **not** in the stream. It is compile-time pinned to `1`
 (Ethereum mainnet) in [`zeg/config.hpp`](cpp-guest/include/zeg/config.hpp).

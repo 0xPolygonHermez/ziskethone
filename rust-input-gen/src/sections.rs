@@ -82,6 +82,10 @@ pub fn write_consensus_info(w: &mut Writer, current: &Block, parent: &Block) {
     w.u64_le(with_count as u64);
     // 224..232 excess_blob_gas (zero pre-Cancun)
     w.u64_le(h.excess_blob_gas.unwrap_or(0));
+    // 232..264 requests_hash (zero pre-Pectra). Declared value from the
+    // block header; cpp-guest cross-checks its recomputed value against
+    // this and fatals on mismatch (EIP-7685 validity).
+    w.bytes(h.requests_hash.unwrap_or_default().as_slice());
     w.assert_aligned();
 
     // Withdrawal records × 48 B each (EIP-4895).
