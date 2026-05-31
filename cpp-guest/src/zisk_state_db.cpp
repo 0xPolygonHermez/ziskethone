@@ -1591,6 +1591,22 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
 
             const auto deployed_hash = keccak256_bytes32(
                 result.output_data, result.output_size);
+            // Register the deployed code in the Contracts table so
+            // later txs in this block (or later operations in this tx,
+            // e.g. when a system call resolves the just-installed
+            // EIP-7002/7251 predeploy at end-of-block) can resolve it
+            // by hash. The opcode CREATE / CREATE2 path goes through
+            // register_deployed_code() which does the same; this
+            // top-level CREATE-tx branch was missing the insert.
+            // Fixture test_system_contract_deployment exercises this:
+            // a Type-0 creation tx deploys the EIP-7002/7251 system
+            // contract AT the Prague fork block, and end-of-block
+            // collect_withdrawal_requests / collect_consolidation_
+            // requests does a system_call into it.
+            if (result.output_size > 0) {
+                contracts_.insert(deployed_hash, result.output_data,
+                                  result.output_size);
+            }
             journal_.log_code_hash(new_idx,
                                    accounts_.code_hash_at(new_idx),
                                    accounts_.last_tx_idx_at(new_idx));
