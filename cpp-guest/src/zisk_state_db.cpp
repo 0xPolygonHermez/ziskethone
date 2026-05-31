@@ -131,6 +131,22 @@ bool ZiskStateDB::account_exists(const evmc::address& addr) const noexcept {
 
 evmc::bytes32 ZiskStateDB::get_storage(const evmc::address& addr,
                                        const evmc::bytes32& key) const noexcept {
+    // Route to `dynamic_storage_` ONLY when the slot is genuinely
+    // absent from the static `Storages` table AND the address was
+    // freshly created in this tx. Checking static membership first
+    // keeps the witness-driven StateRoot integration intact for
+    // every slot the prover actually pre-registered — including
+    // slots on fresh accounts that reth's BundleState retained
+    // (i.e. accounts that don't self-destruct same-tx). Without this
+    // ordering, fresh-account SSTOREs that the witness DID capture
+    // would silently divert to dynamic_storage_, leaving the static
+    // row at its original value and diverging the post-block state
+    // root.
+    if (!storages_.contains(addr, key) && is_fresh_account(addr)) {
+        auto& ds = const_cast<DynamicStorage&>(dynamic_storage_);
+        ds.mark_touched(addr, key, tx_counter_);
+        return ds.value(addr, key);
+    }
     // `storages_.value(...)` touches the slot for tx_counter_ (snapshots
     // tx_original on first access, marks warm). The const_cast is safe:
     // mods_ is logically mutable scratch — evmc::Host::get_storage is
@@ -141,6 +157,25 @@ evmc::bytes32 ZiskStateDB::get_storage(const evmc::address& addr,
 evmc_storage_status ZiskStateDB::set_storage(const evmc::address& addr,
                                              const evmc::bytes32& key,
                                              const evmc::bytes32& value) noexcept {
+    // See routing comment in get_storage: dynamic_storage_ is only
+    // for (addr, key) pairs the witness genuinely doesn't know about.
+    if (!storages_.contains(addr, key) && is_fresh_account(addr)) {
+        // Freshly-created account, slot absent from witness: route
+        // through dynamic_storage_. access_storage(addr, key) was
+        // called by evmone before this, which marked the slot touched
+        // and (if absent) inserted it with a zero original. So now we
+        // can capture pre-write state and journal it.
+        const bool was_present = dynamic_storage_.contains(addr, key);
+        const auto current     = dynamic_storage_.value(addr, key);
+        const auto original    = dynamic_storage_.tx_original(addr, key, tx_counter_);
+        const auto old_tx_idx  = dynamic_storage_.last_tx_idx(addr, key);
+
+        journal_.log_dyn_storage(addr, key, was_present, current, old_tx_idx);
+        dynamic_storage_.set_value(addr, key, value, tx_counter_);
+
+        return compute_storage_status(original, current, value);
+    }
+
     // No explicit mark_touched_at here: on Berlin+ revisions evmone
     // always calls access_storage(addr, key) before set_storage, and
     // our access_storage already does the snapshot. So by the time
@@ -248,7 +283,10 @@ bool ZiskStateDB::selfdestruct(const evmc::address& addr,
         // set_balance_at calls below would otherwise overwrite each
         // other and leave the account net-credited).
         if (same_tx_created) {
-            clear_account_for_selfdestruct(src_idx);
+            // Defer destruction to end-of-tx per Yellow Paper —
+            // see comment on pending_destruct_ in the header.
+            const auto [_, inserted] = pending_destruct_.insert(src_idx);
+            journal_.log_pending_destruct(src_idx, /*was_already_present=*/!inserted);
             return true;
         }
         return false;
@@ -269,10 +307,23 @@ bool ZiskStateDB::selfdestruct(const evmc::address& addr,
     accounts_.set_balance_at(src_idx, evmc::uint256be{}, tx_counter_);
 
     if (same_tx_created) {
-        clear_account_for_selfdestruct(src_idx);
+        // Defer destruction to end-of-tx per Yellow Paper.
+        const auto [_, inserted] = pending_destruct_.insert(src_idx);
+        journal_.log_pending_destruct(src_idx, /*was_already_present=*/!inserted);
         return true;
     }
     return false;
+}
+
+void ZiskStateDB::apply_pending_destructs() noexcept {
+    // Called once per tx after the EVM completes. Each pending entry
+    // gets its full clear (nonce + code_hash + storage + dynamic
+    // storage). No journaling needed — the tx has committed and no
+    // revert can roll these back.
+    for (size_t idx : pending_destruct_) {
+        clear_account_for_selfdestruct(idx);
+    }
+    pending_destruct_.clear();
 }
 
 void ZiskStateDB::clear_account_for_selfdestruct(size_t src_idx) noexcept {
@@ -320,6 +371,15 @@ void ZiskStateDB::clear_account_for_selfdestruct(size_t src_idx) noexcept {
         journal_.log_storage(i, cur, storages_.last_tx_idx_at(i));
         storages_.set_value_at(i, evmc::bytes32{}, tx_counter_);
     }
+
+    // Dynamic-storage side: drop every slot the EVM SSTORE'd on this
+    // freshly-created address in O(1) (the nested unordered_map's
+    // erase is constant-time on the outer key). The journal records
+    // the entire snapshot so a frame revert restores it atomically.
+    if (dynamic_storage_.contains(addr)) {
+        auto snap = dynamic_storage_.erase_account(addr);
+        journal_.log_dyn_account_erase(addr, std::move(snap));
+    }
 }
 
 evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
@@ -329,8 +389,8 @@ evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
     // address runs the caller's code with the precompile's "code"
     // (which is empty), per EVM semantics.
     if ((msg.flags & EVMC_DELEGATED) == 0 &&
-        evmone::state::is_precompile(EVMC_OSAKA, msg.code_address)) {
-        return evmone::state::call_precompile(EVMC_OSAKA, msg);
+        evmone::state::is_precompile(active_revision(), msg.code_address)) {
+        return evmone::state::call_precompile(active_revision(), msg);
     }
 
     // Snapshot state up front. Any non-success status from the nested
@@ -366,7 +426,7 @@ evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
             return call_create(msg, cp);
     }
 
-    auto result = vm_.execute(*this, EVMC_OSAKA, msg,
+    auto result = vm_.execute(*this, active_revision(), msg,
                               code.data(), code.size());
     if (result.status_code != EVMC_SUCCESS) {
         rollback(cp);
@@ -429,7 +489,7 @@ evmc_access_status ZiskStateDB::access_account(const evmc::address& addr) noexce
     // warm at every access, regardless of whether the host's Accounts
     // table includes them. Short-circuit here so callers don't need
     // to inject precompile entries into the prestate.
-    if (evmone::state::is_precompile(EVMC_OSAKA, addr)) {
+    if (evmone::state::is_precompile(active_revision(), addr)) {
         return EVMC_ACCESS_WARM;
     }
     // Soft-phantom: if the address isn't in our table, neither the
@@ -460,6 +520,37 @@ evmc_access_status ZiskStateDB::access_account(const evmc::address& addr) noexce
 
 evmc_access_status ZiskStateDB::access_storage(const evmc::address& addr,
                                                const evmc::bytes32& key) noexcept {
+    // Same routing rule as get_storage/set_storage: only divert to
+    // dynamic_storage_ when the slot isn't in the static witness AND
+    // the account was freshly created in this tx.
+    if (!storages_.contains(addr, key) && is_fresh_account(addr)) {
+        // Freshly-created account, witness-absent slot: route through
+        // dynamic_storage_. We auto-insert the slot if absent
+        // (mark_touched does it) so the subsequent SLOAD/SSTORE find
+        // an entry to read/journal. For the journal: log the cold→warm
+        // transition so a revert restores the slot's prior state
+        // (which may be "absent" if this access is what created the
+        // entry).
+        const bool was_present = dynamic_storage_.contains(addr, key);
+        const bool was_warm = was_present
+            && dynamic_storage_.is_warm(addr, key, tx_counter_);
+        if (!was_warm) {
+            const uint64_t old_tx_idx = was_present
+                ? dynamic_storage_.last_tx_idx(addr, key)
+                : 0;
+            if (was_present) {
+                journal_.log_dyn_storage_warm(addr, key, old_tx_idx);
+            } else {
+                // Insertion-via-access: journal as a "was_present=false"
+                // dyn_storage entry so rollback removes the slot.
+                journal_.log_dyn_storage(addr, key, /*was_present=*/false,
+                                         evmc::bytes32{}, 0);
+            }
+        }
+        dynamic_storage_.mark_touched(addr, key, tx_counter_);
+        return was_warm ? EVMC_ACCESS_WARM : EVMC_ACCESS_COLD;
+    }
+
     // Soft-phantom: if the slot isn't in our table, neither the
     // prestate tracer nor the execution witness surfaced it (e.g. an
     // OOG'd SLOAD whose value Geth/Reth omits from the tx prestate —
@@ -514,7 +605,7 @@ ZiskStateDB::Checkpoint ZiskStateDB::checkpoint() noexcept {
 }
 
 void ZiskStateDB::rollback(Checkpoint cp) noexcept {
-    journal_.rollback(cp.journal_cp, accounts_, storages_, transient_);
+    journal_.rollback(cp.journal_cp, accounts_, storages_, dynamic_storage_, transient_, pending_destruct_);
     if (!tx_receipts_.empty()) {
         tx_receipts_.back().logs.resize(cp.log_count);
     }
@@ -569,6 +660,17 @@ void ZiskStateDB::execute_block(const Transactions& transactions) noexcept {
                                 std::end(inner.bytes));
         }
         requests_hash_ = sha256_bytes32(concatenated.data(), concatenated.size());
+    }
+
+    // EIP-7685 validity: the recomputed requests_hash must match the
+    // value declared in the block header. A mismatch means the block's
+    // requests (deposits/withdrawals/consolidations) are invalid or the
+    // declared hash is wrong — reject the block. Only meaningful for
+    // Pectra+ (field_count >= 21); the header omits requests_hash before
+    // that fork, mirroring block_header.cpp's RLP gate.
+    if (consensus_.field_count() >= 21 &&
+        requests_hash_ != consensus_.requests_hash()) {
+        fatal("requests_hash mismatch (invalid block requests)");
     }
 }
 
@@ -665,11 +767,25 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     // 4. Execute the init code with the new address as the recipient.
     evmc_message create_msg = msg;
     create_msg.recipient    = new_addr;
-    auto result = vm_.execute(*this, EVMC_OSAKA, create_msg,
+    auto result = vm_.execute(*this, active_revision(), create_msg,
                               init_code, init_size);
     if (result.status_code != EVMC_SUCCESS) {
         rollback(cp_after_bump);
         return result;
+    }
+
+    // EIP-3541 (London): contracts cannot have deployed code that
+    // starts with the 0xef byte. EIP-7702 extends this for the
+    // delegation-designation prefix 0xef0100 specifically — CREATE/
+    // CREATE2 must reject init code that RETURNS code starting with
+    // these bytes (otherwise the deployed contract would be
+    // indistinguishable from a 7702-installed delegation indicator).
+    // Reth rejects such CREATEs; fixtures
+    // test_creating_delegation_designation_contract and
+    // test_deploying_delegation_designation_contract verify this.
+    if (result.output_size > 0 && result.output_data[0] == 0xef) {
+        rollback(cp_after_bump);
+        return evmc::Result{EVMC_CONTRACT_VALIDATION_FAILURE, 0, 0, nullptr, 0};
     }
 
     // EIP-2 code-deposit cost (200 gas per byte of deployed code).
@@ -816,7 +932,12 @@ void ZiskStateDB::pre_execute_block() noexcept {
     // the call would succeed but the contract would store the wrong
     // value, producing a state-trie divergence the test only catches
     // via post-state-root mismatch.
-    {
+    //
+    // EIP-2935 activates in Prague. Skip it for Cancun blocks (which
+    // we may encounter as pre-fork blocks in mixed-fork EEST fixtures).
+    // field_count==0 (old manifests) is treated as Pectra by default
+    // — preserves mainnet replay behavior.
+    if (is_prague_or_later()) {
         const auto parent_block_hash = previous_blocks_.hash(0);
         (void)system_call(kHistoryStorageAddress,
                           std::span<const uint8_t>{parent_block_hash.bytes, 32});
@@ -836,6 +957,30 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         ++tx_counter_;
         transient_.reset();
         created_this_tx_idx_.clear();
+        delegated_this_tx_idx_.clear();
+        // pending_destruct_ is also per-tx — `apply_pending_destructs`
+        // at the END of the previous iteration drained it, so this
+        // clear is just a paranoia guard (also handles tx 0).
+        pending_destruct_.clear();
+        // Tx-end commit hook for the dynamic-storage path. For the
+        // SELFDESTRUCT-same-tx pattern (the case this whole machinery
+        // was added for), `clear_account_for_selfdestruct` already
+        // dropped every fresh account's slots via `erase_account` —
+        // `dynamic_storage_` is empty here.
+        //
+        // For a surviving freshly-created account (CREATE without
+        // SELFDESTRUCT) we would need to commit its slots somewhere
+        // the post-block StateRoot walker can see them. That requires
+        // either appending into the static `Storages` table (which
+        // breaks witness-embedded indices) or extending the StateRoot
+        // walker to consider `dynamic_storage_` directly. Neither is
+        // exercised by the named failing fixture; fatal here so a
+        // future fixture that hits this case surfaces it loudly
+        // instead of silently producing a wrong state root.
+        if (!dynamic_storage_.empty()) {
+            fatal("dynamic_storage: surviving fresh account at tx-end "
+                  "needs StateRoot extension (see plan); not yet supported");
+        }
 
         const auto& tx = transactions.at(i);
 
@@ -891,6 +1036,12 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
                      (int)result.status_code);
         finalize_receipt(result, gas_used);
 
+        // Apply deferred SELFDESTRUCT clears now that the tx has
+        // committed. Per Yellow Paper, destruction happens at the
+        // end of the TRANSACTION, not at the SELFDESTRUCT opcode.
+        // See pending_destruct_ in the header for the rationale.
+        apply_pending_destructs();
+
         // Detach tracer after the traced tx so later txs don't trace.
         if (trace_env != nullptr && i == static_cast<size_t>(std::atoi(trace_env))) {
             vm_ev->remove_tracers();
@@ -905,7 +1056,7 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
 void ZiskStateDB::pre_warm_for_tx(const Transactions::View& tx) noexcept {
     auto warm_addr = [&](const evmc::address& a) {
         // Precompiles are inherently warm — no Accounts entry needed.
-        if (evmone::state::is_precompile(EVMC_OSAKA, a)) {
+        if (evmone::state::is_precompile(active_revision(), a)) {
             return;
         }
         // EIP-2930 lets a tx pre-declare addrs/slots it might touch
@@ -1180,6 +1331,34 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item&          auth
         return 0;
     }
 
+    // EIP-2 / EIP-7702: s must be in [1, secp256k1n/2]. Out-of-range
+    // s values produce a malleable signature that reth (and every
+    // conforming EL) rejects. cpp-guest's libsecp256k1 verifier
+    // doesn't enforce this — without the check here, an auth with
+    // s = N-1 (test_valid_tx_invalid_auth_signature SECP256K1N_1)
+    // would be accepted, bumping the signer's nonce + setting code
+    // and diverging from reth's empty-diff result.
+    //
+    // secp256k1_N/2 = floor(N/2)
+    //   = 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0
+    static constexpr uint8_t kSecp256k1NHalf[32] = {
+        0x7f,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+        0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+        0x5d,0x57,0x6e,0x73,0x57,0xa4,0x50,0x1d,
+        0xdf,0xe9,0x2f,0x46,0x68,0x1b,0x20,0xa0,
+    };
+    {
+        // Lexicographic big-endian compare: a_s > N/2 -> skip.
+        int cmp = std::memcmp(a_s.bytes, kSecp256k1NHalf, 32);
+        if (cmp > 0) return 0;
+        // s == 0 is also invalid (no signature).
+        bool s_is_zero = true;
+        for (uint8_t b : a_s.bytes) {
+            if (b != 0) { s_is_zero = false; break; }
+        }
+        if (s_is_zero) return 0;
+    }
+
     // Auth signing hash: keccak256(0x05 || rlp([chain_id, address,
     // nonce])).
     const auto cid_enc   = rlp::encode_u64(a_chain_id);
@@ -1200,19 +1379,80 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item&          auth
         preimage.data(), preimage.size());
 
     // Verify against prover-supplied pubkey, recover signer.
+    // rust-input-gen writes a 64-byte ALL-ZERO sentinel when the
+    // auth's signature is invalid (bad parity, s out of range, etc.)
+    // and pubkey recovery failed. Per EIP-7702 such auths are
+    // SKIPPED at the block-level (the tx still executes; the auth
+    // is a no-op). Detect the sentinel and short-circuit before
+    // verify_signature_and_get_signer (which would fatal).
     const auto pk_span = tx.auth_pubkey(auth_idx);
+    {
+        bool pk_all_zero = true;
+        for (uint8_t b : pk_span) {
+            if (b != 0) { pk_all_zero = false; break; }
+        }
+        if (pk_all_zero) return 0;
+    }
     const evmc::address signer =
         verify_signature_and_get_signer(pk_span.data(),
                                         a_hash, a_r, a_s);
 
-    // Signer must be in the witness with the matching nonce.
+    // Witness-completeness: a well-formed auth signature deterministically
+    // recovers `signer` from public inputs (chain_id, address, nonce, r, s,
+    // v). The prover knows this address in advance, so the prestate MUST
+    // include it. A "soft skip" here would be exploitable: a malicious
+    // prover could omit `signer` from accounts_ and substitute Op::Hash
+    // with the honest parent/post leaf hashes (both public-chain-derivable),
+    // causing cpp-guest to silently drop the auth while the state-root
+    // walk still matches the canonical roots — i.e., the proof would
+    // attest a different STF than consensus's. Honest input-gen injects
+    // every recovered signer in both offline mode (rust-input-gen/src/
+    // enrich.rs `inject_tx_addresses`) and online mode, so this fatal
+    // only fires on an incomplete or adversarial witness.
+    if (!accounts_.contains(signer)) {
+        fatal("EIP-7702: recovered authority address absent from "
+              "accounts table — witness incomplete or adversarial");
+    }
     const size_t signer_idx = accounts_.index_of(signer);
+
+    // EIP-7702: refuse to bump if signer's nonce is already at the
+    // u64 ceiling — the bump would overflow. reth applies this guard
+    // (test_nonce_overflow_after_first_authorization's second auth
+    // sees signer.nonce == UINT64_MAX from the prior auth and
+    // rejects). cpp-guest's wrap-around would silently set nonce=0
+    // and diverge.
+    if (accounts_.nonce_at(signer_idx) == UINT64_MAX) {
+        return 0;
+    }
 
     // EIP-7702: every recovered authority address is added to the
     // tx-level access list (pre-warmed) regardless of whether the
     // auth's other validity checks pass. Do it here, BEFORE the nonce
     // check, so a nonce-mismatched auth still warms its signer.
     accounts_.mark_touched_at(signer_idx, tx_counter_);
+
+    // EIP-7702: per spec, the authority's current code must be
+    // either empty (an EOA) or already a delegation designation
+    // (a previous 7702 set_code, which is a 23-byte 0xef0100||addr
+    // stub). Any other code (test fixtures sometimes plant tiny
+    // bytecode like 0x00 STOP at the signer's address) makes the
+    // auth invalid and we must NOT bump the nonce or change the
+    // code — otherwise reth's BundleState diverges from ours and
+    // check_read_only_unchanged fires at end-of-block (see EEST
+    // test_account_warming / test_intrinsic_gas_cost /
+    // test_gas_cost). Read code_hash first; if non-empty, resolve
+    // the actual bytes via Contracts to inspect the prefix.
+    const auto signer_code_hash = accounts_.code_hash_at(signer_idx);
+    if (signer_code_hash != EMPTY_CODE_HASH) {
+        const auto& c = contracts_.by_hash(signer_code_hash);
+        const bool is_delegation = c.code_size == 23
+            && c.code[0] == 0xef
+            && c.code[1] == 0x01
+            && c.code[2] == 0x00;
+        if (!is_delegation) {
+            return 0;
+        }
+    }
 
     if (accounts_.nonce_at(signer_idx) != a_nonce) {
         return 0;
@@ -1254,6 +1494,12 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item&          auth
         const auto delegation_hash = keccak256_bytes32(
             delegation, sizeof(delegation));
         accounts_.set_code_hash_at(signer_idx, delegation_hash, tx_counter_);
+        // Track this EOA as a dynamic-storage routing target for the
+        // rest of the tx — see the comment on `delegated_this_tx_idx_`
+        // for the security argument. We only do this on the
+        // delegation-SET branch; the clear branch above leaves the
+        // EOA code-less again, so it doesn't need the routing.
+        delegated_this_tx_idx_.insert(signer_idx);
     }
 
     return signer_was_non_empty ? 12500 : 0;
@@ -1315,10 +1561,24 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
         accounts_.mark_touched_at(new_idx, tx_counter_);
         created_this_tx_idx_.insert(new_idx);
 
-        auto result = vm_.execute(*this, EVMC_OSAKA, msg,
+        auto result = vm_.execute(*this, active_revision(), msg,
                                   entry_code.data(), entry_code.size());
 
         if (result.status_code == EVMC_SUCCESS) {
+            // EIP-3541 (London): reject deployed code starting with
+            // 0xef. EIP-7702 reinforces this for the delegation prefix
+            // 0xef0100 specifically — top-level CREATE tx must also
+            // refuse to deploy such code, otherwise the new contract
+            // would be indistinguishable from a 7702-installed
+            // delegation indicator. Fixture
+            // test_deploying_delegation_designation_contract.json
+            // exercises this path (a Type-0 creation tx whose init
+            // code RETURNs `0xef0100||addr`).
+            if (result.output_size > 0 && result.output_data[0] == 0xef) {
+                return evmc::Result{EVMC_CONTRACT_VALIDATION_FAILURE,
+                                    0, 0, nullptr, 0};
+            }
+
             // EIP-2 code deposit cost (200 / byte). Deducted from
             // the CREATE frame's remaining gas; OOG if insufficient.
             constexpr int64_t CODE_DEPOSIT_COST = 200;
@@ -1331,6 +1591,22 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
 
             const auto deployed_hash = keccak256_bytes32(
                 result.output_data, result.output_size);
+            // Register the deployed code in the Contracts table so
+            // later txs in this block (or later operations in this tx,
+            // e.g. when a system call resolves the just-installed
+            // EIP-7002/7251 predeploy at end-of-block) can resolve it
+            // by hash. The opcode CREATE / CREATE2 path goes through
+            // register_deployed_code() which does the same; this
+            // top-level CREATE-tx branch was missing the insert.
+            // Fixture test_system_contract_deployment exercises this:
+            // a Type-0 creation tx deploys the EIP-7002/7251 system
+            // contract AT the Prague fork block, and end-of-block
+            // collect_withdrawal_requests / collect_consolidation_
+            // requests does a system_call into it.
+            if (result.output_size > 0) {
+                contracts_.insert(deployed_hash, result.output_data,
+                                  result.output_size);
+            }
             journal_.log_code_hash(new_idx,
                                    accounts_.code_hash_at(new_idx),
                                    accounts_.last_tx_idx_at(new_idx));
@@ -1366,7 +1642,7 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
         transfer_value(msg.sender, msg.recipient, msg.value);
     }
 
-    return vm_.execute(*this, EVMC_OSAKA, msg,
+    return vm_.execute(*this, active_revision(), msg,
                        entry_code.data(), entry_code.size());
 }
 
@@ -1466,12 +1742,20 @@ void ZiskStateDB::finalize_receipt(const evmc::Result& result,
 }
 
 void ZiskStateDB::post_execute_block() noexcept {
-    credit_withdrawals();                 // EIP-4895
-    // Order matters: deposit requests must be pushed first so requests_
-    // stays in EIP-7685 type-byte order (0x00 → 0x01 → 0x02).
-    collect_deposit_requests();           // EIP-6110
-    collect_withdrawal_requests();        // EIP-7002
-    collect_consolidation_requests();     // EIP-7251
+    credit_withdrawals();                 // EIP-4895 (Shanghai+)
+    // EIP-6110/7002/7251 all activate in Prague. Skip them for pre-
+    // Prague blocks (mixed-fork EEST fixtures); their system contracts
+    // either don't exist yet or aren't supposed to be queried. For old
+    // manifests pre-dating field_count, is_prague_or_later() returns
+    // true (field_count=0 → default Pectra), preserving mainnet replay
+    // behavior.
+    if (is_prague_or_later()) {
+        // Order matters: deposit requests must be pushed first so requests_
+        // stays in EIP-7685 type-byte order (0x00 → 0x01 → 0x02).
+        collect_deposit_requests();           // EIP-6110
+        collect_withdrawal_requests();        // EIP-7002
+        collect_consolidation_requests();     // EIP-7251
+    }
 }
 
 // ----- per-block post-execution phases ---------------------------------------
@@ -1512,15 +1796,19 @@ void ZiskStateDB::collect_deposit_requests() noexcept {
 
 void ZiskStateDB::collect_withdrawal_requests() noexcept {
     // EIP-7002: calling the predeploy with empty calldata dequeues all
-    // pending requests; the EVM returns N × 76 bytes (a concatenation
-    // of 76-byte records). Per EIP-7685, we prepend the type byte 0x01
-    // to the raw queue dump and push it as one request-list entry.
+    // pending requests; the canonical contract returns N × 76 bytes
+    // (concatenated 76-byte records). Per EIP-7685, requests_hash is
+    // computed over the raw predeploy output PREPENDED with the type
+    // byte 0x01 — the output is treated as opaque bytes, with no
+    // size-alignment constraint at the consensus layer. The 76-byte
+    // record shape is a convention of the canonical contract, not a
+    // validity rule, so a modified predeploy (EEST
+    // test_modified_withdrawal_contract fixtures) that returns a
+    // different size is still hashed verbatim and the block stays
+    // valid as long as requests_hash matches the header.
     auto result = system_call(kWithdrawalRequestsAddress, {});
     if (result.status_code != EVMC_SUCCESS || result.output_size == 0) {
         return;
-    }
-    if (result.output_size % 76 != 0) {
-        fatal("EIP-7002: queue dump not a multiple of 76 bytes");
     }
     std::vector<uint8_t> req;
     req.reserve(1 + result.output_size);
@@ -1531,14 +1819,14 @@ void ZiskStateDB::collect_withdrawal_requests() noexcept {
 }
 
 void ZiskStateDB::collect_consolidation_requests() noexcept {
-    // EIP-7251: same shape as EIP-7002, but each record is 116 bytes
-    // (20 + 48 + 48) and the request type byte is 0x02.
+    // EIP-7251: same shape as EIP-7002 — canonical contract emits N ×
+    // 116 bytes (20 + 48 + 48), type byte is 0x02, but consensus only
+    // sees opaque bytes. See collect_withdrawal_requests() for the
+    // rationale on accepting any size (test_modified_consolidation_
+    // contract / test_extra_consolidations).
     auto result = system_call(kConsolidationRequestsAddress, {});
     if (result.status_code != EVMC_SUCCESS || result.output_size == 0) {
         return;
-    }
-    if (result.output_size % 116 != 0) {
-        fatal("EIP-7251: queue dump not a multiple of 116 bytes");
     }
     std::vector<uint8_t> req;
     req.reserve(1 + result.output_size);
@@ -1579,7 +1867,7 @@ evmc::Result ZiskStateDB::system_call(const evmc::address&     target,
     // for EIP-7002 / EIP-7251 request dequeue).
     const auto cp = checkpoint();
     const auto entry_code = code(target);
-    auto result = vm_.execute(*this, EVMC_OSAKA, msg,
+    auto result = vm_.execute(*this, active_revision(), msg,
                               entry_code.data(), entry_code.size());
     if (result.status_code != EVMC_SUCCESS) {
         rollback(cp);

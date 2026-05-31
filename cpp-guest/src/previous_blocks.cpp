@@ -79,6 +79,12 @@ uint64_t PreviousBlocks::View::timestamp      () const noexcept { return u64_at(
 uint64_t PreviousBlocks::View::blob_gas_used  () const noexcept { return u64_at(data + kBlobGasUsedOffset);    }
 uint64_t PreviousBlocks::View::excess_blob_gas() const noexcept { return u64_at(data + kExcessBlobGasOffset);  }
 
+uint32_t PreviousBlocks::View::field_count() const noexcept {
+    uint32_t v;
+    std::memcpy(&v, data + kFieldCountOffset, sizeof(v));
+    return v;
+}
+
 std::span<const uint8_t> PreviousBlocks::View::extra_data() const noexcept {
     const uint64_t len = u64_at(data + kExtraDataLenOffset);
     return std::span<const uint8_t>{data + kExtraDataOffset, static_cast<size_t>(len)};
@@ -92,6 +98,11 @@ std::span<const uint8_t> PreviousBlocks::View::extra_data() const noexcept {
 namespace {
 
 evmc::bytes32 compute_header_hash(const PreviousBlocks::View& v) {
+    // Read field_count from the wire format. 0 == unset (old manifests
+    // pre-dating this field) → treat as 21 (Pectra default), which is
+    // what mainnet replays always want.
+    const uint32_t fc_raw = v.field_count();
+    const uint32_t fc = (fc_raw == 0) ? 21u : fc_raw;
     return compute_block_header_hash(BlockHeader{
         .parent_hash              = v.parent_hash(),
         .ommers_hash              = v.ommers_hash(),
@@ -114,6 +125,7 @@ evmc::bytes32 compute_header_hash(const PreviousBlocks::View& v) {
         .excess_blob_gas          = v.excess_blob_gas(),
         .parent_beacon_block_root = v.parent_beacon_block_root(),
         .requests_hash            = v.requests_hash(),
+        .field_count              = fc,
     });
 }
 

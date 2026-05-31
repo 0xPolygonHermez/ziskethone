@@ -46,7 +46,8 @@ public:
         // Fixed offsets, all 8-byte aligned by construction.
         static constexpr size_t kParentHashOffset            = 0;
         static constexpr size_t kOmmersHashOffset            = 32;
-        static constexpr size_t kCoinbaseOffset              = 64;   // 20 B + 4 B pad
+        static constexpr size_t kCoinbaseOffset              = 64;   // 20 B
+        static constexpr size_t kFieldCountOffset            = 84;   // u32-le
         static constexpr size_t kStateRootOffset             = 88;
         static constexpr size_t kTransactionsRootOffset      = 120;
         static constexpr size_t kReceiptsRootOffset          = 152;
@@ -100,6 +101,13 @@ public:
         uint64_t timestamp      () const noexcept;
         uint64_t blob_gas_used  () const noexcept;
         uint64_t excess_blob_gas() const noexcept;
+
+        // Number of header fields cpp-guest should encode in the RLP
+        // for this ancestor. Set by rust-input-gen from which Option<>
+        // fields were Some on the original Block. 0 = unset → treat as
+        // 21 (Pectra default, backward-compat with manifests that
+        // pre-date this field).
+        uint32_t field_count    () const noexcept;
 
         // Variable-length extra_data, ≤ 32 bytes; the wire format
         // reserves a fixed 32-byte buffer and an 8-byte length prefix.

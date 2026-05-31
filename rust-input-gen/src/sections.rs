@@ -11,7 +11,6 @@ use alloy::eips::eip2718::Encodable2718;
 use alloy::primitives::{Address, PrimitiveSignature, B256, U256};
 use alloy::rpc::types::{Block, BlockTransactions};
 use anyhow::Result;
-use k256::elliptic_curve::sec1::ToEncodedPoint;
 use sha3::{Digest, Keccak256};
 
 use crate::rpc::{Prestate, PrestateDiff};
@@ -38,8 +37,25 @@ pub fn write_consensus_info(w: &mut Writer, current: &Block, parent: &Block) {
     w.bytes(parent.header.state_root.as_slice());
     // 32..52 beneficiary
     w.bytes(h.beneficiary.as_slice());
-    // 52..56 pad
-    w.pad(4);
+    // 52..56 field_count (u32-le) for the current block — same scheme
+    // as the per-ancestor field_count in `write_previous_blocks`.
+    // Tells cpp-guest the consensus fork the block runs under, so it
+    // can gate Prague system calls (EIP-2935/7002/7251) for pre-Prague
+    // blocks in mixed-fork EEST fixtures. Was a 4-byte pad (always 0)
+    // → backward-compat: cpp-guest treats 0 as 21 (Pectra default),
+    // matching mainnet replays.
+    let field_count: u32 = if h.requests_hash.is_some() {
+        21
+    } else if h.parent_beacon_block_root.is_some() {
+        20
+    } else if h.withdrawals_root.is_some() {
+        17
+    } else if h.base_fee_per_gas.is_some() {
+        16
+    } else {
+        15
+    };
+    w.u32_le(field_count);
     // 56..64 number
     w.u64_le(h.number);
     // 64..72 gas_limit
@@ -65,6 +81,10 @@ pub fn write_consensus_info(w: &mut Writer, current: &Block, parent: &Block) {
     w.u64_le(with_count as u64);
     // 224..232 excess_blob_gas (zero pre-Cancun)
     w.u64_le(h.excess_blob_gas.unwrap_or(0));
+    // 232..264 requests_hash (zero pre-Pectra). Declared value from the
+    // block header; cpp-guest cross-checks its recomputed value against
+    // this and fatals on mismatch (EIP-7685 validity).
+    w.bytes(h.requests_hash.unwrap_or_default().as_slice());
     w.assert_aligned();
 
     // Withdrawal records × 48 B each (EIP-4895).
@@ -119,12 +139,21 @@ pub fn write_transactions(w: &mut Writer, current: &Block) -> Result<()> {
         // EIP-7702 (Type-4) only: append one 64 B pubkey per
         // authorization in the auth list. The cpp-guest reads them in
         // the same order — see `transactions.cpp:540-551`.
+        //
+        // For auths whose signature is INVALID (bad parity, s out of
+        // range, etc.), write 64 zero bytes as a sentinel. Per EIP-7702,
+        // invalid auths must be SKIPPED — the block-level tx still
+        // executes, only the auth itself is a no-op. cpp-guest
+        // detects the all-zero sentinel and treats the auth as
+        // unverifiable (= skip). Fixtures like
+        // test_valid_tx_invalid_auth_signature exercise this path.
         if let TxEnvelope::Eip7702(signed) = env {
             for auth in &signed.tx().authorization_list {
-                let auth_sig = auth
-                    .signature()
-                    .map_err(|e| anyhow::anyhow!("EIP-7702 auth bad signature: {e}"))?;
-                let auth_pk = recover_pubkey(&auth_sig, &auth.inner().signature_hash())?;
+                let auth_pk: [u8; 64] = match auth.signature() {
+                    Ok(sig) => recover_pubkey(&sig, &auth.inner().signature_hash())
+                        .unwrap_or([0u8; 64]),
+                    Err(_) => [0u8; 64],
+                };
                 w.bytes(&auth_pk);
             }
             // 64 B is already 8-aligned; no extra pad needed.
@@ -301,7 +330,7 @@ pub fn write_contracts(
     use alloy::primitives::Bytes;
     let mut by_hash: BTreeMap<B256, Bytes> = BTreeMap::new();
 
-    let mut insert = |dst: &mut BTreeMap<B256, Bytes>, code: Bytes| {
+    let insert = |dst: &mut BTreeMap<B256, Bytes>, code: Bytes| {
         if code.is_empty() {
             return;
         }
@@ -436,8 +465,27 @@ pub fn write_previous_blocks(w: &mut Writer, ancestors: &[Block]) {
         w.bytes(h.ommers_hash.as_slice());
         //  64..84  coinbase
         w.bytes(h.beneficiary.as_slice());
-        //  84..88  pad
-        w.pad(4);
+        //  84..88  field_count (u32-le): the number of fields cpp-guest
+        //          should RLP-encode for this ancestor's header. Header
+        //          layout grew across hardforks; without an explicit
+        //          marker, a Cancun block with no blob transactions and
+        //          no CL (test-fixture scenario, parent_beacon_block_root
+        //          = 0) is indistinguishable from a pre-Cancun block —
+        //          both have all-zero trailing fields. Was a 4-byte pad
+        //          (always 0) → backward-compatible: cpp-guest treats 0
+        //          as 21 (Pectra default), matching mainnet replays.
+        let field_count: u32 = if h.requests_hash.is_some() {
+            21
+        } else if h.parent_beacon_block_root.is_some() {
+            20
+        } else if h.withdrawals_root.is_some() {
+            17
+        } else if h.base_fee_per_gas.is_some() {
+            16
+        } else {
+            15
+        };
+        w.u32_le(field_count);
         //  88..120 state_root
         w.bytes(h.state_root.as_slice());
         // 120..152 transactions_root

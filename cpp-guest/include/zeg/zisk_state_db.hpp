@@ -37,6 +37,7 @@
 #include "zeg/accounts.hpp"
 #include "zeg/consensus_info.hpp"
 #include "zeg/contracts.hpp"
+#include "zeg/dynamic_storage.hpp"
 #include "zeg/journal.hpp"
 #include "zeg/previous_blocks.hpp"
 #include "zeg/receipt.hpp"           // LogEntry, TxReceipt
@@ -246,6 +247,55 @@ private:
     void process_transactions(const Transactions& transactions) noexcept;
     void post_execute_block()                                   noexcept;
 
+    // Walk `pending_destruct_` and call clear_account_for_selfdestruct
+    // on every entry. Called once per tx after the EVM completes,
+    // before the next tx starts (which clears the set). At this point
+    // no revert is possible (the tx has committed), so the clears
+    // don't need their own journal entries — they're terminal.
+    void apply_pending_destructs() noexcept;
+
+    // True iff `addr` was CREATEd in the current tx (per
+    // `created_this_tx_idx_`). Routing predicate for the dynamic
+    // storage path: SSTORE/SLOAD/access_storage on such addresses go
+    // through `dynamic_storage_` rather than the static `storages_`
+    // table, since reth's witness may not contain their slots.
+    bool is_fresh_account(const evmc::address& addr) const noexcept {
+        if (!accounts_.contains(addr)) return false;
+        const size_t idx = accounts_.index_of(addr);
+        return created_this_tx_idx_.count(idx) != 0
+            || delegated_this_tx_idx_.count(idx) != 0;
+    }
+
+    // Map ConsensusInfo.field_count to an `evmc_revision` so the
+    // EVM dispatch (vm_.execute, is_precompile, call_precompile) runs
+    // at the correct fork. cpp-guest historically hard-coded
+    // EVMC_OSAKA everywhere, which silently enabled Prague/Osaka
+    // precompiles in Cancun blocks (e.g. BLS_G1ADD at 0x0d returned
+    // 128-byte data instead of empty), tripping read-only-value
+    // checks for fixtures like test_precompile_before_fork. Default
+    // to EVMC_PRAGUE for unset/Pectra (field_count == 0 || >= 21) —
+    // matches mainnet replay (Prague blocks) and the bulk of the
+    // EEST Pectra corpus.
+    evmc_revision active_revision() const noexcept {
+        const uint32_t fc = consensus_.field_count();
+        if (fc == 0 || fc >= 21) return EVMC_PRAGUE;
+        if (fc >= 20)            return EVMC_CANCUN;
+        if (fc >= 17)            return EVMC_SHANGHAI;
+        if (fc >= 16)            return EVMC_LONDON;
+        return EVMC_BERLIN;
+    }
+
+    // Fork detection from ConsensusInfo.field_count. Treats 0 (= old
+    // manifests that pre-date the field) as Pectra (21), so mainnet
+    // replays behave as before. Used to gate Prague-only system calls
+    // (EIP-2935 in pre_execute_block, EIP-6110/7002/7251 in
+    // post_execute_block) when running mixed-fork EEST fixtures with
+    // pre-Prague ancestors / blocks.
+    bool is_prague_or_later() const noexcept {
+        const uint32_t fc = consensus_.field_count();
+        return fc == 0 || fc >= 21;
+    }
+
     // ----- Per-tx pipeline (called in this order by process_transactions) -----
     //
     // Each helper takes the next tx (plus any cross-phase scalar it
@@ -350,6 +400,15 @@ private:
     // tx_counter_. TSTORE writes are journaled so revert restores
     // (or erases) the entry.
     TransientStorage      transient_{};
+    // Per-tx scratchpad of storage slots for accounts that were
+    // freshly CREATEd in the current tx. reth's witness recorder
+    // drops storage entries for accounts that end up destroyed
+    // (CREATE+SELFDESTRUCT same tx), so the static `Storages` table
+    // built from the manifest can't satisfy SLOAD/SSTORE on those
+    // slots. Routed via `is_fresh_account(addr)` — see
+    // `dynamic_storage.hpp` for the security argument. Reset at every
+    // tx boundary alongside `created_this_tx_idx_`.
+    DynamicStorage        dynamic_storage_{};
 
     // Monotonic counter incremented at the start of each tx in
     // process_transactions. Passed to Storages for per-tx warm/cold
@@ -367,6 +426,32 @@ private:
     // destroyed contract can't issue SELFDESTRUCT after its CREATE
     // rolls back.
     std::unordered_set<size_t> created_this_tx_idx_{};
+
+    // EIP-7702: account indices that received a delegation-indicator
+    // `set_code` in the current transaction. Same lifecycle as
+    // `created_this_tx_idx_` — populated by the auth-application loop
+    // and cleared at every tx boundary in `process_transactions`.
+    // Routes SSTORE/SLOAD/access_storage on these accounts to
+    // `dynamic_storage_` for witness-absent slots: the EOA had no
+    // parent-state code (delegation indicator is set THIS tx),
+    // therefore no parent-state storage, so any value the EVM
+    // SSTOREs / SLOADs on it during 7702-delegated execution is on
+    // a slot whose block-original is implicitly 0 — uncontestable
+    // by a malicious prover (same dynamic-routing safety argument
+    // as freshly-CREATEd accounts).
+    std::unordered_set<size_t> delegated_this_tx_idx_{};
+
+    // SELFDESTRUCT registers an account for destruction at end-of-tx,
+    // not immediately (Yellow Paper). Storage, code, and nonce stay
+    // live until the tx finishes — subsequent code in the same tx
+    // can still load the destroyed contract's code (e.g. via an
+    // EIP-7702 delegation indicator pointing at it). Without this
+    // deferral, test_set_code_to_self_destructing_account_deployed_
+    // in_same_tx call_set_code_first_False variants diverge from
+    // reth's expected post-state. Populated by `selfdestruct`,
+    // applied + cleared at every tx boundary in
+    // `process_transactions` after the tx completes.
+    std::unordered_set<size_t> pending_destruct_{};
 
     // Per-tx receipts (finalized at end-of-tx; logs filled by emit_log
     // during execution).

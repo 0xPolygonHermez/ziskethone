@@ -3,7 +3,7 @@
 //! the index assignments (Accounts[idx] / Storages[idx]) that the
 //! StateRoot stream's `Op::Leaf` opcodes reference.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 
 use alloy::primitives::{Address, B256};
 

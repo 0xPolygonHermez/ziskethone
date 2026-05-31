@@ -27,6 +27,7 @@ use alloy::rpc::types::{
 };
 use alloy::transports::http::{Client as HttpClient, Http};
 use anyhow::{anyhow, Context, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing::warn;
 
@@ -39,11 +40,20 @@ pub struct Client {
 /// Block-start values for one account, as reported by the
 /// `prestateTracer`. Fields are optional because the tracer omits
 /// fields that the tx didn't touch.
-#[derive(Debug, Clone, Default)]
+///
+/// Derives `Serialize`/`Deserialize` so a fully-resolved bundle of
+/// these (see `offline::OfflineSources`) can be persisted to JSON
+/// and replayed without re-fetching from RPC — used by the
+/// `input-gen-from-manifest` binary and by the eest-runner pipeline.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AccountPrestate {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub balance: Option<U256>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nonce:   Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code:    Option<Bytes>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub storage: BTreeMap<B256, B256>,
 }
 
@@ -51,7 +61,7 @@ pub type Prestate = BTreeMap<Address, AccountPrestate>;
 
 /// Aggregated diff-mode result. `pre` and `post` cover only fields
 /// that changed during the block.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PrestateDiff {
     pub pre:  Prestate,
     pub post: Prestate,
@@ -64,7 +74,7 @@ pub struct PrestateDiff {
 /// leaves to their addresses/slots; `codes` is currently unused (we
 /// already have bytecodes via the prestate tracer) but kept so future
 /// callers don't need a second RPC.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecutionWitness {
     pub state: Vec<Bytes>,
     pub codes: Vec<Bytes>,

@@ -7,8 +7,26 @@ namespace zeg {
 
 namespace {
 
-// Build the RLP encoding of a Pectra block header. Field order MUST
-// match the Yellow Paper (App. L) — any reorder produces a wrong hash.
+// Build the RLP encoding of an Ethereum block header. Field order
+// matches the Yellow Paper (App. L). The header layout grew across
+// hardforks — pre-Pectra ancestors omit the trailing post-Cancun /
+// post-Pectra fields entirely (not "encoded as zero"). The caller
+// passes the desired field count in `h.field_count`:
+//
+//   21 = Pectra+    (adds requests_hash)
+//   20 = Cancun     (adds blob_gas_used, excess_blob_gas,
+//                    parent_beacon_block_root)
+//   17 = Shanghai   (adds withdrawals_root)
+//   16 = London     (adds base_fee_per_gas)
+//   15 = pre-London
+//
+// Field-value heuristics don't work because a Cancun block with no
+// blob transactions and no CL (test-fixture scenario, both
+// parent_beacon_block_root and blob counters all zero) is bit-for-bit
+// identical to a pre-Cancun block in field values — only the consensus
+// fork the block was mined under disambiguates the two. rust-input-gen
+// derives field_count from the original Option<> fields on the wire
+// Block and threads it through.
 rlp::Bytes encode_block_header_rlp(const BlockHeader& h) {
     using rlp::BytesView;
 
@@ -47,39 +65,47 @@ rlp::Bytes encode_block_header_rlp(const BlockHeader& h) {
     const auto nonce_rlp              = rlp::encode(BytesView{h.nonce.data(),
                                                               h.nonce.size()});
 
-    const auto base_fee_rlp           = rlp::encode_u256(h.base_fee_per_gas);
-    const auto withdrawals_root_rlp   = rlp::encode(BytesView{h.withdrawals_root.bytes,
-                                                              sizeof(h.withdrawals_root.bytes)});
-    const auto blob_gas_used_rlp      = rlp::encode_u64(h.blob_gas_used);
-    const auto excess_blob_gas_rlp    = rlp::encode_u64(h.excess_blob_gas);
-    const auto parent_beacon_root_rlp = rlp::encode(BytesView{h.parent_beacon_block_root.bytes,
-                                                              sizeof(h.parent_beacon_block_root.bytes)});
-    const auto requests_hash_rlp      = rlp::encode(BytesView{h.requests_hash.bytes,
-                                                              sizeof(h.requests_hash.bytes)});
+    // Build the payload by appending fields up to h.field_count.
+    rlp::Bytes payload;
+    auto append = [&](const rlp::Bytes& enc) {
+        payload.insert(payload.end(), enc.begin(), enc.end());
+    };
+    append(parent_hash_rlp);     //  1
+    append(ommers_hash_rlp);     //  2
+    append(coinbase_rlp);        //  3
+    append(state_root_rlp);      //  4
+    append(txs_root_rlp);        //  5
+    append(receipts_root_rlp);   //  6
+    append(logs_bloom_rlp);      //  7
+    append(difficulty_rlp);      //  8
+    append(number_rlp);          //  9
+    append(gas_limit_rlp);       // 10
+    append(gas_used_rlp);        // 11
+    append(timestamp_rlp);       // 12
+    append(extra_data_rlp);      // 13
+    append(prev_randao_rlp);     // 14
+    append(nonce_rlp);           // 15
+    if (h.field_count >= 16) {
+        append(rlp::encode_u256(h.base_fee_per_gas));
+    }
+    if (h.field_count >= 17) {
+        append(rlp::encode(BytesView{h.withdrawals_root.bytes,
+                                     sizeof(h.withdrawals_root.bytes)}));
+    }
+    if (h.field_count >= 20) {
+        append(rlp::encode_u64(h.blob_gas_used));
+        append(rlp::encode_u64(h.excess_blob_gas));
+        append(rlp::encode(BytesView{h.parent_beacon_block_root.bytes,
+                                     sizeof(h.parent_beacon_block_root.bytes)}));
+    }
+    if (h.field_count >= 21) {
+        append(rlp::encode(BytesView{h.requests_hash.bytes,
+                                     sizeof(h.requests_hash.bytes)}));
+    }
 
-    return rlp::encode_list({
-        parent_hash_rlp,
-        ommers_hash_rlp,
-        coinbase_rlp,
-        state_root_rlp,
-        txs_root_rlp,
-        receipts_root_rlp,
-        logs_bloom_rlp,
-        difficulty_rlp,
-        number_rlp,
-        gas_limit_rlp,
-        gas_used_rlp,
-        timestamp_rlp,
-        extra_data_rlp,
-        prev_randao_rlp,
-        nonce_rlp,
-        base_fee_rlp,
-        withdrawals_root_rlp,
-        blob_gas_used_rlp,
-        excess_blob_gas_rlp,
-        parent_beacon_root_rlp,
-        requests_hash_rlp,
-    });
+    return rlp::encode_list_payload(
+        rlp::BytesView{payload.data(), payload.size()}
+    );
 }
 
 } // namespace

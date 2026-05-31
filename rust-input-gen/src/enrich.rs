@@ -451,7 +451,9 @@ pub fn enrich_storage_slots_from_witness(
     let addrs: Vec<Address> = prestate.keys().copied().collect();
     for addr in addrs {
         let addr_hash = keccak256(addr.as_slice());
-        let leaf = match walk_to_leaf(&nodes, &parent_state_root.0, &addr_hash)? {
+        let leaf = match walk_to_leaf(&nodes, &parent_state_root.0, &addr_hash)
+            .with_context(|| format!("enrich: walking parent state trie for addr {addr} (hash 0x{})", hex::encode(addr_hash)))?
+        {
             Some(v) => v,
             None => continue, // account doesn't exist in parent trie → no storage
         };
