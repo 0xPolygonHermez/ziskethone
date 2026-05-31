@@ -373,8 +373,8 @@ evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
     // address runs the caller's code with the precompile's "code"
     // (which is empty), per EVM semantics.
     if ((msg.flags & EVMC_DELEGATED) == 0 &&
-        evmone::state::is_precompile(EVMC_OSAKA, msg.code_address)) {
-        return evmone::state::call_precompile(EVMC_OSAKA, msg);
+        evmone::state::is_precompile(active_revision(), msg.code_address)) {
+        return evmone::state::call_precompile(active_revision(), msg);
     }
 
     // Snapshot state up front. Any non-success status from the nested
@@ -410,7 +410,7 @@ evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
             return call_create(msg, cp);
     }
 
-    auto result = vm_.execute(*this, EVMC_OSAKA, msg,
+    auto result = vm_.execute(*this, active_revision(), msg,
                               code.data(), code.size());
     if (result.status_code != EVMC_SUCCESS) {
         rollback(cp);
@@ -473,7 +473,7 @@ evmc_access_status ZiskStateDB::access_account(const evmc::address& addr) noexce
     // warm at every access, regardless of whether the host's Accounts
     // table includes them. Short-circuit here so callers don't need
     // to inject precompile entries into the prestate.
-    if (evmone::state::is_precompile(EVMC_OSAKA, addr)) {
+    if (evmone::state::is_precompile(active_revision(), addr)) {
         return EVMC_ACCESS_WARM;
     }
     // Soft-phantom: if the address isn't in our table, neither the
@@ -740,7 +740,7 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     // 4. Execute the init code with the new address as the recipient.
     evmc_message create_msg = msg;
     create_msg.recipient    = new_addr;
-    auto result = vm_.execute(*this, EVMC_OSAKA, create_msg,
+    auto result = vm_.execute(*this, active_revision(), create_msg,
                               init_code, init_size);
     if (result.status_code != EVMC_SUCCESS) {
         rollback(cp_after_bump);
@@ -1005,7 +1005,7 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
 void ZiskStateDB::pre_warm_for_tx(const Transactions::View& tx) noexcept {
     auto warm_addr = [&](const evmc::address& a) {
         // Precompiles are inherently warm — no Accounts entry needed.
-        if (evmone::state::is_precompile(EVMC_OSAKA, a)) {
+        if (evmone::state::is_precompile(active_revision(), a)) {
             return;
         }
         // EIP-2930 lets a tx pre-declare addrs/slots it might touch
@@ -1444,7 +1444,7 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
         accounts_.mark_touched_at(new_idx, tx_counter_);
         created_this_tx_idx_.insert(new_idx);
 
-        auto result = vm_.execute(*this, EVMC_OSAKA, msg,
+        auto result = vm_.execute(*this, active_revision(), msg,
                                   entry_code.data(), entry_code.size());
 
         if (result.status_code == EVMC_SUCCESS) {
@@ -1495,7 +1495,7 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
         transfer_value(msg.sender, msg.recipient, msg.value);
     }
 
-    return vm_.execute(*this, EVMC_OSAKA, msg,
+    return vm_.execute(*this, active_revision(), msg,
                        entry_code.data(), entry_code.size());
 }
 
@@ -1716,7 +1716,7 @@ evmc::Result ZiskStateDB::system_call(const evmc::address&     target,
     // for EIP-7002 / EIP-7251 request dequeue).
     const auto cp = checkpoint();
     const auto entry_code = code(target);
-    auto result = vm_.execute(*this, EVMC_OSAKA, msg,
+    auto result = vm_.execute(*this, active_revision(), msg,
                               entry_code.data(), entry_code.size());
     if (result.status_code != EVMC_SUCCESS) {
         rollback(cp);

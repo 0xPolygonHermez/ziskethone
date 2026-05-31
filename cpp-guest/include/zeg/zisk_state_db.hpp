@@ -259,6 +259,25 @@ private:
             || delegated_this_tx_idx_.count(idx) != 0;
     }
 
+    // Map ConsensusInfo.field_count to an `evmc_revision` so the
+    // EVM dispatch (vm_.execute, is_precompile, call_precompile) runs
+    // at the correct fork. cpp-guest historically hard-coded
+    // EVMC_OSAKA everywhere, which silently enabled Prague/Osaka
+    // precompiles in Cancun blocks (e.g. BLS_G1ADD at 0x0d returned
+    // 128-byte data instead of empty), tripping read-only-value
+    // checks for fixtures like test_precompile_before_fork. Default
+    // to EVMC_PRAGUE for unset/Pectra (field_count == 0 || >= 21) —
+    // matches mainnet replay (Prague blocks) and the bulk of the
+    // EEST Pectra corpus.
+    evmc_revision active_revision() const noexcept {
+        const uint32_t fc = consensus_.field_count();
+        if (fc == 0 || fc >= 21) return EVMC_PRAGUE;
+        if (fc >= 20)            return EVMC_CANCUN;
+        if (fc >= 17)            return EVMC_SHANGHAI;
+        if (fc >= 16)            return EVMC_LONDON;
+        return EVMC_BERLIN;
+    }
+
     // Fork detection from ConsensusInfo.field_count. Treats 0 (= old
     // manifests that pre-date the field) as Pectra (21), so mainnet
     // replays behave as before. Used to gate Prague-only system calls
