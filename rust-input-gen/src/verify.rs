@@ -41,7 +41,8 @@ pub fn check(
 
     for (i, addr) in touch.addrs.iter().enumerate() {
         let addr_hash = keccak256(addr.as_slice());
-        let chain_leaf = walk_to_leaf(&nodes, &parent_state_root.0, &addr_hash)?;
+        let chain_leaf = walk_to_leaf(&nodes, &parent_state_root.0, &addr_hash)
+            .with_context(|| format!("verify: walking parent state trie for addr {addr} (hash 0x{})", hex::encode(addr_hash)))?;
 
         // Our written values (matches sections::write_accounts).
         let created_this_block =
@@ -123,7 +124,11 @@ pub fn check(
         for (slot, sidx) in touched_slots {
             let slot_hash = keccak256(slot.as_slice());
             let chain_slot_leaf =
-                walk_to_leaf(&nodes, &chain_storage_root, &slot_hash)?;
+                walk_to_leaf(&nodes, &chain_storage_root, &slot_hash)
+                    .with_context(|| format!(
+                        "verify: walking storage trie for addr {addr} (sroot 0x{}) slot {slot} (sidx={sidx})",
+                        hex::encode(chain_storage_root)
+                    ))?;
 
             // Our written storage value (matches sections::write_storages).
             let our_value: B256 = pick_storage_value(prestate, diff, addr, &slot);

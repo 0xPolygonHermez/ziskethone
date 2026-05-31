@@ -38,8 +38,25 @@ pub fn write_consensus_info(w: &mut Writer, current: &Block, parent: &Block) {
     w.bytes(parent.header.state_root.as_slice());
     // 32..52 beneficiary
     w.bytes(h.beneficiary.as_slice());
-    // 52..56 pad
-    w.pad(4);
+    // 52..56 field_count (u32-le) for the current block — same scheme
+    // as the per-ancestor field_count in `write_previous_blocks`.
+    // Tells cpp-guest the consensus fork the block runs under, so it
+    // can gate Prague system calls (EIP-2935/7002/7251) for pre-Prague
+    // blocks in mixed-fork EEST fixtures. Was a 4-byte pad (always 0)
+    // → backward-compat: cpp-guest treats 0 as 21 (Pectra default),
+    // matching mainnet replays.
+    let field_count: u32 = if h.requests_hash.is_some() {
+        21
+    } else if h.parent_beacon_block_root.is_some() {
+        20
+    } else if h.withdrawals_root.is_some() {
+        17
+    } else if h.base_fee_per_gas.is_some() {
+        16
+    } else {
+        15
+    };
+    w.u32_le(field_count);
     // 56..64 number
     w.u64_le(h.number);
     // 64..72 gas_limit
@@ -436,8 +453,27 @@ pub fn write_previous_blocks(w: &mut Writer, ancestors: &[Block]) {
         w.bytes(h.ommers_hash.as_slice());
         //  64..84  coinbase
         w.bytes(h.beneficiary.as_slice());
-        //  84..88  pad
-        w.pad(4);
+        //  84..88  field_count (u32-le): the number of fields cpp-guest
+        //          should RLP-encode for this ancestor's header. Header
+        //          layout grew across hardforks; without an explicit
+        //          marker, a Cancun block with no blob transactions and
+        //          no CL (test-fixture scenario, parent_beacon_block_root
+        //          = 0) is indistinguishable from a pre-Cancun block —
+        //          both have all-zero trailing fields. Was a 4-byte pad
+        //          (always 0) → backward-compatible: cpp-guest treats 0
+        //          as 21 (Pectra default), matching mainnet replays.
+        let field_count: u32 = if h.requests_hash.is_some() {
+            21
+        } else if h.parent_beacon_block_root.is_some() {
+            20
+        } else if h.withdrawals_root.is_some() {
+            17
+        } else if h.base_fee_per_gas.is_some() {
+            16
+        } else {
+            15
+        };
+        w.u32_le(field_count);
         //  88..120 state_root
         w.bytes(h.state_root.as_slice());
         // 120..152 transactions_root

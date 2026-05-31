@@ -34,12 +34,22 @@ pub fn from_network(network: &str) -> Result<Arc<ChainSpec>> {
         "Cancun" => base.cancun_activated(),
         "Prague" => base.prague_activated(),
         "Osaka" => base.osaka_activated(),
-        // Transition spec: "<FromFork>To<ToFork>AtTime<n>". For now
-        // we just activate the destination fork from genesis;
-        // honoring the activation timestamp is a Phase 1.2 follow-up
-        // once the rest of the pipeline is proven.
-        s if s.contains("ToPragueAt") => base.prague_activated(),
-        s if s.contains("ToOsakaAt") => base.osaka_activated(),
+        // Transition spec: "<FromFork>To<ToFork>AtTime<n>". The
+        // pre-fork blocks must execute under the source fork; if we
+        // activate the destination from genesis, block 0 picks up
+        // Prague semantics (e.g. EIP-2935 system call) that the
+        // fixture's header.state_root was generated WITHOUT, and
+        // every downstream proof / hash mismatches. Parse the
+        // trailing AtTime<n> timestamp and feed `with_prague_at` /
+        // `with_osaka_at`.
+        s if s.contains("ToPragueAt") => {
+            let ts = parse_transition_timestamp(s, "ToPragueAtTime")?;
+            base.cancun_activated().with_prague_at(ts)
+        }
+        s if s.contains("ToOsakaAt") => {
+            let ts = parse_transition_timestamp(s, "ToOsakaAtTime")?;
+            base.prague_activated().with_osaka_at(ts)
+        }
         other => bail!(
             "unsupported EEST network '{}'; only Cancun/Prague/Osaka \
              (and ToPragueAt/ToOsakaAt transitions) wired up",
@@ -48,4 +58,23 @@ pub fn from_network(network: &str) -> Result<Arc<ChainSpec>> {
     };
 
     Ok(Arc::new(spec.build()))
+}
+
+/// Parse an EEST transition-network string of the form
+/// `<...><marker><digits>`, e.g. `CancunToPragueAtTime15000` with
+/// `marker = "ToPragueAtTime"` → 15000. EEST may abbreviate the
+/// number with a `k` suffix (`"15k"` = 15000) — we accept that too.
+fn parse_transition_timestamp(s: &str, marker: &str) -> Result<u64> {
+    let idx = s
+        .find(marker)
+        .ok_or_else(|| anyhow::anyhow!("network '{s}' missing marker '{marker}'"))?;
+    let tail = &s[idx + marker.len()..];
+    let (digits, suffix_mul) = match tail.strip_suffix('k') {
+        Some(d) => (d, 1_000u64),
+        None => (tail, 1u64),
+    };
+    let n: u64 = digits.parse().map_err(|e| {
+        anyhow::anyhow!("network '{s}': bad timestamp '{digits}': {e}")
+    })?;
+    Ok(n.saturating_mul(suffix_mul))
 }

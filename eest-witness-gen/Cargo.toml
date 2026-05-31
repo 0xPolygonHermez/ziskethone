@@ -45,6 +45,7 @@ reth-evm             = { git = "https://github.com/paradigmxyz/reth", tag = "v2.
 reth-evm-ethereum    = { git = "https://github.com/paradigmxyz/reth", tag = "v2.2.0" }
 reth-revm            = { git = "https://github.com/paradigmxyz/reth", tag = "v2.2.0", features = ["witness"] }
 reth-trie            = { git = "https://github.com/paradigmxyz/reth", tag = "v2.2.0" }
+reth-trie-db         = { git = "https://github.com/paradigmxyz/reth", tag = "v2.2.0" }
 reth-db-common       = { git = "https://github.com/paradigmxyz/reth", tag = "v2.2.0" }
 reth-provider        = { git = "https://github.com/paradigmxyz/reth", tag = "v2.2.0", features = ["test-utils"] }
 # reth-primitives-traits is published to crates.io (not a workspace

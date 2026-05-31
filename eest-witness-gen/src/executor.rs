@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use alloy_consensus::BlockHeader as _;
-use alloy_primitives::{keccak256, Address, Bytes, B256};
+use alloy_primitives::{keccak256, Address, Bytes, B256, U256};
 use alloy_rlp::Decodable;
 use alloy_rpc_types_debug::ExecutionWitness;
 use anyhow::{Context, Result};
@@ -27,9 +27,11 @@ use reth_provider::{
     test_utils::create_test_provider_factory_with_chain_spec, BlockWriter,
     DatabaseProviderFactory, ExecutionOutcome, HistoryWriter, OriginalValuesKnown,
     StateProofProvider, StateProviderFactory, StateWriteConfig, StateWriter,
-    StaticFileProviderFactory, StaticFileSegment, StaticFileWriter,
+    StaticFileProviderFactory, StaticFileSegment, StaticFileWriter, StorageSettingsCache,
+    TrieWriter,
 };
-use reth_trie::{HashedPostState, KeccakKeyHasher};
+use reth_trie::{HashedPostState, KeccakKeyHasher, StateRoot};
+use reth_trie_db::DatabaseStateRoot;
 use reth_revm::{database::StateProviderDatabase, witness::ExecutionWitnessRecord};
 use reth_trie::ExecutionWitnessMode;
 use revm::database::BundleState;
@@ -51,6 +53,13 @@ pub struct ExecutedBlock {
     /// to derive the per-block prestate diff that rust-input-gen's
     /// online path normally pulls from `debug_traceBlockByHash`.
     pub bundle_state: BundleState,
+    /// Every (addr, slot) pair the EVM READ during execution — wider
+    /// than `bundle_state.storage` which only contains slots that
+    /// changed value. The bridge uses this to populate prestate
+    /// storage so cpp-guest's Storages::index_of never fatals on a
+    /// SLOAD of an untouched-but-read slot. Recovered by reverse-
+    /// hashing `hashed_state.storages` via `keys` preimages.
+    pub touched_slot_pairs: std::collections::BTreeSet<(Address, B256)>,
 }
 
 /// Execute the full fixture and return one `ExecutedBlock` per
@@ -121,6 +130,57 @@ pub fn run_fixture(
     insert_genesis_history(&provider, genesis_state.iter())
         .context("insert_genesis_history")?;
 
+    // Populate trie tables from genesis state. ef-tests doesn't do
+    // this explicitly — it relies on overlay_root cursors rebuilding
+    // the trie from hashed tables. But the rebuild walks every leaf
+    // on every query, which is slow for many-account fixtures AND
+    // the resulting intermediate-node hashes don't necessarily match
+    // the canonical genesis trie reth's writer produces. For
+    // overlay_account_proof to return proofs rooted at the
+    // fixture's genesis state root, we precompute the trie via the
+    // same overlay primitive and persist its nodes.
+    {
+        let mut hps = HashedPostState::default();
+        for (addr, gacc) in &genesis_state {
+            let hashed_addr = keccak256::<&[u8]>(addr.as_slice());
+            let bytecode_hash = gacc
+                .code
+                .as_ref()
+                .filter(|c| !c.is_empty())
+                .map(|c| keccak256::<&[u8]>(c.as_ref()));
+            let info = reth_primitives_traits::Account {
+                nonce: gacc.nonce.unwrap_or(0),
+                balance: gacc.balance,
+                bytecode_hash,
+            };
+            hps.accounts.insert(hashed_addr, Some(info));
+            if let Some(storage_map) = &gacc.storage {
+                let mut hs = reth_trie::HashedStorage::default();
+                for (slot, val) in storage_map {
+                    if val.is_zero() {
+                        continue;
+                    }
+                    let hashed_slot = keccak256::<&[u8]>(slot.as_slice());
+                    hs.storage.insert(hashed_slot, U256::from_be_bytes(val.0));
+                }
+                if !hs.storage.is_empty() {
+                    hps.storages.insert(hashed_addr, hs);
+                }
+            }
+        }
+        let sorted = hps.into_sorted();
+        let (_genesis_root, trie_updates) = reth_trie_db::with_adapter!(provider, |A| {
+            StateRoot::<reth_trie_db::DatabaseTrieCursorFactory<_, A>, _>::overlay_root_with_updates(
+                provider.tx_ref(),
+                &sorted,
+            )
+        })
+        .context("computing genesis state root")?;
+        provider
+            .write_trie_updates(trie_updates)
+            .context("write_trie_updates for genesis")?;
+    }
+
     let executor_provider = EthEvmConfig::ethereum(chain_spec.clone());
     let mut out = Vec::with_capacity(test.blocks.len());
 
@@ -129,6 +189,33 @@ pub fn run_fixture(
     // omits the root because it assumes a stateful consumer).
     // Block 0's input state == genesis state root.
     let mut input_state_root: B256 = test.genesis_block_header.state_root;
+
+    // Accumulate every block's HashedPostState. Passed as the
+    // TrieInput overlay to `overlay_account_proof` so the proof
+    // walks the full in-memory state (post-block-N-1) rather than
+    // the sparsely-materialized DB trie tables.
+    let mut cumulative_hps: HashedPostState = test
+        .pre
+        .iter()
+        .map(|(addr, acc)| {
+            let hashed_addr = keccak256::<&[u8]>(addr.as_slice());
+            let info = reth_primitives_traits::Account {
+                nonce: acc.nonce.try_into().unwrap_or(0),
+                balance: acc.balance,
+                bytecode_hash: if acc.code.is_empty() {
+                    None
+                } else {
+                    Some(keccak256::<&[u8]>(acc.code.as_ref()))
+                },
+            };
+            (hashed_addr, Some(info))
+        })
+        .collect::<alloy_primitives::map::B256Map<_>>()
+        .into_iter()
+        .fold(HashedPostState::default(), |mut h, (k, v)| {
+            h.accounts.insert(k, v);
+            h
+        });
 
     for (idx, fixture_block) in test.blocks.iter().enumerate() {
         let block_number = (idx + 1) as u64;
@@ -160,12 +247,73 @@ pub fn run_fixture(
 
         let block_executor = executor_provider.executor(&mut state);
         let mut witness_record = ExecutionWitnessRecord::default();
+        // Also capture every address the EVM TOUCHED (loaded into
+        // state.cache.accounts), even ones with `account.account ==
+        // None` (= account doesn't exist in trie). reth's witness
+        // recorder filters those out of `keys`, but cpp-guest still
+        // calls Accounts::index_of on them (DELEGATECALL to empty,
+        // EXTCODESIZE on never-touched EOA, etc.) and fatals if
+        // missing.
+        let mut all_cached_addrs: std::collections::BTreeSet<Address> =
+            std::collections::BTreeSet::new();
         let mode = ExecutionWitnessMode::Canonical;
         let output = block_executor
             .execute_with_state_closure(&recovered, |statedb: &reth_revm::db::State<_>| {
                 witness_record.record_executed_state(statedb, mode);
+                for addr in statedb.cache.accounts.keys() {
+                    all_cached_addrs.insert(*addr);
+                }
             })
             .with_context(|| format!("execute block {idx}"))?;
+
+        // Capture the addr→slot read-set BEFORE the witness record
+        // is consumed by into_execution_witness. The bridge will use
+        // this to populate prestate storage with EVERY slot the EVM
+        // read (not just writes from BundleState), so cpp-guest's
+        // SLOAD path always finds a registered entry.
+        let touched_slot_pairs: std::collections::BTreeSet<(Address, B256)> = {
+            // Build a reverse map: hash(20B addr) → addr,
+            //                     hash(32B slot) → slot.
+            let mut addr_by_hash: std::collections::HashMap<B256, Address> =
+                std::collections::HashMap::new();
+            let mut slot_by_hash: std::collections::HashMap<B256, B256> =
+                std::collections::HashMap::new();
+            for k in &witness_record.keys {
+                if k.len() == 20 {
+                    let a = Address::from_slice(k);
+                    addr_by_hash.insert(keccak256::<&[u8]>(k.as_ref()), a);
+                } else if k.len() == 32 {
+                    let s = B256::from_slice(k);
+                    slot_by_hash.insert(keccak256::<&[u8]>(k.as_ref()), s);
+                }
+            }
+            let mut s = std::collections::BTreeSet::new();
+            for (hashed_addr, hashed_storage) in &witness_record.hashed_state.storages {
+                if let Some(addr) = addr_by_hash.get(hashed_addr) {
+                    for hashed_slot in hashed_storage.storage.keys() {
+                        if let Some(slot) = slot_by_hash.get(hashed_slot) {
+                            s.insert((*addr, *slot));
+                        }
+                    }
+                }
+            }
+            // ALSO add (addr, slot) pairs straight from BundleState.
+            // For accounts destroyed during the block, the recorder's
+            // hashed_state.storages drops their slots (`account.account`
+            // is None → outer iteration skips the inner storage loop),
+            // but BundleAccount.storage retains every touched slot
+            // regardless of final account status. EIP-7702 tests that
+            // SSTORE then RESET delegation on an EOA, or that
+            // SELFDESTRUCT a delegation target in the same tx, fall
+            // here.
+            for (addr, bundle_acc) in &output.state.state {
+                for slot_u256 in bundle_acc.storage.keys() {
+                    let slot = B256::from(slot_u256.to_be_bytes::<32>());
+                    s.insert((*addr, slot));
+                }
+            }
+            s
+        };
 
         // ---- (4) Materialize the witness in RPC shape ----
         let mut exec_witness = witness_record
@@ -195,12 +343,72 @@ pub fn run_fixture(
             .map(|n| keccak256(n.as_ref()))
             .collect();
 
-        let touched_addrs: std::collections::BTreeSet<Address> = exec_witness
+        // Append addresses the EVM cached but which never had
+        // `account.account == Some(...)` (= touched-but-empty: a
+        // DELEGATECALL target with no code, EXTCODESIZE on a never-
+        // touched EOA, etc.) onto exec_witness.keys. Reth's witness
+        // recorder omits these. Both cpp-guest's Accounts::index_of
+        // and the bridge's `touched` derivation need them present.
+        let existing_addrs: std::collections::HashSet<Address> = exec_witness
             .keys
             .iter()
             .filter(|k| k.len() == 20)
             .map(|k| Address::from_slice(k))
             .collect();
+        for addr in &all_cached_addrs {
+            if !existing_addrs.contains(addr) {
+                exec_witness.keys.push(Bytes::from(addr.as_slice().to_vec()));
+            }
+        }
+        // Similarly, append every storage slot from BundleState (the
+        // write set) onto keys. The recorder iterates `account.storage`
+        // only when `account.account.is_some()`, so an EIP-7702
+        // pointer-reset that ends with the account as None drops its
+        // slots. We rebuild the slot-preimage list from output.state
+        // which retains them regardless of final account state.
+        let existing_slots: std::collections::HashSet<B256> = exec_witness
+            .keys
+            .iter()
+            .filter(|k| k.len() == 32)
+            .map(|k| B256::from_slice(k))
+            .collect();
+        for (_addr, bundle_acc) in &output.state.state {
+            for slot_u256 in bundle_acc.storage.keys() {
+                let slot = B256::from(slot_u256.to_be_bytes::<32>());
+                if !existing_slots.contains(&slot) {
+                    exec_witness.keys.push(Bytes::from(slot.as_slice().to_vec()));
+                }
+            }
+        }
+        let mut touched_addrs: std::collections::BTreeSet<Address> = exec_witness
+            .keys
+            .iter()
+            .filter(|k| k.len() == 20)
+            .map(|k| Address::from_slice(k))
+            .collect();
+        // Also generate proofs for all Prague-era precompile
+        // addresses 0x01..0x12. The bridge unconditionally seeds
+        // these into the cpp-guest prestate (so its Accounts table
+        // has them when the EVM CALLs a precompile), so the
+        // verifier walks the parent trie for each. Without proofs,
+        // the walk hits missing trie nodes. Cheap: most precompiles
+        // are empty-account leaves (1-2 nodes from root).
+        for i in 1u8..=0x12 {
+            let mut bytes = [0u8; 20];
+            bytes[19] = i;
+            touched_addrs.insert(Address::from_slice(&bytes));
+        }
+        // Block coinbase + withdrawal recipients: same reason as
+        // for precompiles — the bridge unconditionally adds these to
+        // prestate, so the verifier walks them and needs proofs.
+        // When the EVM never touched them (zero-tip blocks,
+        // zero-amount withdrawals), reth's witness omits them.
+        touched_addrs.insert(recovered.header().beneficiary());
+        if let Some(wds) = recovered.body().withdrawals.as_ref() {
+            for wd in wds.iter() {
+                touched_addrs.insert(wd.address);
+            }
+        }
         let touched_slots: Vec<B256> = exec_witness
             .keys
             .iter()
@@ -224,12 +432,136 @@ pub fn run_fixture(
             targets.insert(keccak256::<&[u8]>(addr.as_slice()), hashed_slots.clone());
         }
 
-        match state.database.0.multiproof(Default::default(), targets) {
+        // Reth's multiproof at Default::default() returned 0 new
+        // account nodes — it seems to assume the consumer has the
+        // input trie root cached. We instead call state_provider
+        // .witness(input=full_hashed_target, target=full_hashed_target,
+        // mode=Canonical), which is the same call into_execution_witness
+        // uses but with EVERY touched (addr, slot) as a target — that
+        // forces every path from root to be materialized.
+        //
+        // For each touched address, look up its account info in the
+        // pre-block state and build a HashedPostState with a "no-op"
+        // entry (same values) so the witness function traces the path
+        // but doesn't propose any change.
+        use reth_trie::{HashedStorage, TrieInput};
+        let mut hps = HashedPostState::default();
+        for addr in &touched_addrs {
+            let hashed_addr = keccak256::<&[u8]>(addr.as_slice());
+            // Insert as `None` (= "no change to account info") so
+            // the witness traces the existing path without proposing
+            // any modification.
+            hps.accounts.insert(hashed_addr, None);
+            let mut hs = HashedStorage::default();
+            for slot in &touched_slots {
+                hs.storage.insert(keccak256::<&[u8]>(slot.as_slice()), U256::ZERO);
+            }
+            hps.storages.insert(hashed_addr, hs);
+        }
+        let trie_input = TrieInput::from_state(hps.clone());
+        match state.database.0.witness(trie_input, hps, mode) {
+            Ok(nodes) => {
+                let mut added = 0;
+                for node in nodes {
+                    let h = keccak256(node.as_ref());
+                    if already.insert(h) {
+                        exec_witness.state.push(Bytes::from(node.to_vec()));
+                        added += 1;
+                    }
+                }
+                tracing::info!(
+                    idx,
+                    targets = targets.len(),
+                    witness_added = added,
+                    total_state_nodes = exec_witness.state.len(),
+                    "state_provider.witness injection",
+                );
+            }
+            Err(e) => {
+                tracing::warn!(idx, "state_provider.witness failed: {e:#}");
+            }
+        }
+
+        // ALSO per-address proof. Reth's MultiProof / state_provider.witness
+        // omit the leaf nodes for unchanged accounts; AccountProof from the
+        // singular `proof()` API includes them. (Trace: parent_root ->
+        // intermediate branches -> last-level branch -> LEAF -> account RLP
+        // with storage_root. The verifier needs the leaf to read storage_root.)
+        // Build proofs against the in-memory HashedPostState using
+        // reth's `DatabaseProof::overlay_account_proof`. This is
+        // the same primitive reth uses internally for stateless
+        // witness generation: it layers an `InMemoryTrieCursorFactory`
+        // and `HashedPostStateCursorFactory` over the DB cursors so
+        // the cursor walks see the FULL (overlay + DB) trie. Plain
+        // `state_provider.proof()` only walks the DB trie tables —
+        // which our test provider barely populates — and returned
+        // shallow proofs (depth=2) for addresses on a 5-deep trie.
+        use reth_trie_db::DatabaseProof;
+        // Build per-address proofs using reth's with_adapter macro
+        // so the DatabaseTrieCursorFactory's `A` table-adapter type
+        // is selected automatically. Empty TrieInput: the DB already
+        // has the post-block-(N-1) trie via prior write_trie_updates
+        // calls, so walking it directly yields proofs rooted at
+        // recovered.parent_hash() — exactly what cpp-guest needs.
+        // Earlier we passed `cumulative_hps` as overlay; this
+        // double-counted genesis accounts already in the DB and
+        // produced proofs at a different root.
+        let trie_input = TrieInput::default();
+        for addr in &touched_addrs {
+            let result = reth_trie_db::with_adapter!(provider, |A| {
+                let proof_builder = reth_trie::proof::Proof::<
+                    reth_trie_db::DatabaseTrieCursorFactory<_, A>,
+                    reth_trie_db::DatabaseHashedCursorFactory<_>,
+                >::from_tx(provider.tx_ref());
+                proof_builder.overlay_account_proof(
+                    trie_input.clone(),
+                    *addr,
+                    &touched_slots,
+                )
+            });
+            match result {
+                Ok(p) => {
+                    for node in p.proof.iter() {
+                        let h = keccak256(node.as_ref());
+                        if already.insert(h) {
+                            exec_witness.state.push(Bytes::from(node.to_vec()));
+                        }
+                    }
+                    for sp in &p.storage_proofs {
+                        for node in &sp.proof {
+                            let h = keccak256(node.as_ref());
+                            if already.insert(h) {
+                                exec_witness.state.push(Bytes::from(node.to_vec()));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(idx, %addr, "overlay_account_proof failed: {e:#}");
+                }
+            }
+        }
+
+        // ALSO call multiproof with a TrieInput::from_state(target_hps)
+        // — different from witness() because multiproof returns the
+        // proof PATH for each target, including unchanged intermediate
+        // nodes from the input state. state_provider.witness only
+        // returns nodes for the actual change set.
+        let mut target_hps = HashedPostState::default();
+        for addr in &touched_addrs {
+            let ha = keccak256::<&[u8]>(addr.as_slice());
+            target_hps.accounts.insert(ha, None);
+        }
+        let mp_input = TrieInput::from_state(target_hps);
+        match state.database.0.multiproof(mp_input, targets.clone()) {
             Ok(mp) => {
+                let mut a = 0;
+                let mut s = 0;
                 for (_path, node) in mp.account_subtree.into_inner() {
                     let h = keccak256(node.as_ref());
                     if already.insert(h) {
                         exec_witness.state.push(Bytes::from(node.to_vec()));
+                        a += 1;
                     }
                 }
                 for (_addr, subtree) in mp.storages {
@@ -237,12 +569,19 @@ pub fn run_fixture(
                         let h = keccak256(node.as_ref());
                         if already.insert(h) {
                             exec_witness.state.push(Bytes::from(node.to_vec()));
+                            s += 1;
                         }
                     }
                 }
+                tracing::info!(
+                    idx,
+                    mp2_account = a,
+                    mp2_storage = s,
+                    "multiproof v2 injection",
+                );
             }
             Err(e) => {
-                tracing::warn!(idx, "multiproof failed: {e:#}");
+                tracing::warn!(idx, "multiproof v2 failed: {e:#}");
             }
         }
 
@@ -258,9 +597,25 @@ pub fn run_fixture(
         provider
             .write_state(&outcome, OriginalValuesKnown::Yes, StateWriteConfig::default())
             .with_context(|| format!("write_state {idx}"))?;
+        // Compute the post-block state root WITH trie updates. The
+        // updates contain every modified trie node, which we then
+        // write to the trie tables so subsequent proof()/multiproof()
+        // queries on the same provider see the post-block trie state
+        // (not the pre-block snapshot).
+        let sorted_hps = hashed_state.clone_into_sorted();
+        let (_root, trie_updates) = reth_trie_db::with_adapter!(provider, |A| {
+            StateRoot::<reth_trie_db::DatabaseTrieCursorFactory<_, A>, _>::overlay_root_with_updates(
+                provider.tx_ref(),
+                &sorted_hps,
+            )
+        })
+        .with_context(|| format!("overlay_root_with_updates {idx}"))?;
         provider
-            .write_hashed_state(&hashed_state.into_sorted())
+            .write_hashed_state(&hashed_state.clone().into_sorted())
             .with_context(|| format!("write_hashed_state {idx}"))?;
+        provider
+            .write_trie_updates(trie_updates)
+            .with_context(|| format!("write_trie_updates {idx}"))?;
         provider
             .update_history_indices(
                 recovered.header().number()..=recovered.header().number(),
@@ -271,12 +626,18 @@ pub fn run_fixture(
         // N+1's input state == block N's post-execution state.
         input_state_root = recovered.header().state_root();
 
+        // Fold this block's hashed state changes into the
+        // cumulative overlay used by the next block's
+        // overlay_account_proof calls.
+        cumulative_hps.extend(hashed_state.clone());
+
         let computed_hash = recovered.hash();
         out.push(ExecutedBlock {
             block: recovered,
             witness: exec_witness,
             computed_hash,
             bundle_state,
+            touched_slot_pairs,
         });
     }
 

@@ -84,6 +84,15 @@ pub fn build_binary(sources: &OfflineSources, output: &Path) -> Result<()> {
         &sources.witness,
         &mut prestate,
     )?;
+    // Inject every address that appears in the tx envelope: sender,
+    // tx.to, EIP-2930 access list, and EIP-7702 authorization signers
+    // (recovered from the auth signatures). cpp-guest registers the
+    // authority addresses in its Accounts table even when the auth is
+    // invalid (test_account_warming, etc.), and fatals if a referenced
+    // address isn't in the table. The eest-witness-gen bridge can't
+    // pre-recover authorities (it would require ECDSA), so we do it
+    // here from the manifest's tx envelopes.
+    enrich::inject_tx_addresses(&mut prestate, &sources.current);
 
     let touch = TouchSet::build(&prestate, &sources.diff);
     info!(

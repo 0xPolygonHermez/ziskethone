@@ -133,7 +133,7 @@ fn main() -> Result<()> {
             }
         };
 
-        let executed = match executor::run_fixture(chain_spec, test) {
+        let executed = match executor::run_fixture(chain_spec.clone(), test) {
             Ok(b) => b,
             Err(e) => {
                 tracing::error!(test = %name, "execution failed: {e:#}");
@@ -153,7 +153,7 @@ fn main() -> Result<()> {
             }
         }
 
-        let manifests = match bridge::manifests_for_fixture(test, &executed) {
+        let manifests = match bridge::manifests_for_fixture(&chain_spec, test, &executed) {
             Ok(m) => m,
             Err(e) => {
                 tracing::error!(test = %name, "bridge failed: {e:#}");

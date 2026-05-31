@@ -246,6 +246,17 @@ private:
     void process_transactions(const Transactions& transactions) noexcept;
     void post_execute_block()                                   noexcept;
 
+    // Fork detection from ConsensusInfo.field_count. Treats 0 (= old
+    // manifests that pre-date the field) as Pectra (21), so mainnet
+    // replays behave as before. Used to gate Prague-only system calls
+    // (EIP-2935 in pre_execute_block, EIP-6110/7002/7251 in
+    // post_execute_block) when running mixed-fork EEST fixtures with
+    // pre-Prague ancestors / blocks.
+    bool is_prague_or_later() const noexcept {
+        const uint32_t fc = consensus_.field_count();
+        return fc == 0 || fc >= 21;
+    }
+
     // ----- Per-tx pipeline (called in this order by process_transactions) -----
     //
     // Each helper takes the next tx (plus any cross-phase scalar it

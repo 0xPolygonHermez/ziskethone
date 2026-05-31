@@ -33,7 +33,8 @@ public:
     // Fixed offsets within the 232-byte header prefix. All 8-byte
     // aligned by construction.
     static constexpr size_t kParentHashOffset            = 0;    // bytes32
-    static constexpr size_t kBeneficiaryOffset           = 32;   // 20 B + 4 B pad
+    static constexpr size_t kBeneficiaryOffset           = 32;   // 20 B
+    static constexpr size_t kFieldCountOffset            = 52;   // u32-le
     static constexpr size_t kNumberOffset                = 56;   // u64
     static constexpr size_t kGasLimitOffset              = 64;   // u64
     static constexpr size_t kTimestampOffset             = 72;   // u64
@@ -82,6 +83,11 @@ public:
     const evmc::bytes32&     parent_beacon_block_root() const noexcept;
     const evmc::uint256be&   base_fee_per_gas        () const noexcept;
     uint64_t                 excess_blob_gas         () const noexcept;
+    // Header field-count for fork detection: 21 = Pectra+, 20 = Cancun,
+    // 17 = Shanghai, 16 = London, 15 = pre-London. 0 = unset (old
+    // manifests pre-dating this field) → treated as 21 (Pectra default)
+    // by callers, which is correct for mainnet replays.
+    uint32_t                 field_count             () const noexcept;
 
     // ----- withdrawals -----
     size_t                      withdrawals_count() const noexcept { return withdrawals_.size(); }

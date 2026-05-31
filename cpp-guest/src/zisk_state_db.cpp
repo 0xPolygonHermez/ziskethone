@@ -816,7 +816,12 @@ void ZiskStateDB::pre_execute_block() noexcept {
     // the call would succeed but the contract would store the wrong
     // value, producing a state-trie divergence the test only catches
     // via post-state-root mismatch.
-    {
+    //
+    // EIP-2935 activates in Prague. Skip it for Cancun blocks (which
+    // we may encounter as pre-fork blocks in mixed-fork EEST fixtures).
+    // field_count==0 (old manifests) is treated as Pectra by default
+    // — preserves mainnet replay behavior.
+    if (is_prague_or_later()) {
         const auto parent_block_hash = previous_blocks_.hash(0);
         (void)system_call(kHistoryStorageAddress,
                           std::span<const uint8_t>{parent_block_hash.bytes, 32});
@@ -1466,12 +1471,20 @@ void ZiskStateDB::finalize_receipt(const evmc::Result& result,
 }
 
 void ZiskStateDB::post_execute_block() noexcept {
-    credit_withdrawals();                 // EIP-4895
-    // Order matters: deposit requests must be pushed first so requests_
-    // stays in EIP-7685 type-byte order (0x00 → 0x01 → 0x02).
-    collect_deposit_requests();           // EIP-6110
-    collect_withdrawal_requests();        // EIP-7002
-    collect_consolidation_requests();     // EIP-7251
+    credit_withdrawals();                 // EIP-4895 (Shanghai+)
+    // EIP-6110/7002/7251 all activate in Prague. Skip them for pre-
+    // Prague blocks (mixed-fork EEST fixtures); their system contracts
+    // either don't exist yet or aren't supposed to be queried. For old
+    // manifests pre-dating field_count, is_prague_or_later() returns
+    // true (field_count=0 → default Pectra), preserving mainnet replay
+    // behavior.
+    if (is_prague_or_later()) {
+        // Order matters: deposit requests must be pushed first so requests_
+        // stays in EIP-7685 type-byte order (0x00 → 0x01 → 0x02).
+        collect_deposit_requests();           // EIP-6110
+        collect_withdrawal_requests();        // EIP-7002
+        collect_consolidation_requests();     // EIP-7251
+    }
 }
 
 // ----- per-block post-execution phases ---------------------------------------

@@ -53,6 +53,12 @@ uint64_t ConsensusInfo::number   () const noexcept { return u64_at(header_ + kNu
 uint64_t ConsensusInfo::gas_limit() const noexcept { return u64_at(header_ + kGasLimitOffset);  }
 uint64_t ConsensusInfo::timestamp() const noexcept { return u64_at(header_ + kTimestampOffset); }
 
+uint32_t ConsensusInfo::field_count() const noexcept {
+    uint32_t v;
+    std::memcpy(&v, header_ + kFieldCountOffset, sizeof(v));
+    return v;
+}
+
 std::span<const uint8_t> ConsensusInfo::extra_data() const noexcept {
     const uint64_t len = u64_at(header_ + kExtraDataLenOffset);
     return std::span<const uint8_t>{header_ + kExtraDataOffset, static_cast<size_t>(len)};
