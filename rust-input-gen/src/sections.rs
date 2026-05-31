@@ -11,7 +11,6 @@ use alloy::eips::eip2718::Encodable2718;
 use alloy::primitives::{Address, PrimitiveSignature, B256, U256};
 use alloy::rpc::types::{Block, BlockTransactions};
 use anyhow::Result;
-use k256::elliptic_curve::sec1::ToEncodedPoint;
 use sha3::{Digest, Keccak256};
 
 use crate::rpc::{Prestate, PrestateDiff};
@@ -331,7 +330,7 @@ pub fn write_contracts(
     use alloy::primitives::Bytes;
     let mut by_hash: BTreeMap<B256, Bytes> = BTreeMap::new();
 
-    let mut insert = |dst: &mut BTreeMap<B256, Bytes>, code: Bytes| {
+    let insert = |dst: &mut BTreeMap<B256, Bytes>, code: Bytes| {
         if code.is_empty() {
             return;
         }

@@ -128,7 +128,6 @@ pub fn build_binary(sources: &OfflineSources, output: &Path) -> Result<()> {
         sources.parent.header.state_root,
         &sources.witness.state,
         &touch,
-        &sources.diff,
     )?;
 
     let bytes = w.into_bytes();

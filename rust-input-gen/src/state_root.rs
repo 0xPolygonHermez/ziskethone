@@ -34,10 +34,8 @@ use std::collections::HashMap;
 
 use alloy::primitives::{Address, Bytes, B256};
 use anyhow::{anyhow, bail, Context, Result};
-use sha3::{Digest, Keccak256};
 
 use crate::mpt::{self, hp_decode, keccak256, Rlp};
-use crate::rpc::PrestateDiff;
 use crate::touchset::TouchSet;
 use crate::writer::Writer;
 
@@ -68,7 +66,6 @@ pub fn write(
     parent_state_root: B256,
     witness_nodes: &[Bytes],
     touch: &TouchSet,
-    diff: &PrestateDiff,
 ) -> Result<()> {
     let mut nodes: HashMap<[u8; 32], Vec<u8>> = HashMap::with_capacity(witness_nodes.len());
     for raw in witness_nodes {
@@ -85,7 +82,6 @@ pub fn write(
     // diff (withdrawal balance credits, EIP-7002 / 7251 system call
     // slot writes, etc.) and those mutations would otherwise be
     // dropped from the new root.
-    let _ = diff;
     let mut state_targets: Vec<Target> = touch
         .addrs
         .iter()
@@ -98,7 +94,7 @@ pub fn write(
         .collect();
     state_targets.sort_by_key(|t| t.key_hash);
 
-    let ctx = Ctx { nodes: &nodes, touch, diff };
+    let ctx = Ctx { nodes: &nodes, touch };
 
     let mut out = Vec::new();
     walk(
@@ -136,7 +132,6 @@ struct Target {
 struct Ctx<'a> {
     nodes: &'a HashMap<[u8; 32], Vec<u8>>,
     touch: &'a TouchSet,
-    diff:  &'a PrestateDiff,
 }
 
 #[derive(Clone, Copy)]
@@ -1036,17 +1031,6 @@ fn encode_two_item_rlp(path_nibs: &[u8], value_bytes: &[u8], is_leaf: bool) -> V
     let hp_rlp = encode_bytes(&hp);
     let value_rlp = encode_bytes(value_bytes);
     encode_list(&[hp_rlp, value_rlp])
-}
-
-/// Convenience wrapper for leaves specifically.
-fn encode_leaf_rlp(path_nibs: &[u8], value_bytes: &[u8], _is_leaf: bool) -> Vec<u8> {
-    encode_two_item_rlp(path_nibs, value_bytes, true)
-}
-
-fn keccak_arr(b: &[u8]) -> [u8; 32] {
-    let mut h = Keccak256::new();
-    h.update(b);
-    h.finalize().into()
 }
 
 // ===== constants =============================================================
