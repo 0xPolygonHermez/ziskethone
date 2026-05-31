@@ -1314,6 +1314,29 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item&          auth
     // check, so a nonce-mismatched auth still warms its signer.
     accounts_.mark_touched_at(signer_idx, tx_counter_);
 
+    // EIP-7702: per spec, the authority's current code must be
+    // either empty (an EOA) or already a delegation designation
+    // (a previous 7702 set_code, which is a 23-byte 0xef0100||addr
+    // stub). Any other code (test fixtures sometimes plant tiny
+    // bytecode like 0x00 STOP at the signer's address) makes the
+    // auth invalid and we must NOT bump the nonce or change the
+    // code — otherwise reth's BundleState diverges from ours and
+    // check_read_only_unchanged fires at end-of-block (see EEST
+    // test_account_warming / test_intrinsic_gas_cost /
+    // test_gas_cost). Read code_hash first; if non-empty, resolve
+    // the actual bytes via Contracts to inspect the prefix.
+    const auto signer_code_hash = accounts_.code_hash_at(signer_idx);
+    if (signer_code_hash != EMPTY_CODE_HASH) {
+        const auto& c = contracts_.by_hash(signer_code_hash);
+        const bool is_delegation = c.code_size == 23
+            && c.code[0] == 0xef
+            && c.code[1] == 0x01
+            && c.code[2] == 0x00;
+        if (!is_delegation) {
+            return 0;
+        }
+    }
+
     if (accounts_.nonce_at(signer_idx) != a_nonce) {
         return 0;
     }
