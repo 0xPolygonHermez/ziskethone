@@ -1769,15 +1769,19 @@ void ZiskStateDB::collect_deposit_requests() noexcept {
 
 void ZiskStateDB::collect_withdrawal_requests() noexcept {
     // EIP-7002: calling the predeploy with empty calldata dequeues all
-    // pending requests; the EVM returns N × 76 bytes (a concatenation
-    // of 76-byte records). Per EIP-7685, we prepend the type byte 0x01
-    // to the raw queue dump and push it as one request-list entry.
+    // pending requests; the canonical contract returns N × 76 bytes
+    // (concatenated 76-byte records). Per EIP-7685, requests_hash is
+    // computed over the raw predeploy output PREPENDED with the type
+    // byte 0x01 — the output is treated as opaque bytes, with no
+    // size-alignment constraint at the consensus layer. The 76-byte
+    // record shape is a convention of the canonical contract, not a
+    // validity rule, so a modified predeploy (EEST
+    // test_modified_withdrawal_contract fixtures) that returns a
+    // different size is still hashed verbatim and the block stays
+    // valid as long as requests_hash matches the header.
     auto result = system_call(kWithdrawalRequestsAddress, {});
     if (result.status_code != EVMC_SUCCESS || result.output_size == 0) {
         return;
-    }
-    if (result.output_size % 76 != 0) {
-        fatal("EIP-7002: queue dump not a multiple of 76 bytes");
     }
     std::vector<uint8_t> req;
     req.reserve(1 + result.output_size);
@@ -1788,14 +1792,14 @@ void ZiskStateDB::collect_withdrawal_requests() noexcept {
 }
 
 void ZiskStateDB::collect_consolidation_requests() noexcept {
-    // EIP-7251: same shape as EIP-7002, but each record is 116 bytes
-    // (20 + 48 + 48) and the request type byte is 0x02.
+    // EIP-7251: same shape as EIP-7002 — canonical contract emits N ×
+    // 116 bytes (20 + 48 + 48), type byte is 0x02, but consensus only
+    // sees opaque bytes. See collect_withdrawal_requests() for the
+    // rationale on accepting any size (test_modified_consolidation_
+    // contract / test_extra_consolidations).
     auto result = system_call(kConsolidationRequestsAddress, {});
     if (result.status_code != EVMC_SUCCESS || result.output_size == 0) {
         return;
-    }
-    if (result.output_size % 116 != 0) {
-        fatal("EIP-7251: queue dump not a multiple of 116 bytes");
     }
     std::vector<uint8_t> req;
     req.reserve(1 + result.output_size);
