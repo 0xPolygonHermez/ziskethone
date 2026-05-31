@@ -916,6 +916,7 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         ++tx_counter_;
         transient_.reset();
         created_this_tx_idx_.clear();
+        delegated_this_tx_idx_.clear();
         // Tx-end commit hook for the dynamic-storage path. For the
         // SELFDESTRUCT-same-tx pattern (the case this whole machinery
         // was added for), `clear_account_for_selfdestruct` already
@@ -1353,6 +1354,12 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item&          auth
         const auto delegation_hash = keccak256_bytes32(
             delegation, sizeof(delegation));
         accounts_.set_code_hash_at(signer_idx, delegation_hash, tx_counter_);
+        // Track this EOA as a dynamic-storage routing target for the
+        // rest of the tx — see the comment on `delegated_this_tx_idx_`
+        // for the security argument. We only do this on the
+        // delegation-SET branch; the clear branch above leaves the
+        // EOA code-less again, so it doesn't need the routing.
+        delegated_this_tx_idx_.insert(signer_idx);
     }
 
     return signer_was_non_empty ? 12500 : 0;

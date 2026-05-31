@@ -254,7 +254,9 @@ private:
     // table, since reth's witness may not contain their slots.
     bool is_fresh_account(const evmc::address& addr) const noexcept {
         if (!accounts_.contains(addr)) return false;
-        return created_this_tx_idx_.count(accounts_.index_of(addr)) != 0;
+        const size_t idx = accounts_.index_of(addr);
+        return created_this_tx_idx_.count(idx) != 0
+            || delegated_this_tx_idx_.count(idx) != 0;
     }
 
     // Fork detection from ConsensusInfo.field_count. Treats 0 (= old
@@ -398,6 +400,20 @@ private:
     // destroyed contract can't issue SELFDESTRUCT after its CREATE
     // rolls back.
     std::unordered_set<size_t> created_this_tx_idx_{};
+
+    // EIP-7702: account indices that received a delegation-indicator
+    // `set_code` in the current transaction. Same lifecycle as
+    // `created_this_tx_idx_` — populated by the auth-application loop
+    // and cleared at every tx boundary in `process_transactions`.
+    // Routes SSTORE/SLOAD/access_storage on these accounts to
+    // `dynamic_storage_` for witness-absent slots: the EOA had no
+    // parent-state code (delegation indicator is set THIS tx),
+    // therefore no parent-state storage, so any value the EVM
+    // SSTOREs / SLOADs on it during 7702-delegated execution is on
+    // a slot whose block-original is implicitly 0 — uncontestable
+    // by a malicious prover (same dynamic-routing safety argument
+    // as freshly-CREATEd accounts).
+    std::unordered_set<size_t> delegated_this_tx_idx_{};
 
     // Per-tx receipts (finalized at end-of-tx; logs filled by emit_log
     // during execution).
