@@ -71,11 +71,16 @@ void Journal::log_dyn_account_erase(const evmc::address&        address,
     entries_.emplace_back(DynAccountEraseEntry{address, std::move(snapshot)});
 }
 
-void Journal::rollback(Checkpoint        cp,
-                       Accounts&         accounts,
-                       Storages&         storages,
-                       DynamicStorage&   dynamic_storage,
-                       TransientStorage& transient) {
+void Journal::log_pending_destruct(size_t idx, bool was_already_present) {
+    entries_.emplace_back(PendingDestructEntry{idx, was_already_present});
+}
+
+void Journal::rollback(Checkpoint                  cp,
+                       Accounts&                   accounts,
+                       Storages&                   storages,
+                       DynamicStorage&             dynamic_storage,
+                       TransientStorage&           transient,
+                       std::unordered_set<size_t>& pending_destruct) {
     if (cp >= entries_.size()
         || !std::holds_alternative<CheckpointMarker>(entries_[cp])) {
         fatal("Journal::rollback: invalid checkpoint");
@@ -111,6 +116,14 @@ void Journal::rollback(Checkpoint        cp,
                 dynamic_storage.set_warm(e.address, e.position, e.old_last_tx_idx);
             } else if constexpr (std::is_same_v<T, DynAccountEraseEntry>) {
                 dynamic_storage.restore_account(e.address, std::move(e.snapshot));
+            } else if constexpr (std::is_same_v<T, PendingDestructEntry>) {
+                // If THIS log entry was the one that inserted the
+                // idx, remove it on rollback. If it was already
+                // present from a prior unreverted SELFDESTRUCT in
+                // this tx, leave it alone.
+                if (!e.was_already_present) {
+                    pending_destruct.erase(e.idx);
+                }
             }
             // CheckpointMarker: nothing to undo, just pop below.
         }, entries_.back());

@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstdint>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -98,16 +99,29 @@ public:
     void log_dyn_account_erase(const evmc::address&        address,
                                DynamicStorage::Snapshot&&  snapshot);
 
+    // Per Yellow Paper, SELFDESTRUCT registers the account for
+    // deletion-at-end-of-tx rather than wiping it immediately. cpp-
+    // guest tracks this via `ZiskStateDB::pending_destruct_`. The
+    // journal entry lets a reverted SELFDESTRUCT frame un-register
+    // the account. `was_already_present` distinguishes "I inserted
+    // this row, rollback erases it" from "the row was already there
+    // from a prior SELFDESTRUCT in this tx that didn't revert,
+    // rollback leaves it alone".
+    void log_pending_destruct(size_t idx, bool was_already_present);
+
     // Pop every entry above `cp` (and the checkpoint marker itself),
     // applying each write record's old_value to `accounts` /
     // `storages` / `dynamic_storage` / `transient` in reverse order.
-    // Aborts via zeg::fatal if `cp` does not refer to a valid
-    // checkpoint marker.
-    void rollback(Checkpoint        cp,
-                  Accounts&         accounts,
-                  Storages&         storages,
-                  DynamicStorage&   dynamic_storage,
-                  TransientStorage& transient);
+    // `pending_destruct` is the SELFDESTRUCT-pending-at-end-of-tx set
+    // owned by ZiskStateDB; PendingDestructEntry rollback removes
+    // entries from it. Aborts via zeg::fatal if `cp` does not refer
+    // to a valid checkpoint marker.
+    void rollback(Checkpoint                  cp,
+                  Accounts&                   accounts,
+                  Storages&                   storages,
+                  DynamicStorage&             dynamic_storage,
+                  TransientStorage&           transient,
+                  std::unordered_set<size_t>& pending_destruct);
 
     // Stack depth (checkpoints + write records).
     size_t size() const noexcept { return entries_.size(); }
@@ -146,6 +160,10 @@ private:
         evmc::address              address;
         DynamicStorage::Snapshot   snapshot;
     };
+    struct PendingDestructEntry {
+        size_t idx;
+        bool   was_already_present;
+    };
 
     using Entry = std::variant<
         CheckpointMarker,
@@ -158,7 +176,8 @@ private:
         TransientEntry,
         DynStorageEntry,
         DynStorageWarmEntry,
-        DynAccountEraseEntry>;
+        DynAccountEraseEntry,
+        PendingDestructEntry>;
 
     std::vector<Entry> entries_;
 };

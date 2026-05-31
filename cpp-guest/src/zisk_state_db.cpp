@@ -283,7 +283,10 @@ bool ZiskStateDB::selfdestruct(const evmc::address& addr,
         // set_balance_at calls below would otherwise overwrite each
         // other and leave the account net-credited).
         if (same_tx_created) {
-            clear_account_for_selfdestruct(src_idx);
+            // Defer destruction to end-of-tx per Yellow Paper —
+            // see comment on pending_destruct_ in the header.
+            const auto [_, inserted] = pending_destruct_.insert(src_idx);
+            journal_.log_pending_destruct(src_idx, /*was_already_present=*/!inserted);
             return true;
         }
         return false;
@@ -304,10 +307,23 @@ bool ZiskStateDB::selfdestruct(const evmc::address& addr,
     accounts_.set_balance_at(src_idx, evmc::uint256be{}, tx_counter_);
 
     if (same_tx_created) {
-        clear_account_for_selfdestruct(src_idx);
+        // Defer destruction to end-of-tx per Yellow Paper.
+        const auto [_, inserted] = pending_destruct_.insert(src_idx);
+        journal_.log_pending_destruct(src_idx, /*was_already_present=*/!inserted);
         return true;
     }
     return false;
+}
+
+void ZiskStateDB::apply_pending_destructs() noexcept {
+    // Called once per tx after the EVM completes. Each pending entry
+    // gets its full clear (nonce + code_hash + storage + dynamic
+    // storage). No journaling needed — the tx has committed and no
+    // revert can roll these back.
+    for (size_t idx : pending_destruct_) {
+        clear_account_for_selfdestruct(idx);
+    }
+    pending_destruct_.clear();
 }
 
 void ZiskStateDB::clear_account_for_selfdestruct(size_t src_idx) noexcept {
@@ -589,7 +605,7 @@ ZiskStateDB::Checkpoint ZiskStateDB::checkpoint() noexcept {
 }
 
 void ZiskStateDB::rollback(Checkpoint cp) noexcept {
-    journal_.rollback(cp.journal_cp, accounts_, storages_, dynamic_storage_, transient_);
+    journal_.rollback(cp.journal_cp, accounts_, storages_, dynamic_storage_, transient_, pending_destruct_);
     if (!tx_receipts_.empty()) {
         tx_receipts_.back().logs.resize(cp.log_count);
     }
@@ -917,6 +933,10 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         transient_.reset();
         created_this_tx_idx_.clear();
         delegated_this_tx_idx_.clear();
+        // pending_destruct_ is also per-tx — `apply_pending_destructs`
+        // at the END of the previous iteration drained it, so this
+        // clear is just a paranoia guard (also handles tx 0).
+        pending_destruct_.clear();
         // Tx-end commit hook for the dynamic-storage path. For the
         // SELFDESTRUCT-same-tx pattern (the case this whole machinery
         // was added for), `clear_account_for_selfdestruct` already
@@ -990,6 +1010,12 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
                      i, (unsigned long long)gas_used,
                      (int)result.status_code);
         finalize_receipt(result, gas_used);
+
+        // Apply deferred SELFDESTRUCT clears now that the tx has
+        // committed. Per Yellow Paper, destruction happens at the
+        // end of the TRANSACTION, not at the SELFDESTRUCT opcode.
+        // See pending_destruct_ in the header for the rationale.
+        apply_pending_destructs();
 
         // Detach tracer after the traced tx so later txs don't trace.
         if (trace_env != nullptr && i == static_cast<size_t>(std::atoi(trace_env))) {

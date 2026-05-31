@@ -247,6 +247,13 @@ private:
     void process_transactions(const Transactions& transactions) noexcept;
     void post_execute_block()                                   noexcept;
 
+    // Walk `pending_destruct_` and call clear_account_for_selfdestruct
+    // on every entry. Called once per tx after the EVM completes,
+    // before the next tx starts (which clears the set). At this point
+    // no revert is possible (the tx has committed), so the clears
+    // don't need their own journal entries — they're terminal.
+    void apply_pending_destructs() noexcept;
+
     // True iff `addr` was CREATEd in the current tx (per
     // `created_this_tx_idx_`). Routing predicate for the dynamic
     // storage path: SSTORE/SLOAD/access_storage on such addresses go
@@ -433,6 +440,18 @@ private:
     // by a malicious prover (same dynamic-routing safety argument
     // as freshly-CREATEd accounts).
     std::unordered_set<size_t> delegated_this_tx_idx_{};
+
+    // SELFDESTRUCT registers an account for destruction at end-of-tx,
+    // not immediately (Yellow Paper). Storage, code, and nonce stay
+    // live until the tx finishes — subsequent code in the same tx
+    // can still load the destroyed contract's code (e.g. via an
+    // EIP-7702 delegation indicator pointing at it). Without this
+    // deferral, test_set_code_to_self_destructing_account_deployed_
+    // in_same_tx call_set_code_first_False variants diverge from
+    // reth's expected post-state. Populated by `selfdestruct`,
+    // applied + cleared at every tx boundary in
+    // `process_transactions` after the tx completes.
+    std::unordered_set<size_t> pending_destruct_{};
 
     // Per-tx receipts (finalized at end-of-tx; logs filled by emit_log
     // during execution).
