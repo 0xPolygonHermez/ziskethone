@@ -175,6 +175,19 @@ fn main() -> Result<()> {
                 .with_context(|| format!("serializing manifest {}", path.display()))?;
             std::fs::write(&path, &json)
                 .with_context(|| format!("writing {}", path.display()))?;
+            // Write a sidecar `block-{i}.expect` containing the EEST
+            // fixture's expect_exception string (or empty if the block
+            // is a positive test). Downstream classifiers (the sweep
+            // script) read this to treat correctly-failing negative
+            // tests as expected outcomes, not bugs.
+            let expect_path = test_dir.join(format!("block-{i}.expect"));
+            let expect_str = test
+                .blocks
+                .get(i)
+                .and_then(|b| b.expect_exception.as_deref())
+                .unwrap_or("");
+            std::fs::write(&expect_path, expect_str)
+                .with_context(|| format!("writing {}", expect_path.display()))?;
             written += 1;
         }
 

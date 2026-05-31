@@ -18,10 +18,13 @@
 #pragma once
 
 #include <cstdint>
+#include <utility>
 #include <variant>
 #include <vector>
 
 #include <evmc/evmc.hpp>
+
+#include "zeg/dynamic_storage.hpp"
 
 namespace zeg {
 
@@ -76,13 +79,34 @@ public:
                        bool                  was_present,
                        const evmc::bytes32&  old_value);
 
+    // Dynamic-storage analogues of `log_storage` / `log_storage_warm`.
+    // Used for freshly-created accounts whose slots aren't in the
+    // static `Storages` table (see `DynamicStorage` for rationale).
+    // `was_present == false` tells rollback to REMOVE the slot rather
+    // than restore a value, since the write created the entry.
+    void log_dyn_storage(const evmc::address&  address,
+                         const evmc::bytes32&  position,
+                         bool                  was_present,
+                         const evmc::bytes32&  old_value,
+                         uint64_t              old_last_tx_idx);
+    void log_dyn_storage_warm(const evmc::address&  address,
+                              const evmc::bytes32&  position,
+                              uint64_t              old_last_tx_idx);
+    // Whole-account erase used by SELFDESTRUCT (EIP-6780 same-tx
+    // destroy). The snapshot owns the dropped (pos, Slot) entries so
+    // rollback can put them back atomically.
+    void log_dyn_account_erase(const evmc::address&        address,
+                               DynamicStorage::Snapshot&&  snapshot);
+
     // Pop every entry above `cp` (and the checkpoint marker itself),
     // applying each write record's old_value to `accounts` /
-    // `storages` / `transient` in reverse order. Aborts via zeg::fatal
-    // if `cp` does not refer to a valid checkpoint marker.
+    // `storages` / `dynamic_storage` / `transient` in reverse order.
+    // Aborts via zeg::fatal if `cp` does not refer to a valid
+    // checkpoint marker.
     void rollback(Checkpoint        cp,
                   Accounts&         accounts,
                   Storages&         storages,
+                  DynamicStorage&   dynamic_storage,
                   TransientStorage& transient);
 
     // Stack depth (checkpoints + write records).
@@ -106,6 +130,22 @@ private:
         bool           was_present;
         evmc::bytes32  old_value;   // valid iff was_present
     };
+    struct DynStorageEntry {
+        evmc::address  address;
+        evmc::bytes32  position;
+        bool           was_present;
+        evmc::bytes32  old_value;       // valid iff was_present
+        uint64_t       old_last_tx_idx; // valid iff was_present
+    };
+    struct DynStorageWarmEntry {
+        evmc::address address;
+        evmc::bytes32 position;
+        uint64_t      old_last_tx_idx;
+    };
+    struct DynAccountEraseEntry {
+        evmc::address              address;
+        DynamicStorage::Snapshot   snapshot;
+    };
 
     using Entry = std::variant<
         CheckpointMarker,
@@ -115,7 +155,10 @@ private:
         StorageEntry,
         AccountWarmEntry,
         StorageWarmEntry,
-        TransientEntry>;
+        TransientEntry,
+        DynStorageEntry,
+        DynStorageWarmEntry,
+        DynAccountEraseEntry>;
 
     std::vector<Entry> entries_;
 };

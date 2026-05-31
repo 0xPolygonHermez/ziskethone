@@ -155,6 +155,7 @@ set(GUEST_SOURCES
     src/consensus_info.cpp
     src/contracts.cpp
     src/create_address.cpp
+    src/dynamic_storage.cpp
     src/eip6110_deposit.cpp
     src/fake_exponential.cpp
     src/hex_prefix.cpp

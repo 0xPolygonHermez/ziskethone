@@ -131,6 +131,22 @@ bool ZiskStateDB::account_exists(const evmc::address& addr) const noexcept {
 
 evmc::bytes32 ZiskStateDB::get_storage(const evmc::address& addr,
                                        const evmc::bytes32& key) const noexcept {
+    // Route to `dynamic_storage_` ONLY when the slot is genuinely
+    // absent from the static `Storages` table AND the address was
+    // freshly created in this tx. Checking static membership first
+    // keeps the witness-driven StateRoot integration intact for
+    // every slot the prover actually pre-registered — including
+    // slots on fresh accounts that reth's BundleState retained
+    // (i.e. accounts that don't self-destruct same-tx). Without this
+    // ordering, fresh-account SSTOREs that the witness DID capture
+    // would silently divert to dynamic_storage_, leaving the static
+    // row at its original value and diverging the post-block state
+    // root.
+    if (!storages_.contains(addr, key) && is_fresh_account(addr)) {
+        auto& ds = const_cast<DynamicStorage&>(dynamic_storage_);
+        ds.mark_touched(addr, key, tx_counter_);
+        return ds.value(addr, key);
+    }
     // `storages_.value(...)` touches the slot for tx_counter_ (snapshots
     // tx_original on first access, marks warm). The const_cast is safe:
     // mods_ is logically mutable scratch — evmc::Host::get_storage is
@@ -141,6 +157,25 @@ evmc::bytes32 ZiskStateDB::get_storage(const evmc::address& addr,
 evmc_storage_status ZiskStateDB::set_storage(const evmc::address& addr,
                                              const evmc::bytes32& key,
                                              const evmc::bytes32& value) noexcept {
+    // See routing comment in get_storage: dynamic_storage_ is only
+    // for (addr, key) pairs the witness genuinely doesn't know about.
+    if (!storages_.contains(addr, key) && is_fresh_account(addr)) {
+        // Freshly-created account, slot absent from witness: route
+        // through dynamic_storage_. access_storage(addr, key) was
+        // called by evmone before this, which marked the slot touched
+        // and (if absent) inserted it with a zero original. So now we
+        // can capture pre-write state and journal it.
+        const bool was_present = dynamic_storage_.contains(addr, key);
+        const auto current     = dynamic_storage_.value(addr, key);
+        const auto original    = dynamic_storage_.tx_original(addr, key, tx_counter_);
+        const auto old_tx_idx  = dynamic_storage_.last_tx_idx(addr, key);
+
+        journal_.log_dyn_storage(addr, key, was_present, current, old_tx_idx);
+        dynamic_storage_.set_value(addr, key, value, tx_counter_);
+
+        return compute_storage_status(original, current, value);
+    }
+
     // No explicit mark_touched_at here: on Berlin+ revisions evmone
     // always calls access_storage(addr, key) before set_storage, and
     // our access_storage already does the snapshot. So by the time
@@ -320,6 +355,15 @@ void ZiskStateDB::clear_account_for_selfdestruct(size_t src_idx) noexcept {
         journal_.log_storage(i, cur, storages_.last_tx_idx_at(i));
         storages_.set_value_at(i, evmc::bytes32{}, tx_counter_);
     }
+
+    // Dynamic-storage side: drop every slot the EVM SSTORE'd on this
+    // freshly-created address in O(1) (the nested unordered_map's
+    // erase is constant-time on the outer key). The journal records
+    // the entire snapshot so a frame revert restores it atomically.
+    if (dynamic_storage_.contains(addr)) {
+        auto snap = dynamic_storage_.erase_account(addr);
+        journal_.log_dyn_account_erase(addr, std::move(snap));
+    }
 }
 
 evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
@@ -460,6 +504,37 @@ evmc_access_status ZiskStateDB::access_account(const evmc::address& addr) noexce
 
 evmc_access_status ZiskStateDB::access_storage(const evmc::address& addr,
                                                const evmc::bytes32& key) noexcept {
+    // Same routing rule as get_storage/set_storage: only divert to
+    // dynamic_storage_ when the slot isn't in the static witness AND
+    // the account was freshly created in this tx.
+    if (!storages_.contains(addr, key) && is_fresh_account(addr)) {
+        // Freshly-created account, witness-absent slot: route through
+        // dynamic_storage_. We auto-insert the slot if absent
+        // (mark_touched does it) so the subsequent SLOAD/SSTORE find
+        // an entry to read/journal. For the journal: log the cold→warm
+        // transition so a revert restores the slot's prior state
+        // (which may be "absent" if this access is what created the
+        // entry).
+        const bool was_present = dynamic_storage_.contains(addr, key);
+        const bool was_warm = was_present
+            && dynamic_storage_.is_warm(addr, key, tx_counter_);
+        if (!was_warm) {
+            const uint64_t old_tx_idx = was_present
+                ? dynamic_storage_.last_tx_idx(addr, key)
+                : 0;
+            if (was_present) {
+                journal_.log_dyn_storage_warm(addr, key, old_tx_idx);
+            } else {
+                // Insertion-via-access: journal as a "was_present=false"
+                // dyn_storage entry so rollback removes the slot.
+                journal_.log_dyn_storage(addr, key, /*was_present=*/false,
+                                         evmc::bytes32{}, 0);
+            }
+        }
+        dynamic_storage_.mark_touched(addr, key, tx_counter_);
+        return was_warm ? EVMC_ACCESS_WARM : EVMC_ACCESS_COLD;
+    }
+
     // Soft-phantom: if the slot isn't in our table, neither the
     // prestate tracer nor the execution witness surfaced it (e.g. an
     // OOG'd SLOAD whose value Geth/Reth omits from the tx prestate —
@@ -514,7 +589,7 @@ ZiskStateDB::Checkpoint ZiskStateDB::checkpoint() noexcept {
 }
 
 void ZiskStateDB::rollback(Checkpoint cp) noexcept {
-    journal_.rollback(cp.journal_cp, accounts_, storages_, transient_);
+    journal_.rollback(cp.journal_cp, accounts_, storages_, dynamic_storage_, transient_);
     if (!tx_receipts_.empty()) {
         tx_receipts_.back().logs.resize(cp.log_count);
     }
@@ -841,6 +916,25 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         ++tx_counter_;
         transient_.reset();
         created_this_tx_idx_.clear();
+        // Tx-end commit hook for the dynamic-storage path. For the
+        // SELFDESTRUCT-same-tx pattern (the case this whole machinery
+        // was added for), `clear_account_for_selfdestruct` already
+        // dropped every fresh account's slots via `erase_account` —
+        // `dynamic_storage_` is empty here.
+        //
+        // For a surviving freshly-created account (CREATE without
+        // SELFDESTRUCT) we would need to commit its slots somewhere
+        // the post-block StateRoot walker can see them. That requires
+        // either appending into the static `Storages` table (which
+        // breaks witness-embedded indices) or extending the StateRoot
+        // walker to consider `dynamic_storage_` directly. Neither is
+        // exercised by the named failing fixture; fatal here so a
+        // future fixture that hits this case surfaces it loudly
+        // instead of silently producing a wrong state root.
+        if (!dynamic_storage_.empty()) {
+            fatal("dynamic_storage: surviving fresh account at tx-end "
+                  "needs StateRoot extension (see plan); not yet supported");
+        }
 
         const auto& tx = transactions.at(i);
 

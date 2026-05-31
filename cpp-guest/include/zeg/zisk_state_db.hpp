@@ -37,6 +37,7 @@
 #include "zeg/accounts.hpp"
 #include "zeg/consensus_info.hpp"
 #include "zeg/contracts.hpp"
+#include "zeg/dynamic_storage.hpp"
 #include "zeg/journal.hpp"
 #include "zeg/previous_blocks.hpp"
 #include "zeg/receipt.hpp"           // LogEntry, TxReceipt
@@ -246,6 +247,16 @@ private:
     void process_transactions(const Transactions& transactions) noexcept;
     void post_execute_block()                                   noexcept;
 
+    // True iff `addr` was CREATEd in the current tx (per
+    // `created_this_tx_idx_`). Routing predicate for the dynamic
+    // storage path: SSTORE/SLOAD/access_storage on such addresses go
+    // through `dynamic_storage_` rather than the static `storages_`
+    // table, since reth's witness may not contain their slots.
+    bool is_fresh_account(const evmc::address& addr) const noexcept {
+        if (!accounts_.contains(addr)) return false;
+        return created_this_tx_idx_.count(accounts_.index_of(addr)) != 0;
+    }
+
     // Fork detection from ConsensusInfo.field_count. Treats 0 (= old
     // manifests that pre-date the field) as Pectra (21), so mainnet
     // replays behave as before. Used to gate Prague-only system calls
@@ -361,6 +372,15 @@ private:
     // tx_counter_. TSTORE writes are journaled so revert restores
     // (or erases) the entry.
     TransientStorage      transient_{};
+    // Per-tx scratchpad of storage slots for accounts that were
+    // freshly CREATEd in the current tx. reth's witness recorder
+    // drops storage entries for accounts that end up destroyed
+    // (CREATE+SELFDESTRUCT same tx), so the static `Storages` table
+    // built from the manifest can't satisfy SLOAD/SSTORE on those
+    // slots. Routed via `is_fresh_account(addr)` — see
+    // `dynamic_storage.hpp` for the security argument. Reset at every
+    // tx boundary alongside `created_this_tx_idx_`.
+    DynamicStorage        dynamic_storage_{};
 
     // Monotonic counter incremented at the start of each tx in
     // process_transactions. Passed to Storages for per-tx warm/cold
