@@ -136,12 +136,21 @@ pub fn write_transactions(w: &mut Writer, current: &Block) -> Result<()> {
         // EIP-7702 (Type-4) only: append one 64 B pubkey per
         // authorization in the auth list. The cpp-guest reads them in
         // the same order — see `transactions.cpp:540-551`.
+        //
+        // For auths whose signature is INVALID (bad parity, s out of
+        // range, etc.), write 64 zero bytes as a sentinel. Per EIP-7702,
+        // invalid auths must be SKIPPED — the block-level tx still
+        // executes, only the auth itself is a no-op. cpp-guest
+        // detects the all-zero sentinel and treats the auth as
+        // unverifiable (= skip). Fixtures like
+        // test_valid_tx_invalid_auth_signature exercise this path.
         if let TxEnvelope::Eip7702(signed) = env {
             for auth in &signed.tx().authorization_list {
-                let auth_sig = auth
-                    .signature()
-                    .map_err(|e| anyhow::anyhow!("EIP-7702 auth bad signature: {e}"))?;
-                let auth_pk = recover_pubkey(&auth_sig, &auth.inner().signature_hash())?;
+                let auth_pk: [u8; 64] = match auth.signature() {
+                    Ok(sig) => recover_pubkey(&sig, &auth.inner().signature_hash())
+                        .unwrap_or([0u8; 64]),
+                    Err(_) => [0u8; 64],
+                };
                 w.bytes(&auth_pk);
             }
             // 64 B is already 8-aligned; no extra pad needed.

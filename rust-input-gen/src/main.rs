@@ -226,6 +226,24 @@ async fn fetch_offline_sources_online(
         "fetched execution witness",
     );
 
+    // Inject tx-derived addresses (tx.from, tx.to, EIP-2930 access
+    // list addresses, EIP-7702 authorization signers) into prestate.
+    // The prestateTracer captures these for txs whose execution
+    // accesses them, but EIP-7702 auth signers in particular are
+    // recovered from the auth signature and may NOT appear in the
+    // tracer's diff if cpp-guest's auth-validation path rejects the
+    // auth (chain_id mismatch, nonce mismatch, ...) before any state
+    // change. The cpp-guest fatals if a recovered signer is absent
+    // from accounts_ (security: a soft-skip would let a malicious
+    // prover omit the signer and substitute Op::Hash with the
+    // canonical leaf hash, silently dropping the auth while still
+    // matching the canonical state root).
+    enrich::inject_tx_addresses(&mut prestate, &current);
+    info!(
+        accounts = prestate.len(),
+        "injected tx-derived addresses (incl. EIP-7702 signers)"
+    );
+
     // Inject the four Pectra system contracts (EIP-4788 / 2935 / 7002
     // / 7251). The cpp-guest's `pre_execute_block` / `post_execute_block`
     // CALL these from `0xfffe`; the prestate tracer captures tx

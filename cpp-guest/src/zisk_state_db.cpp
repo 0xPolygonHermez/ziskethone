@@ -763,6 +763,20 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
         return result;
     }
 
+    // EIP-3541 (London): contracts cannot have deployed code that
+    // starts with the 0xef byte. EIP-7702 extends this for the
+    // delegation-designation prefix 0xef0100 specifically — CREATE/
+    // CREATE2 must reject init code that RETURNS code starting with
+    // these bytes (otherwise the deployed contract would be
+    // indistinguishable from a 7702-installed delegation indicator).
+    // Reth rejects such CREATEs; fixtures
+    // test_creating_delegation_designation_contract and
+    // test_deploying_delegation_designation_contract verify this.
+    if (result.output_size > 0 && result.output_data[0] == 0xef) {
+        rollback(cp_after_bump);
+        return evmc::Result{EVMC_CONTRACT_VALIDATION_FAILURE, 0, 0, nullptr, 0};
+    }
+
     // EIP-2 code-deposit cost (200 gas per byte of deployed code).
     // Charged AFTER the init code's RETURN, deducted from result's
     // remaining gas. If the leftover gas can't cover the deposit, the
@@ -1306,6 +1320,34 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item&          auth
         return 0;
     }
 
+    // EIP-2 / EIP-7702: s must be in [1, secp256k1n/2]. Out-of-range
+    // s values produce a malleable signature that reth (and every
+    // conforming EL) rejects. cpp-guest's libsecp256k1 verifier
+    // doesn't enforce this — without the check here, an auth with
+    // s = N-1 (test_valid_tx_invalid_auth_signature SECP256K1N_1)
+    // would be accepted, bumping the signer's nonce + setting code
+    // and diverging from reth's empty-diff result.
+    //
+    // secp256k1_N/2 = floor(N/2)
+    //   = 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0
+    static constexpr uint8_t kSecp256k1NHalf[32] = {
+        0x7f,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+        0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+        0x5d,0x57,0x6e,0x73,0x57,0xa4,0x50,0x1d,
+        0xdf,0xe9,0x2f,0x46,0x68,0x1b,0x20,0xa0,
+    };
+    {
+        // Lexicographic big-endian compare: a_s > N/2 -> skip.
+        int cmp = std::memcmp(a_s.bytes, kSecp256k1NHalf, 32);
+        if (cmp > 0) return 0;
+        // s == 0 is also invalid (no signature).
+        bool s_is_zero = true;
+        for (uint8_t b : a_s.bytes) {
+            if (b != 0) { s_is_zero = false; break; }
+        }
+        if (s_is_zero) return 0;
+    }
+
     // Auth signing hash: keccak256(0x05 || rlp([chain_id, address,
     // nonce])).
     const auto cid_enc   = rlp::encode_u64(a_chain_id);
@@ -1326,13 +1368,51 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item&          auth
         preimage.data(), preimage.size());
 
     // Verify against prover-supplied pubkey, recover signer.
+    // rust-input-gen writes a 64-byte ALL-ZERO sentinel when the
+    // auth's signature is invalid (bad parity, s out of range, etc.)
+    // and pubkey recovery failed. Per EIP-7702 such auths are
+    // SKIPPED at the block-level (the tx still executes; the auth
+    // is a no-op). Detect the sentinel and short-circuit before
+    // verify_signature_and_get_signer (which would fatal).
     const auto pk_span = tx.auth_pubkey(auth_idx);
+    {
+        bool pk_all_zero = true;
+        for (uint8_t b : pk_span) {
+            if (b != 0) { pk_all_zero = false; break; }
+        }
+        if (pk_all_zero) return 0;
+    }
     const evmc::address signer =
         verify_signature_and_get_signer(pk_span.data(),
                                         a_hash, a_r, a_s);
 
-    // Signer must be in the witness with the matching nonce.
+    // Witness-completeness: a well-formed auth signature deterministically
+    // recovers `signer` from public inputs (chain_id, address, nonce, r, s,
+    // v). The prover knows this address in advance, so the prestate MUST
+    // include it. A "soft skip" here would be exploitable: a malicious
+    // prover could omit `signer` from accounts_ and substitute Op::Hash
+    // with the honest parent/post leaf hashes (both public-chain-derivable),
+    // causing cpp-guest to silently drop the auth while the state-root
+    // walk still matches the canonical roots — i.e., the proof would
+    // attest a different STF than consensus's. Honest input-gen injects
+    // every recovered signer in both offline mode (rust-input-gen/src/
+    // enrich.rs `inject_tx_addresses`) and online mode, so this fatal
+    // only fires on an incomplete or adversarial witness.
+    if (!accounts_.contains(signer)) {
+        fatal("EIP-7702: recovered authority address absent from "
+              "accounts table — witness incomplete or adversarial");
+    }
     const size_t signer_idx = accounts_.index_of(signer);
+
+    // EIP-7702: refuse to bump if signer's nonce is already at the
+    // u64 ceiling — the bump would overflow. reth applies this guard
+    // (test_nonce_overflow_after_first_authorization's second auth
+    // sees signer.nonce == UINT64_MAX from the prior auth and
+    // rejects). cpp-guest's wrap-around would silently set nonce=0
+    // and diverge.
+    if (accounts_.nonce_at(signer_idx) == UINT64_MAX) {
+        return 0;
+    }
 
     // EIP-7702: every recovered authority address is added to the
     // tx-level access list (pre-warmed) regardless of whether the
@@ -1474,6 +1554,20 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
                                   entry_code.data(), entry_code.size());
 
         if (result.status_code == EVMC_SUCCESS) {
+            // EIP-3541 (London): reject deployed code starting with
+            // 0xef. EIP-7702 reinforces this for the delegation prefix
+            // 0xef0100 specifically — top-level CREATE tx must also
+            // refuse to deploy such code, otherwise the new contract
+            // would be indistinguishable from a 7702-installed
+            // delegation indicator. Fixture
+            // test_deploying_delegation_designation_contract.json
+            // exercises this path (a Type-0 creation tx whose init
+            // code RETURNs `0xef0100||addr`).
+            if (result.output_size > 0 && result.output_data[0] == 0xef) {
+                return evmc::Result{EVMC_CONTRACT_VALIDATION_FAILURE,
+                                    0, 0, nullptr, 0};
+            }
+
             // EIP-2 code deposit cost (200 / byte). Deducted from
             // the CREATE frame's remaining gas; OOG if insufficient.
             constexpr int64_t CODE_DEPOSIT_COST = 200;
