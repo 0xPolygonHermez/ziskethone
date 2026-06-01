@@ -27,3 +27,7 @@ build/
 # Env
 .env
 .env.local
+
+# Claude Code (runtime / personal state)
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
