@@ -714,6 +714,18 @@ StateRoot::StateRoot(const uint8_t*& cursor,
 }
 
 evmc::bytes32 StateRoot::calculate_new_state_root() {
+    // Read-only reuse precondition: the new-root pass replays the cached
+    // read-only (NodeR-under-NodeRW) subtrees from the old-root pass and
+    // never re-walks them. That is only sound if no read-only row changed
+    // during execution — otherwise a cached node would embed the stale
+    // value and the new root would silently diverge. Enforce it here,
+    // where the reuse happens, so the check can't be skipped or reordered
+    // by callers. (Originals come from the stream; current values are
+    // final once execution has run, which it has by the time the new root
+    // is computed.)
+    accounts_.check_read_only_unchanged();
+    storages_.check_read_only_unchanged();
+
     cache_read_pos_ = 0;
     const uint8_t* cursor = start_cursor_;
     // Fresh counters for this pass. They still run (so read-write leaves

@@ -149,16 +149,10 @@ int main(int argc, char** argv) {
         zeg::fatal("pre-execution state root mismatch");
     }
 
-    // 6'. Read-only witness invariant: every account and storage slot
-    //     the input stream marked read-only must be unchanged after
-    //     execution. The new-state-root walk skips re-hashing read-only
-    //     subtrees by reusing the cached pre-execution nodes — if the
-    //     EVM did write through to one of those rows, the new root
-    //     would silently embed the old value and diverge from the
-    //     correct post-state. Fatal here pins the failure to the
-    //     mutation that caused it rather than to a downstream mismatch.
-    accounts.check_read_only_unchanged();
-    storages.check_read_only_unchanged();
+    // (The read-only-unchanged invariant — every is_read_only account /
+    //  slot must hold its block-start value — is enforced inside
+    //  StateRoot::calculate_new_state_root, just before it reuses the
+    //  cached read-only subtrees.)
 
     // DEBUG: full dump of post-execution state for Python MPT reference.
     if (std::getenv("ZEG_DUMP_ALL") != nullptr) {
