@@ -18,8 +18,16 @@ Storages::Storages(const uint8_t*& cursor) {
         originals_.push_back(View{record});
         const View& v = originals_.back();
         index_.emplace(Key{v.address(), v.position()}, i);
+        addr_slots_[v.address()].push_back(i);
     }
     cursor += count * kRecordSize;
+}
+
+const std::vector<size_t>& Storages::slots_of(
+        const evmc::address& addr) const noexcept {
+    static const std::vector<size_t> kEmpty;
+    const auto it = addr_slots_.find(addr);
+    return it == addr_slots_.end() ? kEmpty : it->second;
 }
 
 size_t Storages::index_of(const evmc::address& addr,

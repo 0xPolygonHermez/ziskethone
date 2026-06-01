@@ -345,8 +345,17 @@ const uint8_t* read_input_stream(const char* path) {
         zeg::fatal("read_input_stream: bad magic (expected ZEG0)");
     }
 
-    // Skip the magic + its 4 B zero padding so the returned cursor
-    // is 8-byte aligned.
+    // The 4 bytes after the magic are the format version. Reject any
+    // mismatch — a v0 input (StateRoot Op::Leaf carried an index) would
+    // misparse the trie stream under the v1 counter-derived-index walk.
+    uint32_t version;
+    std::memcpy(&version, base + 4, sizeof(version));
+    if (version != zeg::kVersion) {
+        zeg::fatal("read_input_stream: unsupported format version");
+    }
+
+    // Skip the magic + version word so the returned cursor is 8-byte
+    // aligned.
     return base + 8;
 }
 

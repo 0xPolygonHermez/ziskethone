@@ -2,12 +2,28 @@
 //! writers. Building this once guarantees the three sections agree on
 //! the index assignments (Accounts[idx] / Storages[idx]) that the
 //! StateRoot stream's `Op::Leaf` opcodes reference.
+//!
+//! Ordering is by **trie position**, not raw key: `addrs` is sorted by
+//! `keccak256(address)` and `slots` by `(keccak256(address),
+//! keccak256(slot))`. This makes each row's table index equal to the
+//! order in which the StateRoot walk visits its leaf, so the cpp-guest
+//! derives the index from a running per-pass counter instead of reading
+//! it from the stream — and asserts the counter reaches `len()` exactly
+//! in the pre-block pass (every row appears as exactly one leaf, none
+//! repeated). `Op::Leaf` therefore no longer carries an index.
 
 use std::collections::{BTreeSet, HashMap};
 
 use alloy::primitives::{Address, B256};
+use sha3::{Digest, Keccak256};
 
 use crate::rpc::{Prestate, PrestateDiff};
+
+fn keccak256(bytes: &[u8]) -> B256 {
+    let mut hasher = Keccak256::new();
+    hasher.update(bytes);
+    B256::from_slice(&hasher.finalize())
+}
 
 pub struct TouchSet {
     /// Addresses in the same iteration order as `write_accounts`.
@@ -23,11 +39,13 @@ pub struct TouchSet {
 
 impl TouchSet {
     pub fn build(prestate: &Prestate, diff: &PrestateDiff) -> Self {
-        // Addresses — same union as sections::write_accounts.
+        // Addresses — same union as sections::write_accounts. Sorted by
+        // keccak256(address) so each table index == state-trie walk order.
         let mut addr_set: BTreeSet<Address> = prestate.keys().copied().collect();
         addr_set.extend(diff.pre.keys().copied());
         addr_set.extend(diff.post.keys().copied());
-        let addrs: Vec<Address> = addr_set.into_iter().collect();
+        let mut addrs: Vec<Address> = addr_set.into_iter().collect();
+        addrs.sort_by_key(|a| keccak256(a.as_slice()));
         let addr_idx = addrs
             .iter()
             .enumerate()
@@ -48,7 +66,12 @@ impl TouchSet {
                 }
             }
         }
-        let slots: Vec<(Address, B256)> = slot_set.into_iter().collect();
+        // Sorted by (keccak256(address), keccak256(slot)) so a single
+        // global storage index increases monotonically as the walk
+        // visits account-after-account, slot-after-slot — matching the
+        // cpp-guest's storage-leaf counter.
+        let mut slots: Vec<(Address, B256)> = slot_set.into_iter().collect();
+        slots.sort_by_key(|(a, s)| (keccak256(a.as_slice()), keccak256(s.as_slice())));
         let slot_idx = slots
             .iter()
             .enumerate()
@@ -61,14 +84,16 @@ impl TouchSet {
     /// Touched slots for one account, in `slots` order. Used by the
     /// StateRoot encoder to walk the per-account storage trie.
     pub fn slots_for(&self, addr: &Address) -> Vec<(B256, usize)> {
-        // `slots` is sorted by (addr, slot) so all entries for `addr`
-        // are contiguous; binary-search the range bounds.
+        // `slots` is sorted by (keccak(addr), keccak(slot)) so all
+        // entries for `addr` are contiguous; binary-search the range
+        // bounds by the address hash (the primary sort key).
+        let ah = keccak256(addr.as_slice());
         let start = self
             .slots
-            .partition_point(|(a, _)| a < addr);
+            .partition_point(|(a, _)| keccak256(a.as_slice()) < ah);
         let end = self
             .slots
-            .partition_point(|(a, _)| a <= addr);
+            .partition_point(|(a, _)| keccak256(a.as_slice()) <= ah);
         (start..end)
             .map(|i| {
                 let (_, slot) = self.slots[i];

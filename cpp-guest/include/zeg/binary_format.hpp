@@ -11,7 +11,12 @@
 namespace zeg {
 
 constexpr uint32_t kMagic   = 0x3047455Au; // "ZEG0" little-endian
-constexpr uint32_t kVersion = 0;
+// Format version, stored in the 4 bytes immediately after the magic.
+// v1: StateRoot `Op::Leaf` carries no index — the Accounts/Storages
+// tables are keccak-sorted (trie-walk order) and the guest derives each
+// leaf's index from a running counter. v0 inputs (idx-in-stream) would
+// misparse, so the guest rejects any version != kVersion.
+constexpr uint32_t kVersion = 1;
 
 enum class SectionKind : uint32_t {
     ParentHeader      = 1,

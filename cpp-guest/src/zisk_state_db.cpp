@@ -343,29 +343,12 @@ void ZiskStateDB::clear_account_for_selfdestruct(size_t src_idx) noexcept {
     accounts_.set_code_hash_at(src_idx, EMPTY_CODE_HASH, tx_counter_);
 
     // Storage: zero every (addr, slot) entry in the witness for this
-    // address. The records are sorted by (address, position) — rust-
-    // input-gen writes them from a `BTreeSet<(Address, B256)>`, so a
-    // single address's slots form one contiguous range. Binary-search
-    // the range start (O(log N)) and walk forward while the address
-    // matches (O(K) for K slots of this account) instead of scanning
-    // the full table on every SELFDESTRUCT.
+    // address. `Storages::slots_of` returns this account's slot indices
+    // in O(1) via an address->indices hashmap built at construction —
+    // independent of the table sort order (the table is now keccak-sorted
+    // for the StateRoot leaf counter, not raw-address-sorted).
     const evmc::address& addr = accounts_.address_at(src_idx);
-    const uint64_t n_slots = storages_.size();
-    uint64_t lo = 0, hi = n_slots;
-    while (lo < hi) {
-        const uint64_t mid = lo + (hi - lo) / 2;
-        if (std::memcmp(storages_.address_at(mid).bytes, addr.bytes,
-                        sizeof(addr.bytes)) < 0) {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
-    }
-    for (uint64_t i = lo;
-         i < n_slots
-             && std::memcmp(storages_.address_at(i).bytes, addr.bytes,
-                            sizeof(addr.bytes)) == 0;
-         ++i) {
+    for (size_t i : storages_.slots_of(addr)) {
         const auto cur = storages_.value_at(i);
         if (cur == evmc::bytes32{}) continue;
         journal_.log_storage(i, cur, storages_.last_tx_idx_at(i));

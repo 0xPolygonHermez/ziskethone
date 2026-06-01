@@ -59,9 +59,10 @@ public:
     /// cpp-guest wraps them in HP + RLP at pack time.
     ///
     /// The common path (witness leaves whose preimage IS exposed)
-    /// goes through `AccountLeafR`/`StorageLeafR` via `Op::Leaf <idx>`
-    /// after `enrich::enrich_state_leaves_from_witness` etc. populate
-    /// our prestate. This variant exists for the residual gap only.
+    /// goes through `AccountLeafR`/`StorageLeafR` via `Op::Leaf` (its
+    /// table index derived from the walk counter) after
+    /// `enrich::enrich_state_leaves_from_witness` etc. populate our
+    /// prestate. This variant exists for the residual gap only.
     struct PhantomLeafR {
         std::vector<uint8_t> path_nibbles;
         std::vector<uint8_t> value_rlp;
@@ -72,6 +73,15 @@ public:
     struct CacheEntry {
         NodeR       result;
         std::size_t bytes_consumed;
+        // The running state/storage leaf indices right AFTER this cached
+        // subtree finished in the old-root pass. `Op::Leaf` carries no
+        // index; the walker derives it from a per-pass counter. The
+        // new-root pass replays a cached subtree without re-walking it, so
+        // it SETS the counters to these recorded values, keeping the index
+        // of every leaf that FOLLOWS the cached subtree aligned with the
+        // old-root pass.
+        std::size_t state_idx_after;
+        std::size_t storage_idx_after;
     };
 
     // ----- public API -------------------------------------------------------

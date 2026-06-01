@@ -60,11 +60,12 @@ enum class Op : uint64_t {
     NodeRW        = 4,
     NodeR         = 5,
     /// Fallback: carries a sibling leaf inline when Reth omits its
-    /// keccak preimage from `witness.keys` so we can't reference it by
-    /// Accounts/Storages idx. Payload: u64 path_nib_count + nib_count×u64
-    /// (low 4 bits) + u64 value_len + value_len bytes (pad to 8). The
-    /// common path (preimage present → enriched into prestate) goes
-    /// through `Op::Leaf <idx>` instead.
+    /// keccak preimage from `witness.keys` so it never became a target
+    /// in the sorted Accounts/Storages table. Payload: u64 path_nib_count
+    /// + nib_count×u64 (low 4 bits) + u64 value_len + value_len bytes
+    /// (pad to 8). The common path (preimage present → enriched into
+    /// prestate) goes through bare `Op::Leaf` instead, its table index
+    /// derived from the walk counter.
     PhantomLeaf   = 6,
 };
 
@@ -349,6 +350,13 @@ struct WalkContext {
     std::size_t&               cache_read_pos;
     WalkPass                   pass;
     ValueSet                   which;
+    // Running leaf counters. `Op::Leaf` no longer carries an index; the
+    // table is sorted in trie-walk order, so the n-th state/storage leaf
+    // visited IS Accounts[n] / Storages[n]. Each leaf consumes the next
+    // counter value. The old-root pass asserts both reach size() (every
+    // row appears as exactly one leaf — none repeated, none missing).
+    std::size_t&               next_state_idx;
+    std::size_t&               next_storage_idx;
 };
 
 // Forward declarations.
@@ -459,6 +467,13 @@ NodeR walk_node(
             evmc::bytes32 h;
             std::memcpy(h.bytes, cursor, sizeof(h.bytes));
             cursor += sizeof(h.bytes);  // 32 B — already 8-aligned
+            // An Op::Hash stands in for an UNTOUCHED subtree only — i.e.
+            // one that contains no Accounts/Storages table rows. It does
+            // not advance the leaf counters. If the witness were missing a
+            // node over read-only table rows, the encoder would still emit
+            // Op::Hash here, but then those rows would have no leaf and the
+            // old-root-pass `count == size()` check fatals (strict: an
+            // incomplete witness is rejected, not silently skipped).
             return mk_node<HashR>(h);
         }
 
@@ -477,7 +492,14 @@ NodeR walk_node(
 
         case Op::Leaf: {
             if (kind == TreeKind::State) {
-                const uint64_t idx = read_u64_le(cursor);
+                // No index in the stream: the n-th state leaf visited is
+                // Accounts[n] (the table is sorted in trie-walk order).
+                // Bounds-guard catches a stream with more leaves than
+                // accounts; the end-of-old-root-pass check catches fewer.
+                if (ctx.next_state_idx >= ctx.accounts.size()) {
+                    fatal("state_root: more state leaves than accounts");
+                }
+                const uint64_t idx = ctx.next_state_idx++;
 
                 if (ctx.pass == WalkPass::OldRoot
                     && readonly_mode
@@ -526,7 +548,15 @@ NodeR walk_node(
                                              static_cast<size_t>(idx),
                                              storage_root);
             } else {
-                const uint64_t idx = read_u64_le(cursor);
+                // No index in the stream: the n-th storage leaf visited
+                // is Storages[n]. The single global counter stays
+                // monotonic because the table is sorted by (keccak addr,
+                // keccak slot) and the walk visits account-after-account,
+                // slot-after-slot.
+                if (ctx.next_storage_idx >= ctx.storages.size()) {
+                    fatal("state_root: more storage leaves than storage slots");
+                }
+                const uint64_t idx = ctx.next_storage_idx++;
 
                 if (ctx.pass == WalkPass::OldRoot
                     && readonly_mode
@@ -612,11 +642,22 @@ NodeR walk_node(
                         const uint8_t* before = cursor;
                         children[k] = walk_node(cursor, ctx, kind, nibbles_walked,
                                                 owning_address, /*readonly=*/true);
+                        // Record the leaf indices reached AFTER this cached
+                        // subtree so the new-root pass can resume without
+                        // re-walking it (see below).
                         ctx.cache.push_back(
-                            {children[k], static_cast<size_t>(cursor - before)});
+                            {children[k], static_cast<size_t>(cursor - before),
+                             ctx.next_state_idx, ctx.next_storage_idx});
                     } else {
                         const auto& entry = ctx.cache[ctx.cache_read_pos++];
                         cursor += entry.bytes_consumed;
+                        // The subtree is replayed, not re-walked, so its
+                        // Op::Leaf opcodes are skipped — set the leaf
+                        // counters to the recorded post-subtree values so
+                        // every following leaf gets the same index as the
+                        // old-root pass.
+                        ctx.next_state_idx   = entry.state_idx_after;
+                        ctx.next_storage_idx = entry.storage_idx_after;
                         children[k] = entry.result;
                     }
                 } else {
@@ -646,20 +687,43 @@ StateRoot::StateRoot(const uint8_t*& cursor,
       storages_(storages),
       start_cursor_(cursor)
 {
+    std::size_t next_state_idx = 0, next_storage_idx = 0;
     WalkContext ctx{accounts_, storages_, cache_, cache_read_pos_,
-                    WalkPass::OldRoot, ValueSet::Original};
+                    WalkPass::OldRoot, ValueSet::Original,
+                    next_state_idx, next_storage_idx};
     std::vector<uint8_t> nibbles_walked;
     nibbles_walked.reserve(64);  // max trie depth
     NodeR root = walk_node(cursor, ctx, TreeKind::State, nibbles_walked,
                            /*owning_address=*/nullptr, /*readonly_mode=*/false);
     old_root_ = finalize(root, accounts_, storages_, ValueSet::Original);
+
+    // Bijection check (pre-block only): every Accounts / Storages row must
+    // appear as exactly one leaf in the pre-block trie. The per-leaf
+    // bounds-guard already rejected a stream with too MANY leaves; these
+    // assertions reject too FEW. Together they pin every table row's
+    // original value into old_root_ (which is matched against the trusted
+    // parent anchor), closing the read-only-leaf → Op::Hash substitution
+    // gap. The post-block pass reuses this validated structure, so it is
+    // not re-checked there.
+    if (next_state_idx != accounts_.size()) {
+        fatal("state_root: not every account appears as a pre-block leaf");
+    }
+    if (next_storage_idx != storages_.size()) {
+        fatal("state_root: not every storage slot appears as a pre-block leaf");
+    }
 }
 
 evmc::bytes32 StateRoot::calculate_new_state_root() {
     cache_read_pos_ = 0;
     const uint8_t* cursor = start_cursor_;
+    // Fresh counters for this pass. They still run (so read-write leaves
+    // outside cached subtrees get the right table index), advanced through
+    // cached subtrees via the per-entry leaf counts. No end-of-pass check:
+    // the pre-block pass already validated the bijection.
+    std::size_t next_state_idx = 0, next_storage_idx = 0;
     WalkContext ctx{accounts_, storages_, cache_, cache_read_pos_,
-                    WalkPass::NewRoot, ValueSet::Current};
+                    WalkPass::NewRoot, ValueSet::Current,
+                    next_state_idx, next_storage_idx};
     std::vector<uint8_t> nibbles_walked;
     nibbles_walked.reserve(64);
     NodeR root = walk_node(cursor, ctx, TreeKind::State, nibbles_walked,
