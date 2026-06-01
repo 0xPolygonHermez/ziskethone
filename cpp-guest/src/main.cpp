@@ -255,12 +255,10 @@ int main(int argc, char** argv) {
         .excess_blob_gas          = consensus.excess_blob_gas(),
         .parent_beacon_block_root = consensus.parent_beacon_block_root(),
         .requests_hash            = state.requests_hash(),
-        // Fork-aware header field count. 0 (= old manifests that
-        // pre-date the field) uses the default (21 = Pectra), which is
-        // correct for mainnet replays.
-        .field_count              = consensus.field_count() == 0
-                                        ? 21u
-                                        : consensus.field_count(),
+        // Fork the block runs under. ForkId::Unknown (0 = inputs that
+        // pre-date the field) resolves to Prague, the mainnet default.
+        // The encoder derives the header field count from this.
+        .fork_id                  = consensus.fork_id(),
     };
     // DEBUG: dump every header field so we can compare against chain.
     {

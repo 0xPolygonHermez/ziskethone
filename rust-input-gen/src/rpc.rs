@@ -417,6 +417,46 @@ impl Client {
         })
     }
 
+    /// Query EIP-7910 `eth_config` to learn whether the chain's current
+    /// (latest) fork is Osaka-or-later, and if so its activation time.
+    ///
+    /// Detection is fork-name-independent: `eth_config` exposes a fork-id
+    /// *hash*, not a name, so we key off the P256VERIFY precompile
+    /// (EIP-7951, address `0x..0100`) that Osaka/Fusaka introduces.
+    /// Returns the current fork's `activationTime` iff that precompile is
+    /// present — a block is Osaka iff its timestamp is `>=` that value.
+    ///
+    /// Best-effort: any RPC / shape error returns `Ok(None)`, so the
+    /// caller treats the block as pre-Osaka. This preserves behaviour on
+    /// nodes that don't implement `eth_config`.
+    ///
+    /// Note: keyed off the *current* fork, so once a hypothetical
+    /// post-Osaka fork ships, blocks in the Osaka..next window would be
+    /// misclassified as pre-Osaka. Revisit when evmone gains a later
+    /// revision (none exists today).
+    pub async fn osaka_activation_time(&self) -> Result<Option<u64>> {
+        let v: Value = match self.provider.raw_request("eth_config".into(), ()).await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(err = %e, "eth_config unavailable; treating block as pre-Osaka");
+                return Ok(None);
+            }
+        };
+        let Some(current) = v.get("current") else {
+            return Ok(None);
+        };
+        const P256VERIFY: &str = "0x0000000000000000000000000000000000000100";
+        let has_p256 = current
+            .get("precompiles")
+            .and_then(Value::as_object)
+            .map(|m| m.values().any(|a| a.as_str() == Some(P256VERIFY)))
+            .unwrap_or(false);
+        if !has_p256 {
+            return Ok(None);
+        }
+        Ok(parse_u64(current.get("activationTime")))
+    }
+
     // ---- private ----------------------------------------------------------
 
     async fn debug_trace_prestate_by_hash(

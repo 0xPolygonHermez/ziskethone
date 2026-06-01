@@ -53,10 +53,8 @@ uint64_t ConsensusInfo::number   () const noexcept { return u64_at(header_ + kNu
 uint64_t ConsensusInfo::gas_limit() const noexcept { return u64_at(header_ + kGasLimitOffset);  }
 uint64_t ConsensusInfo::timestamp() const noexcept { return u64_at(header_ + kTimestampOffset); }
 
-uint32_t ConsensusInfo::field_count() const noexcept {
-    uint32_t v;
-    std::memcpy(&v, header_ + kFieldCountOffset, sizeof(v));
-    return v;
+ForkId ConsensusInfo::fork_id() const noexcept {
+    return static_cast<ForkId>(u64_at(header_ + kForkIdOffset));
 }
 
 std::span<const uint8_t> ConsensusInfo::extra_data() const noexcept {
@@ -89,7 +87,7 @@ const evmc::bytes32& ConsensusInfo::ommers_hash() const noexcept {
 }
 
 // ============================================================================
-// Constructor — fixed 336 B prefix + N × 48 B withdrawal records.
+// Constructor — fixed 344 B prefix + N × 48 B withdrawal records.
 // ============================================================================
 
 ConsensusInfo::ConsensusInfo(const uint8_t*& cursor) {

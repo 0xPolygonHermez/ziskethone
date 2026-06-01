@@ -62,6 +62,15 @@ pub struct OfflineSources {
     /// write — must be marked writable in the Storages section so
     /// the cpp-guest doesn't reject them as read-only.
     pub system_contract_slots: BTreeSet<(Address, B256)>,
+    /// True when this block runs under the Osaka (Fusaka) fork. Osaka
+    /// is timestamp-activated and adds no header field over Prague, so
+    /// it can't be inferred from the block structure — the live-RPC path
+    /// resolves it from the node's `eth_config`. Surfaced to the guest
+    /// via the ConsensusInfo `fork_id` so it dispatches at `EVMC_OSAKA`
+    /// (enabling EIP-7939 CLZ, the P256VERIFY precompile, …). Defaults
+    /// to false for manifests that pre-date the field.
+    #[serde(default)]
+    pub is_osaka: bool,
 }
 
 /// Encode an `OfflineSources` bundle to the cpp-guest's binary
@@ -111,7 +120,7 @@ pub fn build_binary(sources: &OfflineSources, output: &Path) -> Result<()> {
 
     let mut w = Writer::new();
     sections::write_magic(&mut w);
-    sections::write_consensus_info(&mut w, &sources.current, &sources.parent);
+    sections::write_consensus_info(&mut w, &sources.current, &sources.parent, sources.is_osaka);
     sections::write_transactions(&mut w, &sources.current)?;
     sections::write_accounts(&mut w, &prestate, &sources.diff, &touch, &sources.current)?;
     sections::write_contracts(&mut w, &prestate, &sources.diff, &sources.current)?;

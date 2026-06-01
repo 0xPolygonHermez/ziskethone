@@ -23,6 +23,8 @@
 
 #include <evmc/evmc.hpp>
 
+#include "zeg/fork.hpp"
+
 namespace zeg {
 
 struct BlockHeader {
@@ -47,18 +49,14 @@ struct BlockHeader {
     uint64_t                      excess_blob_gas;
     const evmc::bytes32&          parent_beacon_block_root;
     const evmc::bytes32&          requests_hash;
-    // How many header fields to RLP-encode. Default is 21 (full Pectra
-    // layout). Mixed-fork ancestor chains (e.g. Cancun → Prague EEST
-    // transition fixtures) need lower counts for pre-Pectra ancestors:
-    //   21 = Pectra (adds requests_hash)
-    //   20 = Cancun (adds blob_gas_used, excess_blob_gas, parent_beacon_block_root)
-    //   17 = Shanghai (adds withdrawals_root)
-    //   16 = London (adds base_fee_per_gas)
-    //   15 = pre-London
-    // The trailing slots in the struct can be left referencing dummy /
-    // zero data when field_count truncates them away; the encoder will
-    // ignore them.
-    uint32_t                      field_count = 21;
+    // The hardfork this header belongs to. The encoder derives the
+    // number of RLP fields to emit from it via `fork_field_count`
+    // (see zeg/fork.hpp): Berlin → 15, London/Paris → 16, Shanghai → 17,
+    // Cancun → 20, Prague/Osaka → 21. Mixed-fork ancestor chains (e.g.
+    // Cancun → Prague EEST transition fixtures) carry the right fork per
+    // ancestor. The trailing struct slots can reference dummy / zero
+    // data when the fork truncates them away; the encoder ignores them.
+    ForkId                        fork_id = ForkId::Prague;
 };
 
 // keccak256 of the canonical RLP encoding of `h`. Field order matches

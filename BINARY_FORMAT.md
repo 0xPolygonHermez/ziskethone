@@ -63,13 +63,13 @@ Per-block consensus-layer inputs for the **current** block (the one
 being executed). Schema at
 [`consensus_info.hpp`](cpp-guest/include/zeg/consensus_info.hpp).
 
-### Fixed 264-byte header prefix
+### Fixed 344-byte header prefix
 
 | Offset | Size | Field                       | Type / encoding         |
 |-------:|-----:|-----------------------------|-------------------------|
 |      0 |   32 | `parent_hash`               | `bytes32` — in this guest's convention this carries the parent **state root**, not the parent block hash |
 |     32 |   20 | `beneficiary`               | 20-byte address         |
-|     52 |    4 | pad                         | zero                    |
+|     52 |    4 | pad                         | zero (formerly a u32 `field_count`; the fork is now carried by `fork_id` at offset 336) |
 |     56 |    8 | `number`                    | `u64`                   |
 |     64 |    8 | `gas_limit`                 | `u64`                   |
 |     72 |    8 | `timestamp`                 | `u64`                   |
@@ -81,7 +81,11 @@ being executed). Schema at
 |    216 |    8 | `withdrawals_count`         | `u64`                   |
 |    224 |    8 | `excess_blob_gas`           | `u64` (EIP-4844)        |
 |    232 |   32 | `requests_hash`             | `bytes32` (EIP-7685; zero pre-Pectra). cpp-guest cross-checks its recomputed value against this and rejects the block on mismatch |
-|    264 |      | **end of fixed prefix**     |                         |
+|    264 |   32 | `difficulty`                | `uint256be` — pre-Merge PoW value; `0` post-Merge |
+|    296 |    8 | `nonce`                     | 8-byte fixed-width — pre-Merge PoW nonce; `0` post-Merge |
+|    304 |   32 | `ommers_hash`               | `bytes32` — `kEmptyOmmersHash` post-Merge |
+|    336 |    8 | `fork_id`                   | `u64` — hardfork identity (see [`zeg/fork.hpp`](cpp-guest/include/zeg/fork.hpp)). The guest derives both the EVM revision and the header field count from it. `0` (= Unknown) ⇒ Prague (mainnet default). Distinguishes Osaka from Prague, which share a header layout |
+|    344 |      | **end of fixed prefix**     |                         |
 
 `chain_id` is **not** in the stream. It is compile-time pinned to `1`
 (Ethereum mainnet) in [`zeg/config.hpp`](cpp-guest/include/zeg/config.hpp).

@@ -147,6 +147,20 @@ async fn fetch_offline_sources_online(
         "anchored block hash",
     );
 
+    // Resolve whether this block runs under Osaka. Osaka shares Prague's
+    // header layout, so the only signal is the node's fork schedule
+    // (eth_config) vs. the block timestamp. Best-effort: a node without
+    // eth_config yields `None` → treated as pre-Osaka (Prague).
+    let osaka_at = client.osaka_activation_time().await?;
+    let is_osaka = matches!(osaka_at, Some(t) if current.header.timestamp >= t);
+    if is_osaka {
+        info!(
+            timestamp = current.header.timestamp,
+            osaka_activation = ?osaka_at,
+            "block runs under Osaka",
+        );
+    }
+
     {
         use alloy::rpc::types::BlockTransactions;
         if let BlockTransactions::Full(v) = &current.transactions {
@@ -338,6 +352,7 @@ async fn fetch_offline_sources_online(
         diff,
         witness,
         system_contract_slots,
+        is_osaka,
     })
 }
 

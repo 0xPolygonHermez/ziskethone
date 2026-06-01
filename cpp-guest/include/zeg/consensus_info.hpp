@@ -23,18 +23,22 @@
 
 #include <evmc/evmc.hpp>
 
+#include "zeg/fork.hpp"
+
 namespace zeg {
 
 class ConsensusInfo {
 public:
-    static constexpr uint64_t kFixedPrefixSize      = 336;
+    static constexpr uint64_t kFixedPrefixSize      = 344;
     static constexpr uint64_t kWithdrawalRecordSize = 48;
 
-    // Fixed offsets within the 336-byte header prefix. All 8-byte
+    // Fixed offsets within the 344-byte header prefix. All 8-byte
     // aligned by construction.
     static constexpr size_t kParentHashOffset            = 0;    // bytes32
     static constexpr size_t kBeneficiaryOffset           = 32;   // 20 B
-    static constexpr size_t kFieldCountOffset            = 52;   // u32-le
+    // 52..56 is reserved padding (it used to hold a u32 `field_count`;
+    // the fork is now carried by `kForkIdOffset` as a 64-bit value, per
+    // the wire contract documented in zeg/fork.hpp).
     static constexpr size_t kNumberOffset                = 56;   // u64
     static constexpr size_t kGasLimitOffset              = 64;   // u64
     static constexpr size_t kTimestampOffset             = 72;   // u64
@@ -55,7 +59,12 @@ public:
     static constexpr size_t kDifficultyOffset            = 264;  // uint256be
     static constexpr size_t kNonceOffset                 = 296;  // 8 B
     static constexpr size_t kOmmersHashOffset            = 304;  // bytes32
-    // End of fixed prefix: 336.
+    // Fork identity (see zeg/fork.hpp). 64-bit value appended at the end
+    // of the prefix — distinguishes Osaka from Prague, which share the
+    // same header field count. 0 (= zero-filled / pre-fork_id inputs)
+    // decodes to ForkId::Unknown ⇒ Prague (mainnet default).
+    static constexpr size_t kForkIdOffset                = 336;  // u64-le
+    // End of fixed prefix: 344.
 
     // Zero-copy view over one 48-byte withdrawal record (EIP-4895).
     //
@@ -97,11 +106,11 @@ public:
     const evmc::uint256be&   difficulty              () const noexcept;
     std::span<const uint8_t, 8> nonce                () const noexcept;
     const evmc::bytes32&     ommers_hash             () const noexcept;
-    // Header field-count for fork detection: 21 = Pectra+, 20 = Cancun,
-    // 17 = Shanghai, 16 = London, 15 = pre-London. 0 = unset (old
-    // manifests pre-dating this field) → treated as 21 (Pectra default)
-    // by callers, which is correct for mainnet replays.
-    uint32_t                 field_count             () const noexcept;
+    // The hardfork this block runs under. Callers derive both the EVM
+    // revision and the header field-count from it (see zeg/fork.hpp).
+    // ForkId::Unknown (0 = zero-filled / pre-fork_id inputs) resolves to
+    // Prague, which is correct for mainnet replays.
+    ForkId                   fork_id                 () const noexcept;
 
     // ----- withdrawals -----
     size_t                      withdrawals_count() const noexcept { return withdrawals_.size(); }

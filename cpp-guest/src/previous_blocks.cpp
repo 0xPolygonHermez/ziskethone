@@ -98,11 +98,12 @@ std::span<const uint8_t> PreviousBlocks::View::extra_data() const noexcept {
 namespace {
 
 evmc::bytes32 compute_header_hash(const PreviousBlocks::View& v) {
-    // Read field_count from the wire format. 0 == unset (old manifests
-    // pre-dating this field) → treat as 21 (Pectra default), which is
-    // what mainnet replays always want.
-    const uint32_t fc_raw = v.field_count();
-    const uint32_t fc = (fc_raw == 0) ? 21u : fc_raw;
+    // Ancestor records still carry the legacy per-record `field_count`
+    // (they are only re-hashed, never executed, so the EVM revision is
+    // irrelevant — only the field count matters for the RLP). Map it to
+    // a fork so the shared header encoder can derive the count back. 0 ==
+    // unset (old manifests) → Prague (Pectra default), as mainnet wants.
+    const ForkId fork = fork_from_field_count(v.field_count());
     return compute_block_header_hash(BlockHeader{
         .parent_hash              = v.parent_hash(),
         .ommers_hash              = v.ommers_hash(),
@@ -125,7 +126,7 @@ evmc::bytes32 compute_header_hash(const PreviousBlocks::View& v) {
         .excess_blob_gas          = v.excess_blob_gas(),
         .parent_beacon_block_root = v.parent_beacon_block_root(),
         .requests_hash            = v.requests_hash(),
-        .field_count              = fc,
+        .fork_id                  = fork,
     });
 }
 

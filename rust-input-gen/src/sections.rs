@@ -25,37 +25,41 @@ pub fn write_magic(w: &mut Writer) {
     w.assert_aligned();
 }
 
+/// Fork identifiers — wire contract with the guest's `ForkId` enum in
+/// `cpp-guest/include/zeg/fork.hpp`. Keep the numeric values in sync.
+/// The guest derives both the EVM revision and the header field count
+/// from this id; `0` (= Unknown) resolves to Prague (mainnet default).
+const FORK_BERLIN: u64 = 1;
+const FORK_LONDON: u64 = 2;
+// FORK_PARIS = 3 exists in the guest enum but is never emitted here:
+// Paris and London share the same header structure (16 fields), so the
+// live-RPC path can't distinguish them and emits FORK_LONDON for both.
+const FORK_SHANGHAI: u64 = 4;
+const FORK_CANCUN: u64 = 5;
+const FORK_PRAGUE: u64 = 6;
+const FORK_OSAKA: u64 = 7;
+
 /// Section 1 — `ConsensusInfo`.
 ///
 /// `current` is the block being executed; `parent` is the block at
 /// `current.number - 1`. The `parent_hash` slot carries the parent's
 /// **state root** (this guest's convention — see BINARY_FORMAT.md §1).
-pub fn write_consensus_info(w: &mut Writer, current: &Block, parent: &Block) {
+///
+/// `is_osaka` distinguishes Osaka from Prague — they share an identical
+/// header structure, so it can't be inferred from `current` and is
+/// resolved upstream from the node's `eth_config`.
+pub fn write_consensus_info(w: &mut Writer, current: &Block, parent: &Block, is_osaka: bool) {
     let h = &current.header;
 
     // 0..32  parent_hash ← parent.state_root (this guest's convention)
     w.bytes(parent.header.state_root.as_slice());
     // 32..52 beneficiary
     w.bytes(h.beneficiary.as_slice());
-    // 52..56 field_count (u32-le) for the current block — same scheme
-    // as the per-ancestor field_count in `write_previous_blocks`.
-    // Tells cpp-guest the consensus fork the block runs under, so it
-    // can gate Prague system calls (EIP-2935/7002/7251) for pre-Prague
-    // blocks in mixed-fork EEST fixtures. Was a 4-byte pad (always 0)
-    // → backward-compat: cpp-guest treats 0 as 21 (Pectra default),
-    // matching mainnet replays.
-    let field_count: u32 = if h.requests_hash.is_some() {
-        21
-    } else if h.parent_beacon_block_root.is_some() {
-        20
-    } else if h.withdrawals_root.is_some() {
-        17
-    } else if h.base_fee_per_gas.is_some() {
-        16
-    } else {
-        15
-    };
-    w.u32_le(field_count);
+    // 52..56 reserved padding. This slot used to hold a u32
+    // `field_count`; the fork is now carried by the 64-bit `fork_id`
+    // appended at the end of the prefix (see below), which can also
+    // express Osaka — indistinguishable from Prague by field count.
+    w.pad(4);
     // 56..64 number
     w.u64_le(h.number);
     // 64..72 gas_limit
@@ -94,6 +98,24 @@ pub fn write_consensus_info(w: &mut Writer, current: &Block, parent: &Block) {
     // 304..336 ommers_hash (bytes32) — kEmptyOmmersHash post-Merge,
     //          but pre-Merge headers can have non-empty ommers.
     w.bytes(h.ommers_hash.as_slice());
+    // 336..344 fork_id (u64-le). Derived from the header structure, with
+    // Osaka layered on top via the upstream `is_osaka` flag (Osaka adds
+    // no header field over Prague, so it can't be inferred here). The
+    // guest maps this to the EVM revision + header field count.
+    let fork_id: u64 = if is_osaka {
+        FORK_OSAKA
+    } else if h.requests_hash.is_some() {
+        FORK_PRAGUE
+    } else if h.parent_beacon_block_root.is_some() {
+        FORK_CANCUN
+    } else if h.withdrawals_root.is_some() {
+        FORK_SHANGHAI
+    } else if h.base_fee_per_gas.is_some() {
+        FORK_LONDON
+    } else {
+        FORK_BERLIN
+    };
+    w.u64_le(fork_id);
     w.assert_aligned();
 
     // Withdrawal records × 48 B each (EIP-4895).

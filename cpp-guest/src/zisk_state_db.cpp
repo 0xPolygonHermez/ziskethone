@@ -666,9 +666,9 @@ void ZiskStateDB::execute_block(const Transactions& transactions) noexcept {
     // value declared in the block header. A mismatch means the block's
     // requests (deposits/withdrawals/consolidations) are invalid or the
     // declared hash is wrong — reject the block. Only meaningful for
-    // Pectra+ (field_count >= 21); the header omits requests_hash before
+    // Pectra+ (Prague/Osaka); the header omits requests_hash before
     // that fork, mirroring block_header.cpp's RLP gate.
-    if (consensus_.field_count() >= 21 &&
+    if (is_prague_or_later() &&
         requests_hash_ != consensus_.requests_hash()) {
         fatal("requests_hash mismatch (invalid block requests)");
     }
