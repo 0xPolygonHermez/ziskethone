@@ -27,10 +27,10 @@ namespace zeg {
 
 class ConsensusInfo {
 public:
-    static constexpr uint64_t kFixedPrefixSize      = 264;
+    static constexpr uint64_t kFixedPrefixSize      = 336;
     static constexpr uint64_t kWithdrawalRecordSize = 48;
 
-    // Fixed offsets within the 264-byte header prefix. All 8-byte
+    // Fixed offsets within the 336-byte header prefix. All 8-byte
     // aligned by construction.
     static constexpr size_t kParentHashOffset            = 0;    // bytes32
     static constexpr size_t kBeneficiaryOffset           = 32;   // 20 B
@@ -46,7 +46,16 @@ public:
     static constexpr size_t kWithdrawalsCountOffset      = 216;  // u64
     static constexpr size_t kExcessBlobGasOffset         = 224;  // u64 (EIP-4844)
     static constexpr size_t kRequestsHashOffset          = 232;  // bytes32 (EIP-7685)
-    // End of fixed prefix: 264.
+    // Pre-Merge consensus fields. Post-Merge these are constants
+    // (difficulty=0, nonce=0x00...00, ommers_hash=kEmptyOmmersHash),
+    // but reth/EEST still includes them in the header RLP. We carry
+    // them in the wire format so cpp-guest can replay pre-Paris EEST
+    // fixtures (Berlin, London — difficulty is a real PoW value,
+    // hash mismatch otherwise).
+    static constexpr size_t kDifficultyOffset            = 264;  // uint256be
+    static constexpr size_t kNonceOffset                 = 296;  // 8 B
+    static constexpr size_t kOmmersHashOffset            = 304;  // bytes32
+    // End of fixed prefix: 336.
 
     // Zero-copy view over one 48-byte withdrawal record (EIP-4895).
     //
@@ -85,6 +94,9 @@ public:
     const evmc::uint256be&   base_fee_per_gas        () const noexcept;
     uint64_t                 excess_blob_gas         () const noexcept;
     const evmc::bytes32&     requests_hash           () const noexcept;
+    const evmc::uint256be&   difficulty              () const noexcept;
+    std::span<const uint8_t, 8> nonce                () const noexcept;
+    const evmc::bytes32&     ommers_hash             () const noexcept;
     // Header field-count for fork detection: 21 = Pectra+, 20 = Cancun,
     // 17 = Shanghai, 16 = London, 15 = pre-London. 0 = unset (old
     // manifests pre-dating this field) → treated as 21 (Pectra default)

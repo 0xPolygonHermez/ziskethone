@@ -16,6 +16,12 @@
 
 namespace zeg {
 
-int64_t compute_intrinsic_gas(const Transactions::View& tx);
+// `is_shanghai_or_later` gates the EIP-3860 initcode-word-cost charge
+// (2 gas per 32 bytes of init code for creation txs). EIP-3860
+// activates in Shanghai — pre-Shanghai EEST fixtures (Berlin/London/
+// Paris) would be over-charged otherwise, producing a state-root
+// divergence on every creation tx.
+int64_t compute_intrinsic_gas(const Transactions::View& tx,
+                              bool is_shanghai_or_later);
 
 } // namespace zeg

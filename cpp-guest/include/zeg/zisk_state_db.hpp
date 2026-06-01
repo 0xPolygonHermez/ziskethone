@@ -296,6 +296,25 @@ private:
         return fc == 0 || fc >= 21;
     }
 
+    // Cancun (field_count == 20) added the EIP-4788 beacon-roots
+    // predeploy system call in pre_execute_block. Pre-Cancun blocks
+    // (Shanghai 17, London 16, Berlin 15) must skip it — the
+    // predeploy address isn't installed in the prestate, so the
+    // unconditional system call would fatal at accounts_.index_of.
+    bool is_cancun_or_later() const noexcept {
+        const uint32_t fc = consensus_.field_count();
+        return fc == 0 || fc >= 20;
+    }
+
+    // Shanghai (field_count == 17) introduced EIP-3860 (initcode
+    // word-cost). Pre-Shanghai blocks (Berlin / London / Paris)
+    // don't charge it; over-charging breaks creation-tx state roots
+    // in EEST fixtures like test_contract_creation_transaction.
+    bool is_shanghai_or_later() const noexcept {
+        const uint32_t fc = consensus_.field_count();
+        return fc == 0 || fc >= 17;
+    }
+
     // ----- Per-tx pipeline (called in this order by process_transactions) -----
     //
     // Each helper takes the next tx (plus any cross-phase scalar it
@@ -362,6 +381,7 @@ private:
 
     // ----- Per-block post-execution phases (called by post_execute_block) -----
 
+    void credit_block_reward()                noexcept;  // pre-Merge PoW reward
     void credit_withdrawals()                 noexcept;  // EIP-4895
     void collect_deposit_requests()           noexcept;  // EIP-6110
     void collect_withdrawal_requests()        noexcept;  // EIP-7002

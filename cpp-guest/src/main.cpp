@@ -227,22 +227,28 @@ int main(int argc, char** argv) {
     //     prover-supplied consensus block hash, and downstream code
     //     will eventually wire `execution_block_hash` into the
     //     guest's public output.
+    // Pre-Paris EEST fixtures pin difficulty / nonce / ommers_hash to
+    // arbitrary PoW-era values; post-Merge they're constants. Both
+    // come from the manifest's consensus_info section — for mainnet
+    // replays the values happen to equal the post-Merge constants
+    // (kPostMergeDifficulty=0, kPostMergeNonce=0..0, kEmptyOmmersHash),
+    // so behavior is preserved for the RPC-driven path.
     const zeg::BlockHeader header{
         .parent_hash              = previous_blocks.hash(0),
-        .ommers_hash              = kEmptyOmmersHash,
+        .ommers_hash              = consensus.ommers_hash(),
         .coinbase                 = consensus.beneficiary(),
         .state_root               = new_state_root,
         .transactions_root        = transactions.transactions_root(),
         .receipts_root            = state.receipts_root(),
         .logs_bloom               = std::span<const uint8_t, 256>{state.block_bloom_filter()},
-        .difficulty               = kPostMergeDifficulty,
+        .difficulty               = consensus.difficulty(),
         .number                   = consensus.number(),
         .gas_limit                = consensus.gas_limit(),
         .gas_used                 = state.gas_used(),
         .timestamp                = consensus.timestamp(),
         .extra_data               = consensus.extra_data(),
         .prev_randao              = consensus.prev_randao(),
-        .nonce                    = std::span<const uint8_t, 8>{kPostMergeNonce},
+        .nonce                    = consensus.nonce(),
         .base_fee_per_gas         = consensus.base_fee_per_gas(),
         .withdrawals_root         = state.withdrawals_root(),
         .blob_gas_used            = state.blob_gas_used(),

@@ -78,9 +78,18 @@ uint64_t ConsensusInfo::excess_blob_gas() const noexcept {
 const evmc::bytes32& ConsensusInfo::requests_hash() const noexcept {
     return *reinterpret_cast<const evmc::bytes32*>(header_ + kRequestsHashOffset);
 }
+const evmc::uint256be& ConsensusInfo::difficulty() const noexcept {
+    return *reinterpret_cast<const evmc::uint256be*>(header_ + kDifficultyOffset);
+}
+std::span<const uint8_t, 8> ConsensusInfo::nonce() const noexcept {
+    return std::span<const uint8_t, 8>{header_ + kNonceOffset, 8};
+}
+const evmc::bytes32& ConsensusInfo::ommers_hash() const noexcept {
+    return *reinterpret_cast<const evmc::bytes32*>(header_ + kOmmersHashOffset);
+}
 
 // ============================================================================
-// Constructor — fixed 264 B prefix + N × 48 B withdrawal records.
+// Constructor — fixed 336 B prefix + N × 48 B withdrawal records.
 // ============================================================================
 
 ConsensusInfo::ConsensusInfo(const uint8_t*& cursor) {
