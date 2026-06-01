@@ -30,12 +30,13 @@
 //!    leaf's path is shorter at the new depth, so its hash is
 //!    different from the original MPT node hash).
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use alloy::primitives::{Address, Bytes, B256};
 use anyhow::{anyhow, bail, Context, Result};
 
 use crate::mpt::{self, hp_decode, keccak256, Rlp};
+use crate::rpc::PrestateDiff;
 use crate::touchset::TouchSet;
 use crate::writer::Writer;
 
@@ -66,6 +67,9 @@ pub fn write(
     parent_state_root: B256,
     witness_nodes: &[Bytes],
     touch: &TouchSet,
+    diff: &PrestateDiff,
+    force_writable_addrs: &BTreeSet<Address>,
+    force_writable: &BTreeSet<(Address, B256)>,
 ) -> Result<()> {
     let mut nodes: HashMap<[u8; 32], Vec<u8>> = HashMap::with_capacity(witness_nodes.len());
     for raw in witness_nodes {
@@ -75,13 +79,15 @@ pub fn write(
         nodes.insert(keccak256(raw), raw.to_vec());
     }
 
-    // Mark every touched account as a writer. The conservative
-    // labelling forces the cpp-guest to recompute every leaf in the
-    // new-root pass instead of replaying the old-pass NodeR cache —
-    // necessary because some accounts mutate outside the tx execution
-    // diff (withdrawal balance credits, EIP-7002 / 7251 system call
-    // slot writes, etc.) and those mutations would otherwise be
-    // dropped from the new root.
+    // Per-address state-trie is_write: true iff the address's account
+    // leaf actually changes this block. Reth's witness can be missing
+    // intermediate nodes along a path; if NO target in a subtree is a
+    // real write, the subtree's pre and post hash are identical and we
+    // can emit `Op::Hash` (the parent's child-ref) instead of
+    // descending. We over-mark slightly to cover mutations that don't
+    // show up in the diff trace (withdrawal credits, EIP-7002 / 7251
+    // system slot writes, block-reward coinbase credits) — see
+    // is_state_write/is_storage_write below.
     let mut state_targets: Vec<Target> = touch
         .addrs
         .iter()
@@ -89,12 +95,14 @@ pub fn write(
         .map(|(idx, addr)| Target {
             key_hash: keccak256(addr.as_slice()),
             leaf_idx: idx,
-            is_write: true,
+            is_write: is_state_write(addr, diff)
+                || force_writable_addrs.contains(addr),
         })
         .collect();
     state_targets.sort_by_key(|t| t.key_hash);
 
-    let ctx = Ctx { nodes: &nodes, touch };
+    let ctx = Ctx { nodes: &nodes, touch, diff, force_writable };
+    let _ = force_writable_addrs; // already consumed when building state_targets
 
     let mut out = Vec::new();
     walk(
@@ -132,6 +140,11 @@ struct Target {
 struct Ctx<'a> {
     nodes: &'a HashMap<[u8; 32], Vec<u8>>,
     touch: &'a TouchSet,
+    diff:  &'a PrestateDiff,
+    /// Slots the caller pre-marked writable independent of the diff
+    /// trace — Pectra system-contract ring buffers etc. Mirrors
+    /// `write_storages`' `force_writable`.
+    force_writable: &'a BTreeSet<(Address, B256)>,
 }
 
 #[derive(Clone, Copy)]
@@ -390,19 +403,33 @@ fn walk(
     let raw_owned: Vec<u8>;
     let raw: &[u8] = match child {
         SubtreeChild::HashRef(h) => {
-            raw_owned = ctx
-                .nodes
-                .get(&h)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "state_root: witness missing node 0x{} at depth {} (targets={})",
+            match ctx.nodes.get(&h) {
+                Some(v) => {
+                    raw_owned = v.clone();
+                    &raw_owned
+                }
+                None => {
+                    // Witness gap: reth didn't include this subtree's
+                    // root node. Tolerable iff no target inside it
+                    // actually changes this block — pre and post roots
+                    // commit to the same `Op::Hash(h)`. If any target
+                    // IS a write, we genuinely need the subtree's
+                    // contents to update it; fatal with a hint.
+                    let any_write = targets.iter().any(|t| t.is_write);
+                    if !any_write {
+                        emit_hash(out, &h);
+                        return Ok(false);
+                    }
+                    bail!(
+                        "state_root: witness missing node 0x{} at depth {} \
+                         (targets={}, writes={}) — subtree contains writes, can't substitute Op::Hash",
                         hex::encode(h),
                         walked.len(),
-                        targets.len()
-                    )
-                })?
-                .clone();
-            &raw_owned
+                        targets.len(),
+                        targets.iter().filter(|t| t.is_write).count(),
+                    );
+                }
+            }
         }
         SubtreeChild::Inline(b) => b,
         SubtreeChild::Empty => unreachable!(),
@@ -448,7 +475,8 @@ fn emit_terminal_leaf(
             .map(|(slot, idx)| Target {
                 key_hash: keccak256(slot.as_slice()),
                 leaf_idx: idx,
-                is_write: true,
+                is_write: is_storage_write(&addr, &slot, ctx.diff)
+                    || ctx.force_writable.contains(&(addr, slot)),
             })
             .collect();
         storage_targets.sort_by_key(|t| t.key_hash);
@@ -1031,6 +1059,27 @@ fn encode_two_item_rlp(path_nibs: &[u8], value_bytes: &[u8], is_leaf: bool) -> V
     let hp_rlp = encode_bytes(&hp);
     let value_rlp = encode_bytes(value_bytes);
     encode_list(&[hp_rlp, value_rlp])
+}
+
+// ===== write-detection helpers ==============================================
+
+/// Is this address marked as written in the per-block diff? Matches
+/// the `is_read_only == 0` semantics of `write_accounts`: the address
+/// is writable iff it appears in either `diff.pre` or `diff.post`.
+/// The state_root walker's NodeR/NodeRW marking must align with the
+/// Storages/Accounts sections' is_read_only flag — otherwise cpp-
+/// guest's "read-write leaf under NodeR subtree" guard fires.
+fn is_state_write(addr: &Address, diff: &PrestateDiff) -> bool {
+    diff.pre.contains_key(addr) || diff.post.contains_key(addr)
+}
+
+/// Same alignment for storage slots: writable iff the slot appears
+/// in `diff.pre[addr].storage ∪ diff.post[addr].storage`. See
+/// `is_state_write` for the rationale.
+fn is_storage_write(addr: &Address, slot: &B256, diff: &PrestateDiff) -> bool {
+    let in_pre = diff.pre.get(addr).map_or(false, |a| a.storage.contains_key(slot));
+    let in_post = diff.post.get(addr).map_or(false, |a| a.storage.contains_key(slot));
+    in_pre || in_post
 }
 
 // ===== constants =============================================================

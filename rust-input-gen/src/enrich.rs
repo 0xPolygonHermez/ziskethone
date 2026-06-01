@@ -354,12 +354,27 @@ pub async fn enrich_prestate_from_witness(
     }
 
     let mut patched = 0usize;
+    let mut walk_skipped = 0usize;
     let addrs: Vec<Address> = prestate.keys().copied().collect();
     for addr in addrs {
         let addr_hash = keccak256(addr.as_slice());
-        let leaf = match walk_to_leaf(&nodes, &parent_state_root.0, &addr_hash)? {
-            Some(v) => v,
-            None => continue, // account doesn't exist in parent trie
+        let leaf = match walk_to_leaf(&nodes, &parent_state_root.0, &addr_hash) {
+            Ok(Some(v)) => v,
+            Ok(None) => continue, // account doesn't exist in parent trie
+            Err(e) if is_witness_missing(&e) => {
+                // Witness gap (see verify::is_witness_missing): reth's
+                // debug_executionWitness occasionally references an
+                // address whose state-trie path crosses a node not
+                // included in `witness.state`. Skip patching this
+                // account — its values from prestateTracer remain. If
+                // cpp-guest actually accesses this account at runtime,
+                // the post-state-root walker will surface any real
+                // problem.
+                tracing::warn!(addr = %addr, err = %e, "enrich: state-trie walk skipped (witness gap)");
+                walk_skipped += 1;
+                continue;
+            }
+            Err(e) => return Err(e),
         };
         let (nonce, balance, _sroot, code_hash) = decode_account_rlp(&leaf)?;
 
@@ -407,7 +422,7 @@ pub async fn enrich_prestate_from_witness(
         }
     }
 
-    info!(patched_accounts = patched, "enriched prestate from witness");
+    info!(patched_accounts = patched, walk_skipped, "enriched prestate from witness");
     Ok(patched)
 }
 
@@ -448,14 +463,27 @@ pub fn enrich_storage_slots_from_witness(
 
     let mut added = 0usize;
     let mut missing_preimage = 0usize;
+    let mut walk_skipped = 0usize;
     let addrs: Vec<Address> = prestate.keys().copied().collect();
     for addr in addrs {
         let addr_hash = keccak256(addr.as_slice());
-        let leaf = match walk_to_leaf(&nodes, &parent_state_root.0, &addr_hash)
-            .with_context(|| format!("enrich: walking parent state trie for addr {addr} (hash 0x{})", hex::encode(addr_hash)))?
-        {
-            Some(v) => v,
-            None => continue, // account doesn't exist in parent trie → no storage
+        let leaf = match walk_to_leaf(&nodes, &parent_state_root.0, &addr_hash) {
+            Ok(Some(v)) => v,
+            Ok(None) => continue, // account doesn't exist in parent trie → no storage
+            Err(e) if is_witness_missing(&e) => {
+                // Witness gap on the state-trie walk — can't reach
+                // this account's storage root, so no slots to enrich.
+                // The address's existing prestate values (from
+                // prestateTracer) stay; cpp-guest's post-state-root
+                // walker will surface any real divergence downstream.
+                tracing::warn!(addr = %addr, err = %e, "enrich storage: state-trie walk skipped (witness gap)");
+                walk_skipped += 1;
+                continue;
+            }
+            Err(e) => return Err(e).with_context(|| format!(
+                "enrich: walking parent state trie for addr {addr} (hash 0x{})",
+                hex::encode(addr_hash)
+            )),
         };
         let (_nonce, _balance, sroot, _ch) = decode_account_rlp(&leaf)?;
         if sroot == EMPTY_TRIE_ROOT {
@@ -473,6 +501,25 @@ pub fn enrich_storage_slots_from_witness(
                     continue;
                 }
             };
+            // Reachability check: even though collect_leaves found this
+            // leaf via DFS, the strict `walk_to_leaf` (which the
+            // downstream state_root::write uses to build the trie ops
+            // for cpp-guest) MUST also reach it. reth's witness can be
+            // inconsistent here: collect_leaves may reach a leaf
+            // through an inline / alternate subtree representation,
+            // while walk_to_leaf descends the canonical path and hits
+            // a missing intermediate node. If we added the slot here
+            // anyway, state_root::write would fatal later. Skip in
+            // that case — the slot stays out of prestate, and any
+            // SLOAD that actually needs it surfaces a real bug
+            // through cpp-guest's reconstruction.
+            match walk_to_leaf(&nodes, &sroot, &path_hash) {
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => {
+                    walk_skipped += 1;
+                    continue;
+                }
+            }
             let entry = prestate.get_mut(&addr).unwrap();
             if entry.storage.contains_key(&pos) {
                 continue;
@@ -490,6 +537,7 @@ pub fn enrich_storage_slots_from_witness(
     info!(
         added_slots = added,
         missing_preimage = missing_preimage,
+        walk_skipped,
         "enriched prestate.storage from witness storage tries"
     );
     Ok(added)
@@ -643,7 +691,7 @@ fn follow_child(
             let h = <[u8; 32]>::try_from(*b).unwrap();
             let raw = nodes
                 .get(&h)
-                .ok_or_else(|| anyhow!("enrich: missing 0x{}", hex::encode(h)))?
+                .ok_or_else(|| anyhow!("enrich: witness missing 0x{}", hex::encode(h)))?
                 .clone();
             walk_raw(nodes, &raw, key, depth)
         }
@@ -653,6 +701,14 @@ fn follow_child(
             walk_raw(nodes, &buf, key, depth)
         }
     }
+}
+
+/// Detect "witness missing trie node" errors emitted by `walk_to_leaf`
+/// / `follow_child`. Mirrors `verify::is_witness_missing` — kept local
+/// to avoid a cross-module import. See that copy for the rationale.
+fn is_witness_missing(err: &anyhow::Error) -> bool {
+    let s = format!("{err:#}");
+    s.contains("witness missing")
 }
 
 fn nibble(hash: &[u8; 32], i: usize) -> u8 {

@@ -39,10 +39,33 @@ pub fn check(
     let mut storage_mismatch = 0;
     let mut storage_absent_in_chain = 0;
 
+    let mut state_walk_skipped = 0usize;
+    let mut storage_walk_skipped = 0usize;
     for (i, addr) in touch.addrs.iter().enumerate() {
         let addr_hash = keccak256(addr.as_slice());
-        let chain_leaf = walk_to_leaf(&nodes, &parent_state_root.0, &addr_hash)
-            .with_context(|| format!("verify: walking parent state trie for addr {addr} (hash 0x{})", hex::encode(addr_hash)))?;
+        let chain_leaf = match walk_to_leaf(&nodes, &parent_state_root.0, &addr_hash) {
+            Ok(v) => v,
+            Err(e) if is_witness_missing(&e) => {
+                // Reth's debug_executionWitness sometimes returns
+                // inconsistent data: `witness.keys` mentions an address
+                // whose state-trie path crosses a node that wasn't
+                // included in `witness.state`. We can't cross-check
+                // this account here, but the values came from
+                // `prestateTracer` + `enrich_prestate_from_witness`
+                // which already validated them against the parts of
+                // the witness we DO have. The post-execution state-
+                // root walker in cpp-guest is the authoritative check
+                // — if anything is actually wrong, the block hash will
+                // mismatch.
+                warn!(idx = i, addr = %addr, err = %e, "verify: state-trie walk skipped (witness gap)");
+                state_walk_skipped += 1;
+                continue;
+            }
+            Err(e) => return Err(e).with_context(|| format!(
+                "verify: walking parent state trie for addr {addr} (hash 0x{})",
+                hex::encode(addr_hash)
+            )),
+        };
 
         // Our written values (matches sections::write_accounts).
         let created_this_block =
@@ -123,12 +146,25 @@ pub fn check(
         }
         for (slot, sidx) in touched_slots {
             let slot_hash = keccak256(slot.as_slice());
-            let chain_slot_leaf =
-                walk_to_leaf(&nodes, &chain_storage_root, &slot_hash)
-                    .with_context(|| format!(
-                        "verify: walking storage trie for addr {addr} (sroot 0x{}) slot {slot} (sidx={sidx})",
-                        hex::encode(chain_storage_root)
-                    ))?;
+            let chain_slot_leaf = match walk_to_leaf(&nodes, &chain_storage_root, &slot_hash) {
+                Ok(v) => v,
+                Err(e) if is_witness_missing(&e) => {
+                    // Same witness-gap rationale as the state-trie
+                    // walk above. Skip the cross-check; cpp-guest's
+                    // state-root reconstruction will catch any real
+                    // divergence downstream.
+                    warn!(
+                        idx = sidx, addr = %addr, slot = %slot, err = %e,
+                        "verify: storage-trie walk skipped (witness gap)",
+                    );
+                    storage_walk_skipped += 1;
+                    continue;
+                }
+                Err(e) => return Err(e).with_context(|| format!(
+                    "verify: walking storage trie for addr {addr} (sroot 0x{}) slot {slot} (sidx={sidx})",
+                    hex::encode(chain_storage_root)
+                )),
+            };
 
             // Our written storage value (matches sections::write_storages).
             let our_value: B256 = pick_storage_value(prestate, diff, addr, &slot);
@@ -158,11 +194,25 @@ pub fn check(
     info!(
         state_mismatches = state_mismatch,
         state_phantom = state_absent_in_chain,
+        state_walk_skipped,
         storage_mismatches = storage_mismatch,
         storage_phantom = storage_absent_in_chain,
+        storage_walk_skipped,
         "verifier summary",
     );
     Ok(())
+}
+
+/// Detect "witness missing trie node" errors emitted by `walk_to_leaf`
+/// and `follow_child` (see their `anyhow!(...)` messages). reth's
+/// `debug_executionWitness` is known to omit MPT nodes that
+/// `witness.keys` references — when this happens, callers should
+/// gracefully skip the affected check rather than fatal. Any other
+/// error (RLP decode failures, bad MPT shapes, etc.) is a real bug
+/// and propagates.
+fn is_witness_missing(err: &anyhow::Error) -> bool {
+    let s = format!("{err:#}");
+    s.contains("witness missing")
 }
 
 fn pick_storage_value(
