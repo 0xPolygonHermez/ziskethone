@@ -10,10 +10,12 @@
 //! 2. At each MPT node:
 //!    * **0 targets** → the subtree is untouched; emit `Op::Hash` with
 //!      the subtree's root hash. (`Op::Empty` for the empty-trie root.)
-//!    * **1 target** → emit `Op::Leaf` with that target's index. The
-//!      cpp-guest builds the leaf with `nibbles_walked` automatically.
-//!      For state-trie leaves, recurse into the per-account storage
-//!      subtree with the touched slot targets for that account.
+//!    * **1 target** → emit `Op::Leaf` (no index — the Accounts/Storages
+//!      table is sorted in trie-walk order, so the cpp-guest derives the
+//!      index from a running counter). The cpp-guest builds the leaf with
+//!      `nibbles_walked` automatically. For state-trie leaves, recurse
+//!      into the per-account storage subtree with the touched slot
+//!      targets for that account.
 //!    * **≥2 targets** → descend:
 //!      * Branch node → 16-way bucket by next nibble; recurse on each.
 //!      * Extension or leaf node → "expand" the path nibble by nibble.
@@ -30,7 +32,7 @@
 //!    leaf's path is shorter at the new depth, so its hash is
 //!    different from the original MPT node hash).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use alloy::primitives::{Address, Bytes, B256};
 use anyhow::{anyhow, bail, Context, Result};
@@ -53,8 +55,8 @@ pub enum Op {
     NodeR         = 5,
     /// Fallback: untouched-sibling leaf re-positioned during a
     /// structural split when its keccak preimage is missing from
-    /// `witness.keys` (so we can't look up an Accounts/Storages idx).
-    /// Common path uses `Op::Leaf <idx>` instead, via the witness-
+    /// `witness.keys` (so it isn't a target in our sorted table).
+    /// Common path uses bare `Op::Leaf` instead, via the witness-
     /// driven enrichment in `enrich::enrich_state_leaves_from_witness`
     /// + `enrich_storage_slots_from_witness`. Payload: path nibbles
     /// + raw value bytes; cpp-guest's `PhantomLeafR` folds back
@@ -101,7 +103,15 @@ pub fn write(
         .collect();
     state_targets.sort_by_key(|t| t.key_hash);
 
-    let ctx = Ctx { nodes: &nodes, touch, diff, force_writable };
+    // Every account leaf reachable from the parent state root (incl. via
+    // inline/alternate paths). Keyed by keccak(addr). The reconstruction
+    // of a witness-gap subtree draws its leaves (and storage roots) from
+    // here rather than from the missing intermediate node.
+    let mut state_leaf_vec: Vec<([u8; 32], Vec<u8>)> = Vec::new();
+    crate::enrich::collect_leaves(&nodes, &parent_state_root.0, &mut Vec::new(), &mut state_leaf_vec)?;
+    let state_leaves: HashMap<[u8; 32], Vec<u8>> = state_leaf_vec.into_iter().collect();
+
+    let ctx = Ctx { nodes: &nodes, touch, diff, force_writable, state_leaves: &state_leaves };
     let _ = force_writable_addrs; // already consumed when building state_targets
 
     let mut out = Vec::new();
@@ -145,6 +155,11 @@ struct Ctx<'a> {
     /// trace — Pectra system-contract ring buffers etc. Mirrors
     /// `write_storages`' `force_writable`.
     force_writable: &'a BTreeSet<(Address, B256)>,
+    /// Every account leaf collect_leaves reached from the parent state
+    /// root: `keccak(addr)` → account-leaf value RLP. Used to reconstruct
+    /// a state subtree (and look up an account's storage root) when reth's
+    /// witness is missing the subtree's intermediate node.
+    state_leaves: &'a HashMap<[u8; 32], Vec<u8>>,
 }
 
 #[derive(Clone, Copy)]
@@ -204,6 +219,13 @@ fn emit_empty(out: &mut Vec<u8>) {
     put_op(out, Op::Empty);
 }
 
+/// Emit `Op::Hash`: a 32 B subtree hash, no payload beyond it. An
+/// `Op::Hash` stands in for an UNTOUCHED subtree (no Accounts/Storages
+/// table rows under it), so it skips no leaves and the guest leaves its
+/// per-pass leaf counter unchanged. If the witness were missing a node
+/// over read-only table rows, emitting Op::Hash here would leave those
+/// rows without an `Op::Leaf`, and the guest's strict `count == size()`
+/// check rejects the block.
 fn emit_hash(out: &mut Vec<u8>, hash: &[u8; 32]) {
     put_op(out, Op::Hash);
     out.extend_from_slice(hash);
@@ -293,7 +315,7 @@ fn walk_untouched(out: &mut Vec<u8>, ctx: &Ctx, child: SubtreeChild<'_>) -> Resu
 ///
 /// After the witness-driven enrichment pass, leaves reachable in the
 /// witness with a preimage in `witness.keys` are targets → the walker
-/// descends through them via `walk()` and emits `Op::Leaf <idx>`. So
+/// descends through them via `walk()` and emits `Op::Leaf`. So
 /// the "0 targets" case here means either:
 ///   * A leaf whose preimage is missing → emit `Op::PhantomLeaf` so
 ///     `reduce_branch` can merge prefix nibbles into the leaf path
@@ -417,8 +439,17 @@ fn walk(
                     // contents to update it; fatal with a hint.
                     let any_write = targets.iter().any(|t| t.is_write);
                     if !any_write {
-                        emit_hash(out, &h);
-                        return Ok(false);
+                        // Witness gap over read-only rows: the subtree's
+                        // intermediate node is absent, but collect_leaves
+                        // reached every leaf under it. Rebuild the subtree
+                        // from those leaves (Op::Leaf for accessed rows,
+                        // Op::PhantomLeaf for untouched siblings) so every
+                        // accessed row gets its leaf and the guest's strict
+                        // count check passes. The guest's old_root == anchor
+                        // check verifies correctness (and rejects the block
+                        // if a leaf was genuinely unreachable).
+                        let _ = &h;
+                        return reconstruct_missing(out, ctx, walked, targets, kind, owner);
                     }
                     bail!(
                         "state_root: witness missing node 0x{} at depth {} \
@@ -458,8 +489,11 @@ fn emit_terminal_leaf(
     owner: Option<usize>,
 ) -> Result<bool> {
     let _ = _walked;
+    // Op::Leaf carries no index: the table is sorted in trie-walk order,
+    // so the cpp-guest derives the Accounts/Storages index from a running
+    // per-pass counter. `t.leaf_idx` is still used below to fetch this
+    // account's address for the storage subtree.
     put_op(out, Op::Leaf);
-    put_u64(out, t.leaf_idx as u64);
 
     if kind == TreeKind::State {
         // storage_root: extracted from the MPT leaf's value if we
@@ -534,6 +568,200 @@ fn synthesize(
         out.extend_from_slice(buf);
     }
     Ok(any_write)
+}
+
+// ===== witness-gap subtree reconstruction ====================================
+//
+// When reth's witness is missing the intermediate node of a (read-only)
+// subtree, we cannot follow it node-by-node. But `collect_leaves` already
+// reached every leaf under it (via inline / alternate representations), so
+// we rebuild the subtree directly from that complete leaf set: an accessed
+// row becomes `Op::Leaf` (with the correct storage root taken from its
+// collected account RLP), an untouched sibling becomes `Op::PhantomLeaf`.
+// The whole subtree is read-only, so it is emitted as nested `NodeR`s; the
+// guest's `reduce_branch` folds the synthetic branches into the canonical
+// structure and its `old_root == anchor` check verifies the result.
+
+/// True iff `hash`'s leading nibbles equal `nibs`.
+fn hash_has_prefix(hash: &[u8; 32], nibs: &[u8]) -> bool {
+    nibs.iter()
+        .enumerate()
+        .all(|(i, n)| nibble_at(hash, i) == *n)
+}
+
+/// One leaf in a reconstructed subtree. `target` is `Some` for an accessed
+/// Accounts/Storages row (→ `Op::Leaf`), `None` for an untouched sibling
+/// (→ `Op::PhantomLeaf`, carrying `value`).
+#[derive(Clone)]
+struct ReconLeaf {
+    path_hash: [u8; 32],
+    value:     Vec<u8>, // leaf value RLP; empty for an absent (empty) target
+    target:    Option<Target>,
+}
+
+/// Reconstruct a witness-gap subtree at `walked` from the leaves we hold.
+fn reconstruct_missing(
+    out: &mut Vec<u8>,
+    ctx: &Ctx,
+    walked: &[u8],
+    targets: &[Target],
+    kind: TreeKind,
+    owner: Option<usize>,
+) -> Result<bool> {
+    // Gather every leaf collect_leaves reached under this prefix.
+    let gathered: Vec<([u8; 32], Vec<u8>)> = match kind {
+        TreeKind::State => ctx
+            .state_leaves
+            .iter()
+            .filter(|(h, _)| hash_has_prefix(h, walked))
+            .map(|(h, v)| (*h, v.clone()))
+            .collect(),
+        TreeKind::Storage => {
+            let oidx = owner.context("reconstruct: storage subtree without owner")?;
+            let addr = ctx.touch.addrs[oidx];
+            let acct = ctx
+                .state_leaves
+                .get(&keccak256(addr.as_slice()))
+                .context("reconstruct: owning account leaf not in witness")?;
+            let sroot = mpt::account_storage_root(acct)
+                .context("reconstruct: owning account RLP")?;
+            let mut leaves: Vec<([u8; 32], Vec<u8>)> = Vec::new();
+            crate::enrich::collect_leaves(ctx.nodes, &sroot, &mut Vec::new(), &mut leaves)?;
+            leaves
+                .into_iter()
+                .filter(|(h, _)| hash_has_prefix(h, walked))
+                .collect()
+        }
+    };
+
+    let target_by_hash: HashMap<[u8; 32], Target> =
+        targets.iter().map(|t| (t.key_hash, t.clone())).collect();
+    let mut seen: HashSet<[u8; 32]> = HashSet::new();
+    let mut items: Vec<ReconLeaf> = Vec::new();
+    for (h, v) in gathered {
+        seen.insert(h);
+        let target = target_by_hash.get(&h).cloned();
+        items.push(ReconLeaf { path_hash: h, value: v, target });
+    }
+    // Read-only targets that don't exist in the parent trie (empty rows)
+    // aren't in `gathered`; they still need an Op::Leaf (→ EmptyR) so the
+    // guest's per-row count is satisfied.
+    for t in targets {
+        if seen.insert(t.key_hash) {
+            items.push(ReconLeaf {
+                path_hash: t.key_hash,
+                value: Vec::new(),
+                target: Some(t.clone()),
+            });
+        }
+    }
+
+    if items.is_empty() {
+        emit_empty(out);
+        return Ok(false);
+    }
+    reconstruct_subtree(out, ctx, walked, &items, kind)?;
+    Ok(false)
+}
+
+/// Recursively emit the subtree containing `items` (≥ 1) as nested NodeRs.
+fn reconstruct_subtree(
+    out: &mut Vec<u8>,
+    ctx: &Ctx,
+    walked: &[u8],
+    items: &[ReconLeaf],
+    kind: TreeKind,
+) -> Result<()> {
+    if items.len() == 1 {
+        return emit_recon_leaf(out, ctx, walked, &items[0], kind);
+    }
+    let mut buckets: Vec<Vec<ReconLeaf>> = (0..16).map(|_| Vec::new()).collect();
+    for it in items {
+        buckets[nibble_at(&it.path_hash, walked.len()) as usize].push(it.clone());
+    }
+    let mut child_bufs: Vec<Vec<u8>> = (0..16).map(|_| Vec::new()).collect();
+    let mut walked_child = walked.to_vec();
+    walked_child.push(0);
+    for k in 0..16 {
+        *walked_child.last_mut().unwrap() = k as u8;
+        if buckets[k].is_empty() {
+            emit_empty(&mut child_bufs[k]);
+        } else {
+            reconstruct_subtree(&mut child_bufs[k], ctx, &walked_child, &buckets[k], kind)?;
+        }
+    }
+    // Read-only subtree → NodeR (every reconstructed leaf is read-only).
+    put_op(out, Op::NodeR);
+    for buf in &child_bufs {
+        out.extend_from_slice(buf);
+    }
+    Ok(())
+}
+
+/// Emit a single reconstructed leaf at `walked`.
+fn emit_recon_leaf(
+    out: &mut Vec<u8>,
+    ctx: &Ctx,
+    walked: &[u8],
+    it: &ReconLeaf,
+    kind: TreeKind,
+) -> Result<()> {
+    match &it.target {
+        Some(t) => {
+            // Accessed row → Op::Leaf (the guest fetches the value from
+            // Accounts/Storages). For a state leaf, emit the nested storage
+            // subtree using the storage root from the collected account RLP.
+            put_op(out, Op::Leaf);
+            if kind == TreeKind::State {
+                let storage_root = if it.value.is_empty() {
+                    EMPTY_TRIE_ROOT
+                } else {
+                    mpt::account_storage_root(&it.value)
+                        .context("reconstruct: account leaf RLP")?
+                };
+                let addr = ctx.touch.addrs[t.leaf_idx];
+                let mut storage_targets: Vec<Target> = ctx
+                    .touch
+                    .slots_for(&addr)
+                    .into_iter()
+                    .map(|(slot, idx)| Target {
+                        key_hash: keccak256(slot.as_slice()),
+                        leaf_idx: idx,
+                        is_write: is_storage_write(&addr, &slot, ctx.diff)
+                            || ctx.force_writable.contains(&(addr, slot)),
+                    })
+                    .collect();
+                storage_targets.sort_by_key(|t| t.key_hash);
+                walk(
+                    out,
+                    ctx,
+                    &[],
+                    &storage_targets,
+                    SubtreeChild::HashRef(storage_root),
+                    TreeKind::Storage,
+                    Some(t.leaf_idx),
+                )?;
+            }
+            Ok(())
+        }
+        None => {
+            // Untouched sibling → Op::PhantomLeaf with its remaining path
+            // nibbles + raw value bytes.
+            let nibs: Vec<u8> = (walked.len()..64).map(|i| nibble_at(&it.path_hash, i)).collect();
+            put_op(out, Op::PhantomLeaf);
+            put_u64(out, nibs.len() as u64);
+            for n in &nibs {
+                put_u64(out, *n as u64);
+            }
+            put_u64(out, it.value.len() as u64);
+            out.extend_from_slice(&it.value);
+            let pad = (8 - (it.value.len() % 8)) % 8;
+            for _ in 0..pad {
+                out.push(0);
+            }
+            Ok(())
+        }
+    }
 }
 
 fn walk_branch(
@@ -769,10 +997,10 @@ fn emit_continuation(
             return Ok(false);
         }
         if targets.len() == 1 && remaining.is_empty() {
-            // The leaf IS our target. Emit Op::Leaf directly.
+            // The leaf IS our target. Emit Op::Leaf directly (no index:
+            // derived from the cpp-guest's per-pass counter).
             let t = &targets[0];
             put_op(out, Op::Leaf);
-            put_u64(out, t.leaf_idx as u64);
             if kind == TreeKind::State {
                 let addr = ctx.touch.addrs[t.leaf_idx];
                 let storage_root = mpt::account_storage_root(items[1].as_bytes()?)

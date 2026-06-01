@@ -122,6 +122,13 @@ public:
 
     uint64_t size() const noexcept { return originals_.size(); }
 
+    // All storage indices belonging to `addr`, in table order. Built once
+    // at construction. Used by SELFDESTRUCT (EIP-6780 full-destroy) to
+    // zero every slot of a same-tx-created account without scanning or
+    // assuming any particular table sort order. Returns a reference to an
+    // empty vector when the address owns no slots.
+    const std::vector<size_t>& slots_of(const evmc::address& addr) const noexcept;
+
 private:
     // Zero-copy view into one 96-byte record. Wire layout:
     //   offset  size  field
@@ -201,9 +208,28 @@ private:
         }
     };
 
+    // Address-only hash/eq for the per-account slot-index map. Addresses
+    // are high-entropy, so the first 8 bytes make a good hash (same
+    // rationale as Accounts::AddressHash).
+    struct AddressHash {
+        size_t operator()(const evmc::address& a) const noexcept {
+            uint64_t v;
+            std::memcpy(&v, a.bytes, sizeof(v));
+            return static_cast<size_t>(v);
+        }
+    };
+    struct AddressEq {
+        bool operator()(const evmc::address& x, const evmc::address& y) const noexcept {
+            return std::memcmp(x.bytes, y.bytes, sizeof(x.bytes)) == 0;
+        }
+    };
+
     std::vector<View> originals_;
     std::vector<Mods> mods_;
     std::unordered_map<Key, size_t, KeyHash, KeyEq> index_;
+    // address -> its storage indices (see slots_of).
+    std::unordered_map<evmc::address, std::vector<size_t>, AddressHash, AddressEq>
+        addr_slots_;
 };
 
 } // namespace zeg

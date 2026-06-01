@@ -50,12 +50,13 @@ sized to a multiple of 8, so the next section starts 8-byte aligned.
 
 ## Section 0 — Magic prefix (8 bytes)
 
-| Offset | Size | Field   | Description |
-|-------:|-----:|---------|-------------|
-|      0 |    4 | `magic` | ASCII `"ZEG0"` (`0x3047455A` little-endian, see [`binary_format.hpp`](cpp-guest/include/zeg/binary_format.hpp)) |
-|      4 |    4 | `pad`   | Zero-fill to keep the cursor 8-byte aligned for everything that follows |
+| Offset | Size | Field     | Description |
+|-------:|-----:|-----------|-------------|
+|      0 |    4 | `magic`   | ASCII `"ZEG0"` (`0x3047455A` little-endian, see [`binary_format.hpp`](cpp-guest/include/zeg/binary_format.hpp)) |
+|      4 |    4 | `version` | `u32` little-endian format version (`kVersion`, currently `1`). Also keeps the cursor 8-byte aligned for everything that follows |
 
-The guest fatals on magic mismatch.
+The guest fatals on magic mismatch or on a `version` other than `kVersion`.
+Version `1` dropped the per-leaf index from Section 7 (see below).
 
 ## Section 1 — `ConsensusInfo`
 
@@ -269,16 +270,41 @@ opcode-specific payload:
 | Opcode (u64) | Name            | Payload |
 |-------------:|-----------------|---------|
 |            0 | `Empty`         | — (zero payload) |
-|            1 | `Hash`          | 32 B `bytes32` (a subtree's already-known root hash) |
+|            1 | `Hash`          | 32 B `bytes32` (a subtree's already-known root hash). Stands in for an UNTOUCHED subtree only — one with no Accounts/Storages table rows under it — so it skips no leaves and leaves the guest's leaf counters unchanged. |
 |            2 | `ExtensionHash` | `u64 nibbles_count` + `nibbles_count` × `u64` (one nibble per `u64`, low 4 bits used) + 32 B `bytes32` |
-|            3 | `Leaf`          | `u64 idx` into Accounts (state trie) or Storages (storage trie); leaves walked under a state-trie `NodeRW` may contain a nested storage subtree via a recursive `walk_node` call |
+|            3 | `Leaf`          | — (no payload). The Accounts/Storages tables are sorted in trie-walk order (by `keccak256(address)` and `(keccak256(address), keccak256(slot))`), so the guest assigns each leaf the next index from a running per-type counter rather than reading it. Leaves walked under a state-trie `NodeRW` may contain a nested storage subtree via a recursive `walk_node` call |
 |            4 | `NodeRW`        | 16 sub-trees (one per branch nibble), each itself a recursive node |
 |            5 | `NodeR`         | Same shape as `NodeRW` but marks the subtree read-only — every contained leaf must reference an `is_read_only == true` entry in `Accounts` / `Storages`. The result of a `NodeR` subtree is cached during the old-root pass and reused unchanged in the new-root pass. |
 
 The walk consumes exactly as many bytes as the trie requires; the
 guest does not pre-declare a total stream size — the trailing byte of
-the last `Hash` / `Leaf` payload is also the last byte of the file
-(modulo final alignment pad).
+the last payload is also the last byte of the file (modulo final
+alignment pad).
+
+Because `Leaf` carries no index, the guest derives it from running state
+and storage counters. The two passes differ:
+
+* **Pre-execution (old-root) pass** — walks every node against the
+  block-start values. Each `Leaf` takes the next counter value, and the
+  guest checks that the indexed Accounts/Storages key's hash matches the
+  walked path (`Leaf`s are thus accessed consecutively, keys must match).
+  Every leaf under a `NodeR` must reference a read-only row. At the end,
+  each counter must equal its table length exactly — so every row appears
+  as exactly one leaf, none repeated or missing. An `Op::Hash` stands in
+  only for untouched (0-row) subtrees; if reth's witness is missing a node
+  over read-only rows, those rows have no leaf and this check rejects the
+  block (a complete witness is required — strict).
+* **Post-execution (new-root) pass** — re-walks against the post-block
+  values to recompute the root, skipping the key and count checks. Before
+  it runs, the guest verifies every read-only Accounts/Storages row is
+  unchanged.
+
+To avoid re-walking unchanged read-only regions, the old-root pass caches
+each `NodeR` found directly under a `NodeRW`: it records the node's walk
+result, the cursor advance, and the state/storage leaf indices reached
+**after** the subtree. The new-root pass replays the cache — advancing the
+cursor and **setting** the leaf counters to those recorded indices —
+instead of walking the subtree again.
 
 ## Encoding conventions cheat-sheet
 

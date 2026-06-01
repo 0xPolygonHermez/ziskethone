@@ -287,13 +287,18 @@ pub fn inject_tx_addresses(prestate: &mut Prestate, current: &alloy::rpc::types:
             if let Some(to) = tx_to(&tx.inner) {
                 prestate.entry(to).or_insert_with(|| { added += 1; AccountPrestate::default() });
             }
-            // EIP-2930 access list addrs + slots.
-            for (addr, slots) in tx_access_list(&tx.inner) {
-                let entry = prestate.entry(addr).or_insert_with(|| { added += 1; AccountPrestate::default() });
-                for slot in slots {
-                    entry.storage.entry(slot).or_insert(B256::ZERO);
-                }
-            }
+            // NOTE: EIP-2930 access-list addrs/slots are deliberately NOT
+            // injected. The access list only *declares* state a tx may
+            // touch (pre-paying the warm cost); the tx may never actually
+            // access it, so reth's witness omits the unaccessed entries.
+            // Injecting them unconditionally put accounts/slots into the
+            // prestate that aren't in the witness tree — their pre-block
+            // subtree is collapsed to a hash, so the state-root walk can't
+            // reach them. The genuinely-accessed access-list entries are
+            // already captured by the prestate tracer + witness; if reth
+            // didn't need an entry, neither do we. (Injecting them also
+            // seeded slots with 0, which `enrich_storage` then skipped as
+            // "already present", masking real non-zero values.)
             // EIP-7702 authorization signers.
             if let TxEnvelope::Eip7702(signed) = &tx.inner {
                 for auth in &signed.tx().authorization_list {
@@ -319,17 +324,6 @@ pub fn inject_tx_addresses(prestate: &mut Prestate, current: &alloy::rpc::types:
 fn tx_to(env: &alloy::consensus::TxEnvelope) -> Option<Address> {
     use alloy::consensus::Transaction as _;
     env.to()
-}
-
-fn tx_access_list(env: &alloy::consensus::TxEnvelope) -> Vec<(Address, Vec<B256>)> {
-    use alloy::consensus::Transaction as _;
-    match env.access_list() {
-        Some(al) => al
-            .iter()
-            .map(|item| (item.address, item.storage_keys.clone()))
-            .collect(),
-        None => Vec::new(),
-    }
 }
 
 pub async fn enrich_prestate_from_witness(
@@ -547,7 +541,7 @@ pub fn enrich_storage_slots_from_witness(
 /// (full_path_hash, raw_value_bytes). `path_nibs` carries the nibbles
 /// walked from the root so far; on each leaf we reconstruct the full
 /// 32-byte path = pack(path_nibs + leaf_hp_nibs).
-fn collect_leaves(
+pub(crate) fn collect_leaves(
     nodes: &HashMap<[u8; 32], Vec<u8>>,
     root_hash: &[u8; 32],
     path_nibs: &mut Vec<u8>,

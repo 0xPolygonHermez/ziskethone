@@ -17,11 +17,18 @@ use crate::rpc::{Prestate, PrestateDiff};
 use crate::touchset::TouchSet;
 use crate::writer::Writer;
 
-/// File magic prefix (8 bytes): 4 B ASCII `"ZEG0"` + 4 B zero pad to
-/// keep the cursor 8-byte aligned for the sections that follow.
+/// On-wire format version, written in the 4 bytes after the magic.
+/// Must match the guest's `kVersion` in `cpp-guest/include/zeg/binary_format.hpp`.
+/// v1: StateRoot `Op::Leaf` carries no index (keccak-sorted tables +
+/// counter-derived index in the guest).
+pub const FORMAT_VERSION: u32 = 1;
+
+/// File magic prefix (8 bytes): 4 B ASCII `"ZEG0"` + 4 B little-endian
+/// format version, which also keeps the cursor 8-byte aligned for the
+/// sections that follow.
 pub fn write_magic(w: &mut Writer) {
     w.bytes(b"ZEG0");
-    w.pad(4);
+    w.u32_le(FORMAT_VERSION);
     w.assert_aligned();
 }
 

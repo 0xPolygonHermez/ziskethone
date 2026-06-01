@@ -147,6 +147,22 @@ async fn fetch_offline_sources_online(
         "anchored block hash",
     );
 
+    // ---- Fetch the execution witness FIRST, before any other heavy RPC.
+    //      `debug_executionWitness` reads the block's trie state, which a
+    //      non-archive node prunes within a few blocks of head. Issuing it
+    //      immediately — rather than after the 256-block ancestor walk and
+    //      the prestate tracers — captures a COMPLETE witness while the
+    //      node still has the data; otherwise it comes back missing
+    //      intermediate nodes and the cpp-guest's strict state-root
+    //      reconstruction rejects the block.
+    let witness = client.execution_witness_by_hash(block_hash).await?;
+    info!(
+        state_nodes = witness.state.len(),
+        codes = witness.codes.len(),
+        keys = witness.keys.len(),
+        "fetched execution witness",
+    );
+
     // Resolve whether this block runs under Osaka. Osaka shares Prague's
     // header layout, so the only signal is the node's fork schedule
     // (eth_config) vs. the block timestamp. Best-effort: a node without
@@ -223,21 +239,16 @@ async fn fetch_offline_sources_online(
     //     leaves the prestate tracer omits (notably: untouched-
     //     sibling leaves that the cpp-guest's state-root walker
     //     needs to reposition during structural splits).
-    let (mut prestate, diff, witness) = tokio::try_join!(
+    // (the execution witness was already fetched above, before the
+    // ancestor walk, to beat the node's witness pruning window.)
+    let (mut prestate, diff) = tokio::try_join!(
         client.prestate_by_hash(block_hash),
         client.prestate_diff_by_hash(block_hash),
-        client.execution_witness_by_hash(block_hash),
     )?;
     info!(
         accounts = prestate.len(),
         storage_slots = prestate.values().map(|p| p.storage.len()).sum::<usize>(),
         "fetched prestate"
-    );
-    info!(
-        state_nodes = witness.state.len(),
-        codes = witness.codes.len(),
-        keys = witness.keys.len(),
-        "fetched execution witness",
     );
 
     // Inject tx-derived addresses (tx.from, tx.to, EIP-2930 access

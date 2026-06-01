@@ -149,16 +149,10 @@ int main(int argc, char** argv) {
         zeg::fatal("pre-execution state root mismatch");
     }
 
-    // 6'. Read-only witness invariant: every account and storage slot
-    //     the input stream marked read-only must be unchanged after
-    //     execution. The new-state-root walk skips re-hashing read-only
-    //     subtrees by reusing the cached pre-execution nodes — if the
-    //     EVM did write through to one of those rows, the new root
-    //     would silently embed the old value and diverge from the
-    //     correct post-state. Fatal here pins the failure to the
-    //     mutation that caused it rather than to a downstream mismatch.
-    accounts.check_read_only_unchanged();
-    storages.check_read_only_unchanged();
+    // (The read-only-unchanged invariant — every is_read_only account /
+    //  slot must hold its block-start value — is enforced inside
+    //  StateRoot::calculate_new_state_root, just before it reuses the
+    //  cached read-only subtrees.)
 
     // DEBUG: full dump of post-execution state for Python MPT reference.
     if (std::getenv("ZEG_DUMP_ALL") != nullptr) {
@@ -345,8 +339,17 @@ const uint8_t* read_input_stream(const char* path) {
         zeg::fatal("read_input_stream: bad magic (expected ZEG0)");
     }
 
-    // Skip the magic + its 4 B zero padding so the returned cursor
-    // is 8-byte aligned.
+    // The 4 bytes after the magic are the format version. Reject any
+    // mismatch — a v0 input (StateRoot Op::Leaf carried an index) would
+    // misparse the trie stream under the v1 counter-derived-index walk.
+    uint32_t version;
+    std::memcpy(&version, base + 4, sizeof(version));
+    if (version != zeg::kVersion) {
+        zeg::fatal("read_input_stream: unsupported format version");
+    }
+
+    // Skip the magic + version word so the returned cursor is 8-byte
+    // aligned.
     return base + 8;
 }
 
