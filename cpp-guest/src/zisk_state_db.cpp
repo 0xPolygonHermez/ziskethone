@@ -911,7 +911,13 @@ void ZiskStateDB::pre_execute_block() noexcept {
     // predeploy. The contract's storage maps timestamp →
     // parent_beacon_block_root in an 8191-slot ring buffer so the
     // CL/EL can prove past beacon roots.
-    {
+    //
+    // EIP-4788 activates in Cancun. Skip for pre-Cancun blocks
+    // (Berlin/London/Paris/Shanghai) — the predeploy isn't installed
+    // before Cancun, and an unconditional system_call would fatal at
+    // accounts_.index_of for the predeploy address. Hit by every
+    // Berlin-pinned EEST Osaka EIP-7883 modexp backward-compat test.
+    if (is_cancun_or_later()) {
         const auto& root = consensus_.parent_beacon_block_root();
         (void)system_call(kBeaconRootsAddress,
                           std::span<const uint8_t>{root.bytes, 32});
@@ -1227,7 +1233,7 @@ int64_t ZiskStateDB::apply_pre_evm_accounting(const Transactions::View& tx,
     // (gas_limit × eff_gas_price + blob_gas × blob_base_fee). The
     // blob portion is burned. These changes are kept even if the EVM
     // frame reverts, matching mainnet semantics.
-    const int64_t intrinsic_gas = compute_intrinsic_gas(tx);
+    const int64_t intrinsic_gas = compute_intrinsic_gas(tx, is_shanghai_or_later());
     if (static_cast<int64_t>(tx.gas_limit()) < intrinsic_gas) {
         fatal("tx gas_limit below intrinsic gas");
     }
@@ -1622,6 +1628,32 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
     msg.code_address = *tx.to();
     msg.input_data   = tx.data().data();
     msg.input_size   = tx.data().size();
+
+    // Top-level CALL dispatch: if `tx.to` is a precompile address,
+    // invoke the precompile directly instead of running its (empty)
+    // EVM code through evmone. The nested-CALL path in `call()`
+    // already does this, but for a top-level tx whose `to` is e.g.
+    // 0x05 (MODEXP), evmone would execute the empty code and return
+    // success with full gas — silently bypassing the precompile's
+    // gas charge and output. Fixture
+    // test_modexp_used_in_transaction_entry_points exercises this:
+    // a tx with to=0x05 and ABI-encoded MODEXP calldata expects the
+    // EIP-2565 minimum gas (200) plus tx intrinsic; without this
+    // dispatch only intrinsic is charged, breaking the post-state.
+    //
+    // Check BEFORE the EIP-7702 delegation handling: if the call
+    // target is a delegated EOA whose delegate happens to be a
+    // precompile address, per EIP-7702 the call follows delegation
+    // semantics (no-op against the precompile, runs nothing), NOT
+    // precompile-dispatch semantics. Fixture
+    // test_call_to_precompile_in_pointer_context exercises this.
+    if (evmone::state::is_precompile(active_revision(), msg.code_address)) {
+        if (intx::be::load<intx::uint256>(msg.value) != 0) {
+            transfer_value(msg.sender, msg.recipient, msg.value);
+        }
+        return evmone::state::call_precompile(active_revision(), msg);
+    }
+
     auto entry_code = this->code(msg.recipient);
 
     // EIP-7702 top-level delegation: if the recipient is a delegated
@@ -1670,7 +1702,13 @@ uint64_t ZiskStateDB::settle_tx_gas(const Transactions::View& tx,
     // + non_zero_bytes * 4; floor = 21000 + tokens * 10. The tx must
     // be charged at least the floor — this kicks in for txs with
     // large calldata but low execution (e.g. early-reverting calls).
-    {
+    // Gated on Prague+: pre-Prague EEST fixtures (Berlin / London /
+    // Paris / Shanghai / Cancun) have no floor, and applying it would
+    // over-charge low-execution txs (e.g. test_modexp_used_in_
+    // transaction_entry_points which calls MODEXP directly with the
+    // EIP-2565 minimum 200 gas; the floor would inflate the tx to
+    // 25350 gas vs the canonical 22940).
+    if (is_prague_or_later()) {
         int64_t tokens = 0;
         for (uint8_t b : tx.data()) {
             tokens += (b == 0) ? 1 : 4;
@@ -1742,6 +1780,7 @@ void ZiskStateDB::finalize_receipt(const evmc::Result& result,
 }
 
 void ZiskStateDB::post_execute_block() noexcept {
+    credit_block_reward();                // pre-Merge PoW reward
     credit_withdrawals();                 // EIP-4895 (Shanghai+)
     // EIP-6110/7002/7251 all activate in Prague. Skip them for pre-
     // Prague blocks (mixed-fork EEST fixtures); their system contracts
@@ -1756,6 +1795,38 @@ void ZiskStateDB::post_execute_block() noexcept {
         collect_withdrawal_requests();        // EIP-7002
         collect_consolidation_requests();     // EIP-7251
     }
+}
+
+void ZiskStateDB::credit_block_reward() noexcept {
+    // Pre-Merge protocol-level block reward credited to coinbase at
+    // end-of-block. Post-Merge (Paris+) this is zero — there is no
+    // PoW subsidy; the only block-level credits are withdrawals
+    // (EIP-4895). We detect "post-Merge" via difficulty == 0, which
+    // is true for Paris/Shanghai/Cancun/Prague/Osaka (PoS headers
+    // pin difficulty to 0).
+    //
+    // For the forks the EEST corpus exercises (Berlin, London — both
+    // post-Constantinople), the reward is a flat 2 ETH. Earlier
+    // forks (3 / 5 ETH) aren't represented in our test set, so we
+    // don't carry a per-fork table here; if a Frontier/Homestead/etc.
+    // fixture surfaces, this needs the proper table.
+    //
+    // Ommers (uncle rewards) are not credited — EEST fixtures pin
+    // sha3Uncles to kEmptyOmmersHash, so the ommer list is empty.
+    const auto& diff = consensus_.difficulty();
+    bool is_pow = false;
+    for (uint8_t b : diff.bytes) {
+        if (b != 0) { is_pow = true; break; }
+    }
+    if (!is_pow) return;
+
+    const auto reward_u = intx::uint256{2} * intx::uint256{1'000'000'000'000'000'000ULL};
+    const size_t coinbase_idx = accounts_.index_of(consensus_.beneficiary());
+    const auto bal_u =
+        intx::be::load<intx::uint256>(accounts_.balance_at(coinbase_idx));
+    accounts_.set_balance_at(coinbase_idx,
+        intx::be::store<evmc::uint256be>(bal_u + reward_u),
+        tx_counter_);
 }
 
 // ----- per-block post-execution phases ---------------------------------------

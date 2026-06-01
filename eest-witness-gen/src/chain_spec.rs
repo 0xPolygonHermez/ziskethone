@@ -22,37 +22,47 @@ use reth_chainspec::{ChainSpec, ChainSpecBuilder, MAINNET};
 /// activates; on the basal fork side, all earlier forks are active
 /// from genesis.
 pub fn from_network(network: &str) -> Result<Arc<ChainSpec>> {
-    // Mainnet baseline gives us all the genesis config + pre-Pectra
-    // hardfork schedule. We then override the Pectra+ activation
-    // timestamps based on the fork name.
-    let base = ChainSpecBuilder::default()
-        .chain(MAINNET.chain)
-        .genesis(MAINNET.genesis.clone())
-        .paris_activated();
+    // Mainnet baseline gives us the genesis config + chain id. Each
+    // arm activates the requested fork (which also activates all
+    // earlier ones), so block 0 of a `Berlin`-pinned fixture sees
+    // exactly Berlin rules — not a later fork's gas schedule.
+    let new_base = || {
+        ChainSpecBuilder::default()
+            .chain(MAINNET.chain)
+            .genesis(MAINNET.genesis.clone())
+    };
 
     let spec = match network {
-        "Cancun" => base.cancun_activated(),
-        "Prague" => base.prague_activated(),
-        "Osaka" => base.osaka_activated(),
+        // Pre-Paris forks (EEST Osaka EIP-7883 modexp-gas backward-
+        // compat tests pin to these).
+        "Berlin"   => new_base().berlin_activated(),
+        "London"   => new_base().london_activated(),
+        "Paris"    => new_base().paris_activated(),
+        "Shanghai" => new_base().shanghai_activated(),
+        // Pectra+ forks (the original Prague target set).
+        "Cancun"   => new_base().cancun_activated(),
+        "Prague"   => new_base().prague_activated(),
+        "Osaka"    => new_base().osaka_activated(),
         // Transition spec: "<FromFork>To<ToFork>AtTime<n>". The
         // pre-fork blocks must execute under the source fork; if we
         // activate the destination from genesis, block 0 picks up
-        // Prague semantics (e.g. EIP-2935 system call) that the
-        // fixture's header.state_root was generated WITHOUT, and
+        // post-transition semantics (e.g. EIP-2935 system call) that
+        // the fixture's header.state_root was generated WITHOUT, and
         // every downstream proof / hash mismatches. Parse the
         // trailing AtTime<n> timestamp and feed `with_prague_at` /
         // `with_osaka_at`.
         s if s.contains("ToPragueAt") => {
             let ts = parse_transition_timestamp(s, "ToPragueAtTime")?;
-            base.cancun_activated().with_prague_at(ts)
+            new_base().cancun_activated().with_prague_at(ts)
         }
         s if s.contains("ToOsakaAt") => {
             let ts = parse_transition_timestamp(s, "ToOsakaAtTime")?;
-            base.prague_activated().with_osaka_at(ts)
+            new_base().prague_activated().with_osaka_at(ts)
         }
         other => bail!(
-            "unsupported EEST network '{}'; only Cancun/Prague/Osaka \
-             (and ToPragueAt/ToOsakaAt transitions) wired up",
+            "unsupported EEST network '{}'; only Berlin/London/Paris/\
+             Shanghai/Cancun/Prague/Osaka (and ToPragueAt/ToOsakaAt \
+             transitions) wired up",
             other
         ),
     };

@@ -85,6 +85,15 @@ pub fn write_consensus_info(w: &mut Writer, current: &Block, parent: &Block) {
     // block header; cpp-guest cross-checks its recomputed value against
     // this and fatals on mismatch (EIP-7685 validity).
     w.bytes(h.requests_hash.unwrap_or_default().as_slice());
+    // 264..296 difficulty (uint256be) — pre-Merge PoW difficulty.
+    //          post-Merge always 0, but EEST pre-Paris fixtures
+    //          (Berlin/London modexp tests) pin real values.
+    w.bytes(&h.difficulty.to_be_bytes::<32>());
+    // 296..304 nonce (8 B) — pre-Merge PoW nonce; post-Merge always 0.
+    w.bytes(h.nonce.as_slice());
+    // 304..336 ommers_hash (bytes32) — kEmptyOmmersHash post-Merge,
+    //          but pre-Merge headers can have non-empty ommers.
+    w.bytes(h.ommers_hash.as_slice());
     w.assert_aligned();
 
     // Withdrawal records × 48 B each (EIP-4895).
