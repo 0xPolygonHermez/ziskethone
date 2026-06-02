@@ -47,18 +47,17 @@ enum class TreeKind : uint8_t { State, Storage };
 
 // Stream-encoded node opcodes (u64 each, 8-byte aligned).
 //
-// `NodeRW` and `NodeR` are two flavours of branch node:
-//   * `NodeRW` — a normal read/write branch.
-//   * `NodeR`  — a read-only branch. Every leaf in this subtree must
-//     have `is_read_only == true`, and every nested branch opcode must
-//     also be `NodeR` (checked only during the old-root pass).
+// `Branch` is the single 16-ary branch node. There is no static read-only
+// vs read-write distinction any more: the new-root pass derives read-only
+// dynamically (a leaf is read-only iff its original == current value; a
+// node is read-only iff all its children are), and reuses the cached
+// old-root result for read-only subtrees instead of re-hashing them.
 enum class Op : uint64_t {
     Empty         = 0,
     Hash          = 1,
     ExtensionHash = 2,
     Leaf          = 3,
-    NodeRW        = 4,
-    NodeR         = 5,
+    Branch        = 4,
     /// Fallback: carries a sibling leaf inline when Reth omits its
     /// keccak preimage from `witness.keys` so it never became a target
     /// in the sorted Accounts/Storages table. Payload: u64 path_nib_count
@@ -66,7 +65,7 @@ enum class Op : uint64_t {
     /// (pad to 8). The common path (preimage present → enriched into
     /// prestate) goes through bare `Op::Leaf` instead, its table index
     /// derived from the walk counter.
-    PhantomLeaf   = 6,
+    PhantomLeaf   = 5,
 };
 
 // Helper: construct a NodeR holding alternative `T`. We default-construct
@@ -609,62 +608,16 @@ NodeR walk_node(
             return mk_node<PhantomLeafR>(std::move(path), std::move(value));
         }
 
-        case Op::NodeR: {
-            // NodeR is only a cache *point* when it's the child of a
-            // NodeRW (handled in the NodeRW arm). Reaching this arm
-            // means we're either inside a NodeR already or the trie
-            // root itself is NodeR — either way, just walk normally
-            // with readonly_mode = true.
+        case Op::Branch: {
+            // Single 16-ary branch — no static read-only marking, no
+            // partial cache; every child is walked in both passes.
+            // (The read-only-reuse optimization is reintroduced in a
+            // follow-up via a per-node result cache keyed on walk order.)
             std::array<NodeR, 16> children;
             for (uint8_t k = 0; k < 16; ++k) {
                 nibbles_walked.push_back(k);
                 children[k] = walk_node(cursor, ctx, kind, nibbles_walked,
-                                        owning_address, /*readonly=*/true);
-                nibbles_walked.pop_back();
-            }
-            return reduce_branch(std::move(children), ctx);
-        }
-
-        case Op::NodeRW: {
-            if (ctx.pass == WalkPass::OldRoot && readonly_mode) {
-                fatal("state_root: NodeRW found inside a NodeR subtree");
-            }
-
-            std::array<NodeR, 16> children;
-            for (uint8_t k = 0; k < 16; ++k) {
-                nibbles_walked.push_back(k);
-
-                // Cache point: peek at the child's opcode. If it's a
-                // NodeR, write a cache entry (old-root) or replay one
-                // (new-root) instead of recursing every time.
-                if (peek_u64_le(cursor) == static_cast<uint64_t>(Op::NodeR)) {
-                    if (ctx.pass == WalkPass::OldRoot) {
-                        const uint8_t* before = cursor;
-                        children[k] = walk_node(cursor, ctx, kind, nibbles_walked,
-                                                owning_address, /*readonly=*/true);
-                        // Record the leaf indices reached AFTER this cached
-                        // subtree so the new-root pass can resume without
-                        // re-walking it (see below).
-                        ctx.cache.push_back(
-                            {children[k], static_cast<size_t>(cursor - before),
-                             ctx.next_state_idx, ctx.next_storage_idx});
-                    } else {
-                        const auto& entry = ctx.cache[ctx.cache_read_pos++];
-                        cursor += entry.bytes_consumed;
-                        // The subtree is replayed, not re-walked, so its
-                        // Op::Leaf opcodes are skipped — set the leaf
-                        // counters to the recorded post-subtree values so
-                        // every following leaf gets the same index as the
-                        // old-root pass.
-                        ctx.next_state_idx   = entry.state_idx_after;
-                        ctx.next_storage_idx = entry.storage_idx_after;
-                        children[k] = entry.result;
-                    }
-                } else {
-                    children[k] = walk_node(cursor, ctx, kind, nibbles_walked,
-                                            owning_address, /*readonly=*/false);
-                }
-
+                                        owning_address, /*readonly=*/false);
                 nibbles_walked.pop_back();
             }
             return reduce_branch(std::move(children), ctx);

@@ -51,8 +51,11 @@ pub enum Op {
     Hash          = 1,
     ExtensionHash = 2,
     Leaf          = 3,
-    NodeRw        = 4,
-    NodeR         = 5,
+    /// Single 16-ary branch opcode. The old `NodeR`/`NodeRW` read-only vs
+    /// read-write distinction is gone: the guest derives read-only-ness
+    /// dynamically (a node is read-only iff all its leaves' original ==
+    /// current values), so no static marking is shipped.
+    Branch        = 4,
     /// Fallback: untouched-sibling leaf re-positioned during a
     /// structural split when its keccak preimage is missing from
     /// `witness.keys` (so it isn't a target in our sorted table).
@@ -61,7 +64,7 @@ pub enum Op {
     /// + `enrich_storage_slots_from_witness`. Payload: path nibbles
     /// + raw value bytes; cpp-guest's `PhantomLeafR` folds back
     /// through reduce_branch as the wrap collapses.
-    PhantomLeaf   = 6,
+    PhantomLeaf   = 5,
 }
 
 pub fn write(
@@ -190,7 +193,8 @@ fn wrap_with_extension(out: &mut Vec<u8>, inner: &mut Vec<u8>, nibbles: &[u8], h
         out.append(inner);
         return;
     }
-    let op = if has_write { Op::NodeRw } else { Op::NodeR };
+    let _ = has_write; // still returned to callers; opcode is now a single Branch
+    let op = Op::Branch;
     let mut current = std::mem::take(inner);
     for &nib in nibbles.iter().rev() {
         let mut wrapped = Vec::new();
@@ -250,7 +254,7 @@ fn emit_untouched_inline(out: &mut Vec<u8>, ctx: &Ctx, raw: &[u8]) -> Result<()>
     match items.len() {
         17 => {
             // 16-way branch, all children untouched.
-            put_op(out, Op::NodeR);
+            put_op(out, Op::Branch);
             for k in 0..16 {
                 let sub = subtree_child_from_rlp(&items[k])?;
                 let mut buf = Vec::new();
@@ -562,7 +566,8 @@ fn synthesize(
             any_write = true;
         }
     }
-    let op = if any_write { Op::NodeRw } else { Op::NodeR };
+    let _ = any_write; // still returned to callers; opcode is now a single Branch
+    let op = Op::Branch;
     put_op(out, op);
     for buf in &child_bufs {
         out.extend_from_slice(buf);
@@ -691,7 +696,7 @@ fn reconstruct_subtree(
         }
     }
     // Read-only subtree → NodeR (every reconstructed leaf is read-only).
-    put_op(out, Op::NodeR);
+    put_op(out, Op::Branch);
     for buf in &child_bufs {
         out.extend_from_slice(buf);
     }
@@ -797,7 +802,8 @@ fn walk_branch(
             any_write = true;
         }
     }
-    let op = if any_write { Op::NodeRw } else { Op::NodeR };
+    let _ = any_write; // still returned to callers; opcode is now a single Branch
+    let op = Op::Branch;
     put_op(out, op);
     for buf in &child_bufs {
         out.extend_from_slice(buf);
@@ -924,7 +930,8 @@ fn walk_two_item(
     }
 
     // Synthetic branch at depth walked.len() + div_at.
-    let op = if any_write { Op::NodeRw } else { Op::NodeR };
+    let _ = any_write; // still returned to callers; opcode is now a single Branch
+    let op = Op::Branch;
     let mut current = Vec::new();
     put_op(&mut current, op);
     for buf in &child_bufs {
