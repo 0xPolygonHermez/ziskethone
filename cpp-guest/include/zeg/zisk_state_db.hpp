@@ -199,6 +199,17 @@ public:
 private:
     // ===== Private methods =====
 
+    // Return the Accounts index of `addr`, appending an empty (non-existent)
+    // row into the table's slack if the witness didn't include it (a key
+    // created/credited this block). Sound: an absent address has empty
+    // block-state (a non-empty one would fail the parent anchor).
+    size_t ensure_account(const evmc::address& addr) noexcept;
+
+    // Commit surviving fresh-account slots from `dynamic_storage_` into the
+    // static `Storages` table at tx-end, then clear it. Called once per tx
+    // after `apply_pending_destructs`.
+    void commit_dynamic_storage() noexcept;
+
     // Move `value` ether from `from` to `to`, logging both pre-write
     // balances to the journal first so a later rollback restores them.
     // No balance check — the EVM has already gated the call on it.
