@@ -342,13 +342,17 @@ evmc::bytes32 pack_branch(const std::array<rlp::Bytes, 16>& child_refs) {
 // ctx.cache_read_pos to write or read cache entries; the StateRoot
 // member functions set up the right pass / ValueSet before calling.
 struct WalkContext {
-    const Accounts&            accounts;
-    const Storages&            storages;
+    // Non-const: the old-root pass APPENDS one row per keyed leaf while
+    // walking (the tables are built here, not parsed from a section).
+    Accounts&                  accounts;
+    Storages&                  storages;
     // Per-node result cache: the old-root pass pushes every node's result
     // in post-order; the new-root pass reads it back at `cache_read_pos`
     // in the same order and reuses the result for read-only nodes.
     std::vector<NodeR>&        cache;
     std::size_t&               cache_read_pos;
+    // Declared node count; the old-root pass fatals before pushing past it.
+    std::size_t                node_limit;
     WalkPass                   pass;
     ValueSet                   which;
     // Running leaf counters. `Op::Leaf` carries no index; the table is
@@ -380,6 +384,9 @@ NodeR walk_node(
 template <typename F>
 NodeR finish(WalkContext& ctx, bool read_only, F&& recompute) {
     if (ctx.pass == WalkPass::OldRoot) {
+        if (ctx.cache.size() >= ctx.node_limit) {
+            fatal("state_root: more nodes than declared (numberOfNodes overflow)");
+        }
         ctx.cache.push_back(recompute());
         return ctx.cache.back();
     }
@@ -514,17 +521,37 @@ NodeR walk_node(
 
         case Op::Leaf: {
             if (kind == TreeKind::State) {
-                // No index in the stream: the n-th state leaf visited is
-                // Accounts[n] (the table is sorted in trie-walk order).
-                if (ctx.next_state_idx >= ctx.accounts.size()) {
-                    fatal("state_root: more state leaves than accounts");
-                }
-                const uint64_t idx = ctx.next_state_idx++;
+                // The leaf carries the account key + block-start fields:
+                //   address(20) pad(4) balance(u256be,32) nonce(u64) code_hash(32)
+                evmc::address addr;
+                std::memcpy(addr.bytes, cursor, sizeof(addr.bytes));
+                cursor += sizeof(addr.bytes) + 4;  // skip the 4-byte pad
+                evmc::uint256be balance;
+                std::memcpy(balance.bytes, cursor, sizeof(balance.bytes));
+                cursor += sizeof(balance.bytes);
+                const uint64_t nonce = read_u64_le(cursor);
+                evmc::bytes32 code_hash;
+                std::memcpy(code_hash.bytes, cursor, sizeof(code_hash.bytes));
+                cursor += sizeof(code_hash.bytes);
 
-                const evmc::address& addr = ctx.accounts.address_at(idx);
+                // The n-th state leaf visited is Accounts[n]. The old-root
+                // pass appends the row; the new-root pass just advances the
+                // counter (the table was already built in the old pass).
+                const size_t idx = ctx.next_state_idx++;
+                if (ctx.pass == WalkPass::OldRoot) {
+                    const size_t a = ctx.accounts.append(addr, nonce, balance, code_hash);
+                    if (a != idx) fatal("state_root: account append index desync");
+                }
+
+                // `addr` is a stable local for the duration of the nested
+                // storage walk, so it can own the storage leaves below.
                 const evmc::bytes32 addr_hash =
                     keccak256_bytes32(addr.bytes, sizeof(addr.bytes));
 
+                // The leaf's trie position must match keccak(address): this
+                // binds the payload address to where the prover placed it,
+                // so a wrong address can't pass once old_root matches the
+                // anchor. Checked once, in the old-root pass.
                 if (ctx.pass == WalkPass::OldRoot) {
                     verify_path_prefix(nibbles_walked, addr_hash);
                 }
@@ -548,16 +575,16 @@ NodeR walk_node(
                 return finish(ctx, read_only, [&]() -> NodeR {
                     const evmc::bytes32 storage_root = finalize(
                         storage_subtree, ctx.accounts, ctx.storages, ctx.which);
-                    const uint64_t nonce =
+                    const uint64_t nonce_v =
                         (ctx.which == ValueSet::Original) ? ctx.accounts.nonce_orig_at(idx)
                                                           : ctx.accounts.nonce_at(idx);
-                    const evmc::uint256be balance =
+                    const evmc::uint256be balance_v =
                         (ctx.which == ValueSet::Original) ? ctx.accounts.balance_orig_at(idx)
                                                           : ctx.accounts.balance_at(idx);
-                    const evmc::bytes32 code_hash =
+                    const evmc::bytes32 code_hash_v =
                         (ctx.which == ValueSet::Original) ? ctx.accounts.code_hash_orig_at(idx)
                                                           : ctx.accounts.code_hash_at(idx);
-                    if (is_empty_account(nonce, balance, code_hash)) {
+                    if (is_empty_account(nonce_v, balance_v, code_hash_v)) {
                         return mk_node<EmptyR>();
                     }
                     auto path = nibbles_from(addr_hash, nibbles_walked.size());
@@ -566,26 +593,26 @@ NodeR walk_node(
                                                  storage_root);
                 });
             } else {
-                // No index in the stream: the n-th storage leaf visited is
-                // Storages[n] (sorted by (keccak addr, keccak slot)).
-                if (ctx.next_storage_idx >= ctx.storages.size()) {
-                    fatal("state_root: more storage leaves than storage slots");
+                // The leaf carries: position(32) value(32). The owning
+                // address comes from the enclosing account leaf.
+                if (owning_address == nullptr) {
+                    fatal("state_root: storage leaf outside any account");
                 }
-                const uint64_t idx = ctx.next_storage_idx++;
+                evmc::bytes32 position;
+                std::memcpy(position.bytes, cursor, sizeof(position.bytes));
+                cursor += sizeof(position.bytes);
+                evmc::bytes32 value;
+                std::memcpy(value.bytes, cursor, sizeof(value.bytes));
+                cursor += sizeof(value.bytes);
 
-                const evmc::address& storage_addr = ctx.storages.address_at(idx);
-                const evmc::bytes32& pos = ctx.storages.position_at(idx);
-
+                const size_t idx = ctx.next_storage_idx++;
                 if (ctx.pass == WalkPass::OldRoot) {
-                    if (owning_address == nullptr
-                        || std::memcmp(&storage_addr, owning_address,
-                                       sizeof(evmc::address)) != 0) {
-                        fatal("state_root: storage leaf address does not match owning account");
-                    }
+                    const size_t a = ctx.storages.append(*owning_address, position, value);
+                    if (a != idx) fatal("state_root: storage append index desync");
                 }
 
                 const evmc::bytes32 pos_hash =
-                    keccak256_bytes32(pos.bytes, sizeof(pos.bytes));
+                    keccak256_bytes32(position.bytes, sizeof(position.bytes));
 
                 if (ctx.pass == WalkPass::OldRoot) {
                     verify_path_prefix(nibbles_walked, pos_hash);
@@ -595,10 +622,10 @@ NodeR walk_node(
                     ctx.storages.value_orig_at(idx) == ctx.storages.value_at(idx);
 
                 return finish(ctx, read_only, [&]() -> NodeR {
-                    const evmc::bytes32 value =
+                    const evmc::bytes32 value_v =
                         (ctx.which == ValueSet::Original) ? ctx.storages.value_orig_at(idx)
                                                           : ctx.storages.value_at(idx);
-                    if (is_zero_value(value)) {
+                    if (is_zero_value(value_v)) {
                         return mk_node<EmptyR>();
                     }
                     auto path = nibbles_from(pos_hash, nibbles_walked.size());
@@ -655,14 +682,30 @@ NodeR walk_node(
 // ============================================================================
 
 StateRoot::StateRoot(const uint8_t*& cursor,
-                     const Accounts& accounts,
-                     const Storages& storages)
+                     Accounts& accounts,
+                     Storages& storages)
     : accounts_(accounts),
-      storages_(storages),
-      start_cursor_(cursor)
+      storages_(storages)
 {
+    // Section header: three u64 counts. numberOfAccounts / numberOfStorages
+    // are exact and pre-size the two (empty) tables, which the old-root walk
+    // then BUILDS one append at a time. numberOfNodes is a conservative
+    // upper bound (the encoder emits stream_len/8 — every node is ≥ one
+    // 8-byte opcode word), used only as the cache-overflow ceiling.
+    const uint64_t num_nodes    = read_u64_le(cursor);
+    const uint64_t num_accounts = read_u64_le(cursor);
+    const uint64_t num_storages = read_u64_le(cursor);
+    node_limit_ = num_nodes;
+    accounts_.reserve(num_accounts);
+    storages_.reserve(num_storages);
+
+    // The opcode stream starts here (past the counts); the new-root pass
+    // re-walks from this point.
+    start_cursor_ = cursor;
+
     std::size_t next_state_idx = 0, next_storage_idx = 0;
     WalkContext ctx{accounts_, storages_, cache_, cache_read_pos_,
+                    static_cast<std::size_t>(node_limit_),
                     WalkPass::OldRoot, ValueSet::Original,
                     next_state_idx, next_storage_idx};
     std::vector<uint8_t> nibbles_walked;
@@ -672,20 +715,11 @@ StateRoot::StateRoot(const uint8_t*& cursor,
                            /*owning_address=*/nullptr, root_ro);
     old_root_ = finalize(root, accounts_, storages_, ValueSet::Original);
 
-    // Bijection check (pre-block only): every Accounts / Storages row must
-    // appear as exactly one leaf in the pre-block trie. The per-leaf
-    // bounds-guard already rejected a stream with too MANY leaves; these
-    // assertions reject too FEW. Together they pin every table row's
-    // original value into old_root_ (which is matched against the trusted
-    // parent anchor), closing the read-only-leaf → Op::Hash substitution
-    // gap. The post-block pass reuses this validated structure, so it is
-    // not re-checked there.
-    if (next_state_idx != accounts_.size()) {
-        fatal("state_root: not every account appears as a pre-block leaf");
-    }
-    if (next_storage_idx != storages_.size()) {
-        fatal("state_root: not every storage slot appears as a pre-block leaf");
-    }
+    // No bijection check is needed: the tables ARE the leaves (built here),
+    // so every row appears as exactly one leaf by construction. Soundness
+    // comes from old_root_ == the trusted parent anchor (checked by the
+    // caller) plus each leaf's verify_path_prefix binding its payload key
+    // to its trie position.
 }
 
 evmc::bytes32 StateRoot::calculate_new_state_root() {
@@ -701,6 +735,7 @@ evmc::bytes32 StateRoot::calculate_new_state_root() {
     // stay aligned with the old-root pass).
     std::size_t next_state_idx = 0, next_storage_idx = 0;
     WalkContext ctx{accounts_, storages_, cache_, cache_read_pos_,
+                    static_cast<std::size_t>(node_limit_),
                     WalkPass::NewRoot, ValueSet::Current,
                     next_state_idx, next_storage_idx};
     std::vector<uint8_t> nibbles_walked;

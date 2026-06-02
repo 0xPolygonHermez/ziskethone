@@ -122,25 +122,18 @@ pub fn build_binary(sources: &OfflineSources, output: &Path) -> Result<()> {
     sections::write_magic(&mut w);
     sections::write_consensus_info(&mut w, &sources.current, &sources.parent, sources.is_osaka);
     sections::write_transactions(&mut w, &sources.current)?;
-    sections::write_accounts(&mut w, &prestate, &sources.diff, &touch, &sources.current)?;
     sections::write_contracts(&mut w, &prestate, &sources.diff, &sources.current)?;
-    sections::write_storages(
-        &mut w,
-        &prestate,
-        &sources.diff,
-        &touch,
-        &sources.system_contract_slots,
-    )?;
     sections::write_previous_blocks(&mut w, &sources.ancestors);
-    // Addresses force-marked writable independent of the diff trace.
-    // Must align with the Accounts / Storages is_read_only flag so
-    // cpp-guest's state-root walker doesn't trip the NodeR/NodeRW
-    // invariant. Sources:
-    //   * coinbase (priority fees)            — write_accounts
-    //   * EIP-4895 withdrawal recipients      — write_accounts
-    //   * Pectra system contracts whose slots appear in
-    //     system_contract_slots — write_storages marks the slots
-    //     writable, so the parent account leaf must also be writable.
+    // The Accounts and Storages sections are gone — their values now ride
+    // inside the StateRoot `Op::Leaf` payloads, and the guest builds both
+    // tables during the old-root walk. `state_root::write` sources those
+    // values from `prestate`/`diff` exactly as `write_accounts` /
+    // `write_storages` used to.
+    //
+    // `force_writable_addrs` / `system_contract_slots` previously drove the
+    // per-subtree NodeR/NodeRW choice; with a single `Branch` opcode that
+    // distinction is gone, but they're still threaded through (the encoder
+    // ignores the derived `is_write`).
     let mut force_writable_addrs: std::collections::BTreeSet<alloy::primitives::Address> =
         std::collections::BTreeSet::new();
     force_writable_addrs.insert(sources.current.header.beneficiary);
@@ -158,6 +151,7 @@ pub fn build_binary(sources: &OfflineSources, output: &Path) -> Result<()> {
         &sources.witness.state,
         &touch,
         &sources.diff,
+        &prestate,
         &force_writable_addrs,
         &sources.system_contract_slots,
     )?;

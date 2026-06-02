@@ -1,14 +1,21 @@
 // Merkle Patricia Trie root computation for the ZisK Ethereum guest.
 //
 // `StateRoot` walks the stream-encoded trie twice. The first walk
-// (driven from the constructor) reads the original stream values,
-// produces the pre-execution root, and caches the intermediate result
-// of every NodeR subtree found directly under a NodeRW parent. The
-// second walk (calculate_new_state_root) reads the current values
-// (originals + EVM modifications) and reuses the cached NodeR results
-// so unchanged read-only regions don't get re-hashed. The same
-// recursive routine handles the state trie and per-account storage
-// tries (a state-trie leaf carries the storage subtree inline).
+// (driven from the constructor) reads the original (block-start) values
+// the leaf opcodes carry, **builds** the Accounts/Storages tables as it
+// goes (one row per keyed leaf), produces the pre-execution root, and
+// records every node's result in `cache_` (post-order). The second walk
+// (calculate_new_state_root) reads the current values (originals + EVM
+// modifications) and reuses the cached result for any read-only node so
+// unchanged regions don't get re-hashed. The same recursive routine
+// handles the state trie and per-account storage tries (a state-trie
+// leaf carries the storage subtree inline).
+//
+// The StateRoot section begins with three u64 counts — numberOfNodes,
+// numberOfAccounts, numberOfStorages — read by the constructor to
+// pre-size the per-node cache and the two tables (and to reject a stream
+// that overflows them). Because the tables are built here, the
+// constructor MUST run before the EVM executes the block.
 
 #pragma once
 
@@ -72,13 +79,17 @@ public:
 
     // ----- public API -------------------------------------------------------
 
-    // Walks the stream once with the original (block-start) values,
-    // computes the old state root, and records EVERY node's result in
-    // `cache_` (in post-order). `cursor` is advanced past every byte
-    // consumed during this walk.
+    // Reads the section's three header counts, pre-sizes the cache and
+    // the (empty) `accounts` / `storages` tables, then walks the stream
+    // once with the original (block-start) values the leaf opcodes carry:
+    // it APPENDS one row per keyed leaf into the tables, computes the old
+    // state root, and records EVERY node's result in `cache_` (post-order).
+    // `cursor` is advanced past the counts and every byte consumed by the
+    // walk. The tables must be empty on entry and are owned by the caller
+    // (the EVM mutates them after this constructor returns).
     StateRoot(const uint8_t*& cursor,
-              const Accounts& accounts,
-              const Storages& storages);
+              Accounts& accounts,
+              Storages& storages);
 
     // O(1) — the value computed in the constructor.
     const evmc::bytes32& old_state_root() const noexcept { return old_root_; }
@@ -91,9 +102,12 @@ public:
     evmc::bytes32 calculate_new_state_root();
 
 private:
-    const Accounts& accounts_;
-    const Storages& storages_;
+    Accounts& accounts_;
+    Storages& storages_;
     const uint8_t*  start_cursor_ = nullptr;
+    // Declared node count (header); the old-root pass fatals if it would
+    // push more than this into `cache_`.
+    uint64_t        node_limit_ = 0;
     evmc::bytes32   old_root_{};
     // Per-node result cache filled by the old-root pass in post-order;
     // the new-root pass reads it back in the same order, reusing the

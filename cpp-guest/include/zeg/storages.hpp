@@ -1,9 +1,15 @@
 // Storages — per-account storage-slot table for the ZisK Ethereum guest.
 //
 // Holds, for every (account, slot) pair the block touches:
-//   * the *original* slot value (zero-copy view into the input stream), and
+//   * the *original* (block-start) slot value, and
 //   * an in-memory dirty/new-value pair tracking any SSTORE performed
 //     during EVM re-execution.
+//
+// Like Accounts, the table is no longer parsed from a stream section: it
+// is built by `StateRoot`'s old-root walk via `append` (one row per
+// storage-trie leaf — the leaf opcode carries position + original value;
+// the owning address comes from the enclosing account leaf). Originals
+// live in an owned buffer `reserve`d exactly from `numberOfStorages`.
 //
 // Lookup is by the composite (address, position) pair through an internal
 // hashmap. Both halves are already pseudo-random (keccak outputs / slot
@@ -23,13 +29,25 @@ namespace zeg {
 
 class Storages {
 public:
-    // Wire-format record size in bytes. Documented in `View` below.
+    // Internal record stride in bytes. Documented in `View` below. No
+    // longer a wire size — the table is built via `append`, not parsed.
     static constexpr uint64_t kRecordSize = 88;
 
-    // Build the table by reading a `u64` count from `cursor` followed
-    // by `count` consecutive 88-byte records. Advances `cursor` past
-    // every byte consumed. The buffer must outlive this instance.
-    explicit Storages(const uint8_t*& cursor);
+    // Starts empty. Call `reserve(numberOfStorages)` once, then `append`
+    // one row per storage-trie leaf during the StateRoot old-root walk.
+    Storages() = default;
+
+    // Pre-size the owned record buffer to exactly `count` rows. Must be
+    // called before any `append`; the buffer is fixed at this size so
+    // `View` pointers stay stable, and `append` fatals on overflow.
+    void reserve(uint64_t count);
+
+    // Append one storage row (original/block-start value) and return its
+    // index. Registers (address, position) in the lookup map and the
+    // per-address slot list. Fatals on overflow past `reserve`.
+    size_t append(const evmc::address& address,
+                  const evmc::bytes32& position,
+                  const evmc::bytes32& value);
 
     // Returns the current slot value: the dirty new value if `set_value`
     // has been called for this (addr, position), else the original from
@@ -120,10 +138,10 @@ public:
     const std::vector<size_t>& slots_of(const evmc::address& addr) const noexcept;
 
 private:
-    // Zero-copy view into one 88-byte record. Wire layout:
+    // View into one 88-byte record in `record_store_`. Layout:
     //   offset  size  field
     //        0   20   address       (raw bytes)
-    //       20    4   pad           (keeps cursor 8-aligned past address)
+    //       20    4   pad           (keeps the record 8-aligned past address)
     //       24   32   position      (storage slot key)
     //       56   32   value         (slot value)
     //       88         end of record
@@ -206,6 +224,11 @@ private:
             return std::memcmp(x.bytes, y.bytes, sizeof(x.bytes)) == 0;
         }
     };
+
+    // Owned backing buffer for the original records. Pre-sized exactly by
+    // `reserve`; never reallocated, so `View` pointers stay valid.
+    std::vector<uint8_t> record_store_;
+    uint64_t             capacity_ = 0;
 
     std::vector<View> originals_;
     std::vector<Mods> mods_;

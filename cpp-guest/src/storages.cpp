@@ -7,20 +7,30 @@
 
 namespace zeg {
 
-Storages::Storages(const uint8_t*& cursor) {
-    const uint64_t count   = read_u64_le(cursor);
-    const uint8_t* records = cursor;
+void Storages::reserve(uint64_t count) {
+    record_store_.assign(count * kRecordSize, 0);
+    capacity_ = count;
     originals_.reserve(count);
-    mods_.resize(count);
+    mods_.reserve(count);
     index_.reserve(count);
-    for (uint64_t i = 0; i < count; ++i) {
-        const uint8_t* record = records + i * kRecordSize;
-        originals_.push_back(View{record});
-        const View& v = originals_.back();
-        index_.emplace(Key{v.address(), v.position()}, i);
-        addr_slots_[v.address()].push_back(i);
+}
+
+size_t Storages::append(const evmc::address& address,
+                        const evmc::bytes32& position,
+                        const evmc::bytes32& value) {
+    const size_t idx = originals_.size();
+    if (idx >= capacity_) {
+        fatal("Storages::append: more rows than reserve() allowed (numberOfStorages overflow)");
     }
-    cursor += count * kRecordSize;
+    uint8_t* rec = record_store_.data() + idx * kRecordSize;
+    std::memcpy(rec + View::kAddressOffset,  address.bytes,  sizeof(address.bytes));
+    std::memcpy(rec + View::kPositionOffset, position.bytes, sizeof(position.bytes));
+    std::memcpy(rec + View::kValueOffset,    value.bytes,    sizeof(value.bytes));
+    originals_.push_back(View{rec});
+    mods_.push_back(Mods{});
+    index_.emplace(Key{address, position}, idx);
+    addr_slots_[address].push_back(idx);
+    return idx;
 }
 
 const std::vector<size_t>& Storages::slots_of(

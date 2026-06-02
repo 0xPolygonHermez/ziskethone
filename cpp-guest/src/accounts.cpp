@@ -7,18 +7,34 @@
 
 namespace zeg {
 
-Accounts::Accounts(const uint8_t*& cursor) {
-    const uint64_t count   = read_u64_le(cursor);
-    const uint8_t* records = cursor;
+void Accounts::reserve(uint64_t count) {
+    // Pre-size the backing buffer to exactly `count` records and fill with
+    // zero (so the unused storage_root gap + any pad bytes are defined).
+    // Fixed size => no realloc => stable View pointers.
+    record_store_.assign(count * kRecordSize, 0);
+    capacity_ = count;
     originals_.reserve(count);
-    mods_.resize(count);
+    mods_.reserve(count);
     index_.reserve(count);
-    for (uint64_t i = 0; i < count; ++i) {
-        const uint8_t* record = records + i * kRecordSize;
-        originals_.push_back(View{record});
-        index_.emplace(originals_.back().address(), i);
+}
+
+size_t Accounts::append(const evmc::address&   address,
+                        uint64_t               nonce,
+                        const evmc::uint256be& balance,
+                        const evmc::bytes32&   code_hash) {
+    const size_t idx = originals_.size();
+    if (idx >= capacity_) {
+        fatal("Accounts::append: more rows than reserve() allowed (numberOfAccounts overflow)");
     }
-    cursor += count * kRecordSize;
+    uint8_t* rec = record_store_.data() + idx * kRecordSize;
+    std::memcpy(rec + View::kAddressOffset,  address.bytes,   sizeof(address.bytes));
+    std::memcpy(rec + View::kBalanceOffset,  balance.bytes,   sizeof(balance.bytes));
+    std::memcpy(rec + View::kNonceOffset,    &nonce,          sizeof(nonce));
+    std::memcpy(rec + View::kCodeHashOffset, code_hash.bytes, sizeof(code_hash.bytes));
+    originals_.push_back(View{rec});
+    mods_.push_back(Mods{});
+    index_.emplace(address, idx);
+    return idx;
 }
 
 size_t Accounts::index_of(const evmc::address& addr) const {
@@ -66,10 +82,6 @@ uint64_t Accounts::nonce_at(size_t idx) const noexcept {
 
 evmc::bytes32 Accounts::code_hash_at(size_t idx) const noexcept {
     return mods_[idx].code_hash_dirty ? mods_[idx].code_hash : originals_[idx].code_hash();
-}
-
-const evmc::bytes32& Accounts::storage_root_at(size_t idx) const noexcept {
-    return originals_[idx].storage_root();
 }
 
 const evmc::uint256be& Accounts::balance_orig_at(size_t idx) const noexcept {

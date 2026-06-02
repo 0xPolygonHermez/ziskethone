@@ -1,9 +1,17 @@
 // Accounts — world-state account table for the ZisK Ethereum guest.
 //
 // Holds, for every account the block touches:
-//   * the *original* values (zero-copy view into the input stream), and
+//   * the *original* (block-start) values, and
 //   * an in-memory *modifications* slot tracking any writes performed
 //     during EVM re-execution (balance, nonce, codeHash, code).
+//
+// The table is no longer parsed from a dedicated stream section: it is
+// built dynamically by `StateRoot`'s old-root walk, which `append`s one
+// row per state-trie leaf (the leaf opcode carries the account's address
+// + original fields). The originals live in an owned byte buffer
+// (`record_store_`) that `reserve` pre-sizes exactly from the StateRoot
+// header's `numberOfAccounts`, so the `View` pointers stay stable as
+// rows are appended.
 //
 // Lookup is by 20-byte address through an internal hashmap. Addresses
 // are already pseudo-random (keccak outputs in most cases), so the
@@ -24,13 +32,28 @@ namespace zeg {
 
 class Accounts {
 public:
-    // Wire-format record size in bytes. Documented in `View` below.
+    // Internal record stride in bytes. Documented in `View` below. No
+    // longer a wire size — the table is built via `append`, not parsed.
     static constexpr uint64_t kRecordSize = 128;
 
-    // Build the table by reading a `u64` count from `cursor` followed
-    // by `count` consecutive 128-byte records. Advances `cursor` past
-    // every byte consumed. The buffer must outlive this instance.
-    explicit Accounts(const uint8_t*& cursor);
+    // Starts empty. Call `reserve(numberOfAccounts)` once, then `append`
+    // one row per state-trie leaf during the StateRoot old-root walk.
+    Accounts() = default;
+
+    // Pre-size the owned record buffer to exactly `count` rows. Must be
+    // called before any `append`, and `count` must equal the number of
+    // rows that will be appended (the StateRoot header's
+    // `numberOfAccounts`): the buffer is fixed at this size so `View`
+    // pointers into it stay stable, and `append` fatals on overflow.
+    void reserve(uint64_t count);
+
+    // Append one account row (original/block-start values) and return its
+    // index. Registers the address in the lookup map. Fatals if more rows
+    // are appended than `reserve` allowed.
+    size_t append(const evmc::address&    address,
+                  uint64_t                nonce,
+                  const evmc::uint256be&  balance,
+                  const evmc::bytes32&    code_hash);
 
     // ----- read accessors (return modified value if dirty, else original) -----
     // Take `tx_idx` and touch the account for EIP-2929 warm tracking
@@ -56,10 +79,6 @@ public:
     const evmc::uint256be& balance_orig_at  (size_t idx) const noexcept;
     uint64_t              nonce_orig_at     (size_t idx) const noexcept;
     const evmc::bytes32&  code_hash_orig_at (size_t idx) const noexcept;
-    // storage_root is read straight from the stream view — it can only be
-    // updated as a side effect of recomputing the storage trie, never via
-    // a setter on Accounts, so this getter returns the original.
-    const evmc::bytes32&  storage_root_at   (size_t idx) const noexcept;
 
     // ----- write accessors (mark the field dirty) -----
     void set_balance   (const evmc::address& addr, const evmc::uint256be& v,
@@ -117,13 +136,13 @@ public:
     uint64_t size() const noexcept { return originals_.size(); }
 
 private:
-    // Zero-copy view into one 128-byte record. Wire layout:
+    // View into one 128-byte record in `record_store_`. Layout:
     //   offset  size  field
     //        0   20   address       (raw bytes)
-    //       20    4   pad           (keeps cursor 8-aligned past address)
+    //       20    4   pad           (keeps the record 8-aligned past address)
     //       24   32   balance       (big-endian uint256, evmc wire form)
-    //       56    8   nonce         (little-endian u64)
-    //       64   32   storage_root  (keccak hash)
+    //       56    8   nonce         (host-endian u64)
+    //       64   32   (unused — storage_root is recomputed by StateRoot)
     //       96   32   code_hash     (keccak hash)
     //      128         end of record
     struct View {
@@ -132,7 +151,6 @@ private:
         static constexpr size_t kAddressOffset     = 0;
         static constexpr size_t kBalanceOffset     = 24;
         static constexpr size_t kNonceOffset       = 56;
-        static constexpr size_t kStorageRootOffset = 64;
         static constexpr size_t kCodeHashOffset    = 96;
 
         const evmc::address& address() const noexcept {
@@ -145,9 +163,6 @@ private:
             uint64_t v;
             std::memcpy(&v, std::assume_aligned<8>(data + kNonceOffset), sizeof(v));
             return v;
-        }
-        const evmc::bytes32& storage_root() const noexcept {
-            return *reinterpret_cast<const evmc::bytes32*>(data + kStorageRootOffset);
         }
         const evmc::bytes32& code_hash() const noexcept {
             return *reinterpret_cast<const evmc::bytes32*>(data + kCodeHashOffset);
@@ -189,6 +204,12 @@ private:
             return std::memcmp(x.bytes, y.bytes, sizeof(x.bytes)) == 0;
         }
     };
+
+    // Owned backing buffer for the original records. Pre-sized exactly by
+    // `reserve`; never reallocated afterwards, so the `View` pointers in
+    // `originals_` stay valid for the lifetime of the table.
+    std::vector<uint8_t> record_store_;
+    uint64_t             capacity_ = 0;
 
     std::vector<View> originals_;
     std::vector<Mods> mods_;

@@ -34,11 +34,11 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use alloy::primitives::{Address, Bytes, B256};
+use alloy::primitives::{Address, Bytes, B256, U256};
 use anyhow::{anyhow, bail, Context, Result};
 
 use crate::mpt::{self, hp_decode, keccak256, Rlp};
-use crate::rpc::PrestateDiff;
+use crate::rpc::{Prestate, PrestateDiff};
 use crate::touchset::TouchSet;
 use crate::writer::Writer;
 
@@ -73,6 +73,7 @@ pub fn write(
     witness_nodes: &[Bytes],
     touch: &TouchSet,
     diff: &PrestateDiff,
+    prestate: &Prestate,
     force_writable_addrs: &BTreeSet<Address>,
     force_writable: &BTreeSet<(Address, B256)>,
 ) -> Result<()> {
@@ -83,6 +84,23 @@ pub fn write(
         }
         nodes.insert(keccak256(raw), raw.to_vec());
     }
+
+    // Block-start values that used to populate the Accounts/Storages
+    // sections — now embedded in each `Op::Leaf` payload so the guest can
+    // build the tables during its old-root walk. Indexed by the same
+    // trie-walk order as `touch.addrs` / `touch.slots`, so a leaf's
+    // `leaf_idx` selects the right row.
+    let acct_orig: Vec<(U256, u64, B256)> = touch
+        .addrs
+        .iter()
+        .map(|a| crate::sections::account_original_fields(a, prestate, diff))
+        .collect();
+    let value_of = crate::sections::storage_original_values(prestate, diff);
+    let slot_orig: Vec<B256> = touch
+        .slots
+        .iter()
+        .map(|(a, s)| value_of.get(&(*a, *s)).copied().unwrap_or(B256::ZERO))
+        .collect();
 
     // Per-address state-trie is_write: true iff the address's account
     // leaf actually changes this block. Reth's witness can be missing
@@ -114,7 +132,15 @@ pub fn write(
     crate::enrich::collect_leaves(&nodes, &parent_state_root.0, &mut Vec::new(), &mut state_leaf_vec)?;
     let state_leaves: HashMap<[u8; 32], Vec<u8>> = state_leaf_vec.into_iter().collect();
 
-    let ctx = Ctx { nodes: &nodes, touch, diff, force_writable, state_leaves: &state_leaves };
+    let ctx = Ctx {
+        nodes: &nodes,
+        touch,
+        diff,
+        force_writable,
+        state_leaves: &state_leaves,
+        acct_orig: &acct_orig,
+        slot_orig: &slot_orig,
+    };
     let _ = force_writable_addrs; // already consumed when building state_targets
 
     let mut out = Vec::new();
@@ -127,6 +153,16 @@ pub fn write(
         TreeKind::State,
         None,
     )?;
+
+    // StateRoot header (before the opcode stream): three u64 counts.
+    //   numberOfNodes     — conservative upper bound (every node is ≥ one
+    //                       8-byte opcode word, so stream_len/8 ≥ node count);
+    //                       the guest uses it as a cache-overflow ceiling.
+    //   numberOfAccounts  — exact: one row per state leaf = touch.addrs.len().
+    //   numberOfStorages  — exact: one row per storage leaf = touch.slots.len().
+    w.u64_le((out.len() / 8) as u64);
+    w.u64_le(touch.addrs.len() as u64);
+    w.u64_le(touch.slots.len() as u64);
 
     for byte in out {
         w.u8(byte);
@@ -163,6 +199,13 @@ struct Ctx<'a> {
     /// a state subtree (and look up an account's storage root) when reth's
     /// witness is missing the subtree's intermediate node.
     state_leaves: &'a HashMap<[u8; 32], Vec<u8>>,
+    /// Block-start account fields indexed by `touch.addrs` order; a state
+    /// leaf's `leaf_idx` selects its (balance, nonce, code_hash) for the
+    /// `Op::Leaf` payload.
+    acct_orig: &'a [(U256, u64, B256)],
+    /// Block-start storage values indexed by `touch.slots` order; a storage
+    /// leaf's `leaf_idx` selects its value for the `Op::Leaf` payload.
+    slot_orig: &'a [B256],
 }
 
 #[derive(Clone, Copy)]
@@ -217,6 +260,30 @@ fn put_u64(out: &mut Vec<u8>, v: u64) {
 
 fn put_op(out: &mut Vec<u8>, op: Op) {
     put_u64(out, op as u64);
+}
+
+/// State `Op::Leaf` payload: address(20) pad(4) balance(u256be,32)
+/// nonce(u64,LE) code_hash(32) = 96 bytes. The guest appends this as an
+/// Accounts row (original/block-start values).
+fn put_state_leaf_payload(
+    out: &mut Vec<u8>,
+    addr: &Address,
+    balance: &U256,
+    nonce: u64,
+    code_hash: &B256,
+) {
+    out.extend_from_slice(addr.as_slice()); // 20
+    out.extend_from_slice(&[0u8; 4]);       // pad to 24
+    out.extend_from_slice(&balance.to_be_bytes::<32>()); // 32
+    put_u64(out, nonce);                    // 8
+    out.extend_from_slice(code_hash.as_slice()); // 32
+}
+
+/// Storage `Op::Leaf` payload: position(32) value(32) = 64 bytes. The
+/// owning address comes from the enclosing account leaf in the guest.
+fn put_storage_leaf_payload(out: &mut Vec<u8>, position: &B256, value: &B256) {
+    out.extend_from_slice(position.as_slice()); // 32
+    out.extend_from_slice(value.as_slice());    // 32
 }
 
 fn emit_empty(out: &mut Vec<u8>) {
@@ -493,19 +560,20 @@ fn emit_terminal_leaf(
     owner: Option<usize>,
 ) -> Result<bool> {
     let _ = _walked;
-    // Op::Leaf carries no index: the table is sorted in trie-walk order,
-    // so the cpp-guest derives the Accounts/Storages index from a running
-    // per-pass counter. `t.leaf_idx` is still used below to fetch this
-    // account's address for the storage subtree.
+    // Op::Leaf carries its key + block-start values (the guest appends an
+    // Accounts/Storages row from them, indexing it by trie-walk order).
     put_op(out, Op::Leaf);
 
     if kind == TreeKind::State {
+        let addr = ctx.touch.addrs[t.leaf_idx];
+        let (balance, nonce, code_hash) = ctx.acct_orig[t.leaf_idx];
+        put_state_leaf_payload(out, &addr, &balance, nonce, &code_hash);
+
         // storage_root: extracted from the MPT leaf's value if we
         // reached it through the MPT, EMPTY_TRIE_ROOT for synthetic
         // insertions (new accounts).
         let storage_root = leaf_storage_root_if_reachable(ctx, _walked, child, t)?;
 
-        let addr = ctx.touch.addrs[t.leaf_idx];
         let mut storage_targets: Vec<Target> = ctx
             .touch
             .slots_for(&addr)
@@ -528,6 +596,9 @@ fn emit_terminal_leaf(
             TreeKind::Storage,
             Some(t.leaf_idx),
         )?;
+    } else {
+        let (_addr, slot) = ctx.touch.slots[t.leaf_idx];
+        put_storage_leaf_payload(out, &slot, &ctx.slot_orig[t.leaf_idx]);
     }
     let _ = owner;
     Ok(t.is_write)
@@ -713,18 +784,21 @@ fn emit_recon_leaf(
 ) -> Result<()> {
     match &it.target {
         Some(t) => {
-            // Accessed row → Op::Leaf (the guest fetches the value from
-            // Accounts/Storages). For a state leaf, emit the nested storage
-            // subtree using the storage root from the collected account RLP.
+            // Accessed row → Op::Leaf carrying its key + block-start values.
+            // For a state leaf, then emit the nested storage subtree using
+            // the storage root from the collected account RLP.
             put_op(out, Op::Leaf);
             if kind == TreeKind::State {
+                let addr = ctx.touch.addrs[t.leaf_idx];
+                let (balance, nonce, code_hash) = ctx.acct_orig[t.leaf_idx];
+                put_state_leaf_payload(out, &addr, &balance, nonce, &code_hash);
+
                 let storage_root = if it.value.is_empty() {
                     EMPTY_TRIE_ROOT
                 } else {
                     mpt::account_storage_root(&it.value)
                         .context("reconstruct: account leaf RLP")?
                 };
-                let addr = ctx.touch.addrs[t.leaf_idx];
                 let mut storage_targets: Vec<Target> = ctx
                     .touch
                     .slots_for(&addr)
@@ -746,6 +820,9 @@ fn emit_recon_leaf(
                     TreeKind::Storage,
                     Some(t.leaf_idx),
                 )?;
+            } else {
+                let (_addr, slot) = ctx.touch.slots[t.leaf_idx];
+                put_storage_leaf_payload(out, &slot, &ctx.slot_orig[t.leaf_idx]);
             }
             Ok(())
         }
@@ -1004,12 +1081,14 @@ fn emit_continuation(
             return Ok(false);
         }
         if targets.len() == 1 && remaining.is_empty() {
-            // The leaf IS our target. Emit Op::Leaf directly (no index:
-            // derived from the cpp-guest's per-pass counter).
+            // The leaf IS our target. Emit Op::Leaf with its key + values.
             let t = &targets[0];
             put_op(out, Op::Leaf);
             if kind == TreeKind::State {
                 let addr = ctx.touch.addrs[t.leaf_idx];
+                let (balance, nonce, code_hash) = ctx.acct_orig[t.leaf_idx];
+                put_state_leaf_payload(out, &addr, &balance, nonce, &code_hash);
+
                 let storage_root = mpt::account_storage_root(items[1].as_bytes()?)
                     .context("continuation leaf: decoding account RLP")?;
                 let mut storage_targets: Vec<Target> = ctx
@@ -1032,6 +1111,9 @@ fn emit_continuation(
                     TreeKind::Storage,
                     Some(t.leaf_idx),
                 )?;
+            } else {
+                let (_addr, slot) = ctx.touch.slots[t.leaf_idx];
+                put_storage_leaf_payload(out, &slot, &ctx.slot_orig[t.leaf_idx]);
             }
             let _ = owner;
             return Ok(t.is_write);
