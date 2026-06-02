@@ -105,6 +105,10 @@ public:
     const NodeR* cached_at(size_t idx) const noexcept { return &leaf_[idx].cached; }
     const evmc::bytes32& pos_hash_at(size_t idx) const noexcept { return leaf_[idx].pos_hash; }
 
+    // Set by the new-root insert phase for a created slot (appended at
+    // run-time, not via build_value).
+    void set_pos_hash(size_t idx, const evmc::bytes32& pos_hash);
+
     // True iff the slot value did not change since block start.
     bool value_unchanged_at(size_t idx) const noexcept {
         return value_orig_at(idx) == value_at(idx);

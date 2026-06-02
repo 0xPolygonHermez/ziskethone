@@ -60,22 +60,25 @@ const NodeR* Accounts::update_value(size_t idx,
                                     const std::vector<uint8_t>& nib,
                                     const evmc::bytes32& storage_root) {
     LeafCache& lc = leaf_[idx];
-    // Fast path: nothing the leaf depends on changed → reuse the cached node.
-    if (fields_unchanged_at(idx)) {
-        if (const auto* al = std::get_if<AccountLeafR>(&lc.cached)) {
-            if (al->storage_root == storage_root) return &lc.cached;
-        } else {
-            // Cached is EmptyR and the fields are unchanged → still empty.
-            return &lc.cached;
-        }
-    }
-    // Recompute from the CURRENT fields + storage root.
+    // Always rebuild from the CURRENT fields + storage root at path `nib`.
+    // This is cheap (no keccak — packing happens at the parent branch) and
+    // keeps the leaf path correct even when a new-root insert moved this
+    // leaf deeper via a split. The keccak-saving read-only reuse happens at
+    // the BRANCH level (a read-only branch reuses its cached hash).
     if (is_empty_account(nonce_at(idx), balance_at(idx), code_hash_at(idx))) {
         lc.cached.emplace<EmptyR>();
     } else {
         lc.cached.emplace<AccountLeafR>(nib, idx, storage_root);
     }
     return &lc.cached;
+}
+
+void Accounts::set_addr_hash(size_t idx, const evmc::bytes32& addr_hash) {
+    leaf_[idx].addr_hash = addr_hash;
+}
+
+void Accounts::set_storage_root_child(size_t idx, Child storage_root) {
+    leaf_[idx].storage_root = storage_root;
 }
 
 size_t Accounts::index_of(const evmc::address& addr) const {

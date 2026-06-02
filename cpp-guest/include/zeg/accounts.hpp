@@ -109,6 +109,11 @@ public:
     Child storage_root_child_at(size_t idx) const noexcept { return leaf_[idx].storage_root; }
     const evmc::bytes32& addr_hash_at(size_t idx) const noexcept { return leaf_[idx].addr_hash; }
 
+    // Setters used by the new-root insert phase to wire a created account's
+    // leaf metadata (it was appended at run-time, not via build_value).
+    void set_addr_hash(size_t idx, const evmc::bytes32& addr_hash);
+    void set_storage_root_child(size_t idx, Child storage_root);
+
     // True iff none of nonce / balance / code_hash changed since block start.
     bool fields_unchanged_at(size_t idx) const noexcept {
         return nonce_orig_at(idx)     == nonce_at(idx)

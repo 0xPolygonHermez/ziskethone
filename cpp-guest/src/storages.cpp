@@ -50,15 +50,19 @@ const NodeR* Storages::build_value(size_t idx,
 
 const NodeR* Storages::update_value(size_t idx, const std::vector<uint8_t>& nib) {
     LeafCache& lc = leaf_[idx];
-    if (value_unchanged_at(idx)) {
-        return &lc.cached;
-    }
+    // Always rebuild at path `nib` (cheap — no keccak), so a leaf moved
+    // deeper by a new-root insert split gets its path recomputed. Branch-
+    // level read-only reuse provides the keccak saving.
     if (is_zero_value(value_at(idx))) {
         lc.cached.emplace<EmptyR>();
     } else {
         lc.cached.emplace<StorageLeafR>(nib, idx);
     }
     return &lc.cached;
+}
+
+void Storages::set_pos_hash(size_t idx, const evmc::bytes32& pos_hash) {
+    leaf_[idx].pos_hash = pos_hash;
 }
 
 const std::vector<size_t>& Storages::slots_of(

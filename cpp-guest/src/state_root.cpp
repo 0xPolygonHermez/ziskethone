@@ -627,7 +627,128 @@ StateRoot::StateRoot(const uint8_t*& cursor,
     // plus each leaf's verify_path_prefix binding its key to its position.
 }
 
+// ===== new-root insert (Stage 3) ============================================
+
+uint8_t StateRoot::existing_leaf_nibble(Child leaf, std::size_t d,
+                                        std::size_t depth) const {
+    switch (leaf.type) {
+        case NodeType::Account:
+            return nibble_at(accounts_.addr_hash_at(leaf.idx), d);
+        case NodeType::Storage:
+            return nibble_at(storages_.pos_hash_at(leaf.idx), d);
+        case NodeType::PhantomLeaf:
+            // The phantom's stored path is relative to where it sits (depth).
+            return std::get<PhantomLeafR>(aux_[leaf.idx]).path_nibbles[d - depth];
+        default:
+            fatal("state_root: existing_leaf_nibble on a non-leaf node");
+    }
+}
+
+Child StateRoot::split_leaf(Child existing, const evmc::bytes32& key_hash,
+                            Child leaf, std::size_t depth) {
+    // First nibble at which the new key and the existing leaf's key diverge.
+    std::size_t d = depth;
+    while (true) {
+        if (d >= 64) fatal("state_root: insert collides with an identical key");
+        if (nibble_at(key_hash, d) != existing_leaf_nibble(existing, d, depth)) break;
+        ++d;
+    }
+    const uint8_t existing_nib = existing_leaf_nibble(existing, d, depth);
+
+    // A keyless PhantomLeaf carries its path inline, so shorten it to its new
+    // (deeper) position d+1. Keyed leaves recompute their path from depth in
+    // the eval pass, so they need no surgery here.
+    if (existing.type == NodeType::PhantomLeaf) {
+        auto& path = std::get<PhantomLeafR>(aux_[existing.idx]).path_nibbles;
+        path.erase(path.begin(),
+                   path.begin() + static_cast<std::ptrdiff_t>(d + 1 - depth));
+    }
+
+    // 2-child branch at depth d holding both leaves.
+    BranchNode bd;
+    bd.children[nibble_at(key_hash, d)] = leaf;
+    bd.children[existing_nib]           = existing;
+    branch_nodes_.push_back(std::move(bd));
+    Child cur{NodeType::Branch, static_cast<uint32_t>(branch_nodes_.size() - 1)};
+
+    // Single-child branches for the shared nibbles depth..d-1 (reduce_branch
+    // folds the chain into an extension at hash time).
+    for (std::size_t dd = d; dd > depth; --dd) {
+        BranchNode b;
+        b.children[nibble_at(key_hash, dd - 1)] = cur;
+        branch_nodes_.push_back(std::move(b));
+        cur = Child{NodeType::Branch, static_cast<uint32_t>(branch_nodes_.size() - 1)};
+    }
+    return cur;
+}
+
+Child StateRoot::insert_into(Child node, const evmc::bytes32& key_hash,
+                             Child leaf, std::size_t depth) {
+    switch (node.type) {
+        case NodeType::Empty:
+            return leaf;
+        case NodeType::Branch: {
+            const uint8_t nib = nibble_at(key_hash, depth);
+            const Child child = branch_nodes_[node.idx].children[nib];  // copy
+            const Child newchild = insert_into(child, key_hash, leaf, depth + 1);
+            // Re-index after the recursion (which may have grown branch_nodes_).
+            branch_nodes_[node.idx].children[nib] = newchild;
+            return node;
+        }
+        case NodeType::Account:
+        case NodeType::Storage:
+        case NodeType::PhantomLeaf:
+            return split_leaf(node, key_hash, leaf, depth);
+        case NodeType::Hash:
+        case NodeType::ExtensionHash:
+            fatal("state_root: insert into an unrevealed (Hash) subtree — "
+                  "witness incomplete");
+    }
+    fatal("state_root: insert_into invalid node type");
+}
+
 evmc::bytes32 StateRoot::calculate_new_state_root() {
+    // ----- Phase 1: insert keys CREATED during execution -----
+    // Rows appended beyond the witness counts are created keys. Splice them
+    // into the node array (index-based, so branch_nodes_ may grow freely).
+
+    // Initialise each created account's leaf metadata (it was appended at
+    // run-time via ensure_account, not through build_value).
+    for (std::size_t i = num_witness_accounts_; i < accounts_.size(); ++i) {
+        const evmc::address& a = accounts_.address_at(i);
+        accounts_.set_addr_hash(i, keccak256_bytes32(a.bytes, sizeof(a.bytes)));
+        accounts_.set_storage_root_child(i, Child{NodeType::Empty, 0});
+    }
+
+    // Insert created storage slots into their owning account's subtree first,
+    // so the account leaf's storage root reflects them when evaluated.
+    for (std::size_t i = num_witness_storages_; i < storages_.size(); ++i) {
+        if (is_zero_value(storages_.value_at(i))) {
+            continue;  // a zeroed slot has no trie effect
+        }
+        const evmc::bytes32& pos = storages_.position_at(i);
+        const evmc::bytes32 pos_hash =
+            keccak256_bytes32(pos.bytes, sizeof(pos.bytes));
+        storages_.set_pos_hash(i, pos_hash);
+        const std::size_t acct = accounts_.index_of(storages_.address_at(i));
+        const Child new_root = insert_into(
+            accounts_.storage_root_child_at(acct), pos_hash,
+            Child{NodeType::Storage, static_cast<uint32_t>(i)}, 0);
+        accounts_.set_storage_root_child(acct, new_root);
+    }
+
+    // Insert created accounts into the state trie (skip ones that ended empty,
+    // e.g. created-then-SELFDESTRUCT'd).
+    for (std::size_t i = num_witness_accounts_; i < accounts_.size(); ++i) {
+        if (is_empty_account(accounts_.nonce_at(i), accounts_.balance_at(i),
+                             accounts_.code_hash_at(i))) {
+            continue;
+        }
+        root_ = insert_into(root_, accounts_.addr_hash_at(i),
+                            Child{NodeType::Account, static_cast<uint32_t>(i)}, 0);
+    }
+
+    // ----- Phase 2: evaluate the augmented node array against current values.
     EvalCtx ctx{accounts_, storages_, branch_nodes_, aux_};
     const auto [root_res, root_ro] = eval_node(root_, ctx, 0);
     (void)root_ro;

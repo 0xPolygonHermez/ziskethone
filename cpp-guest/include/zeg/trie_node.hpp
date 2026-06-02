@@ -124,6 +124,12 @@ inline bool is_zero_value(const evmc::bytes32& v) {
     return std::memcmp(&v, &kZero, sizeof(v)) == 0;
 }
 
+// The `i`-th nibble of a 32-byte hash (high nibble of byte i/2 first).
+inline uint8_t nibble_at(const evmc::bytes32& key_hash, std::size_t i) {
+    const uint8_t b = key_hash.bytes[i / 2];
+    return static_cast<uint8_t>((i % 2 == 0) ? (b >> 4) : (b & 0x0f));
+}
+
 // Build the leaf path: the remaining nibbles of `key_hash` from `depth`.
 inline std::vector<uint8_t> nibbles_from(const evmc::bytes32& key_hash,
                                          std::size_t depth) {

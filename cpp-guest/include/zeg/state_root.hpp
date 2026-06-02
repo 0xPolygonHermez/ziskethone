@@ -63,6 +63,23 @@ public:
     evmc::bytes32 calculate_new_state_root();
 
 private:
+    // ----- new-root insert helpers (Stage 3) --------------------------------
+    //
+    // Splice a created key's leaf into the node array along `key_hash`.
+    // `insert_into` returns the (possibly new) root of the subtree it was
+    // given: it places the leaf at an `Empty` slot, descends a `Branch`, or
+    // `split`s a colliding sibling leaf into a fresh branch chain. It fatals
+    // on a `Hash`/`ExtensionHash` (insertion into an unrevealed subtree —
+    // the witness must reveal the insertion neighbourhood).
+    Child insert_into(Child node, const evmc::bytes32& key_hash,
+                      Child leaf, std::size_t depth);
+    Child split_leaf(Child existing, const evmc::bytes32& key_hash,
+                     Child leaf, std::size_t depth);
+    // The existing leaf's nibble at absolute depth `d` (its key sits at
+    // `depth`). Uses addr_hash/pos_hash for keyed leaves, the stored path
+    // for a keyless PhantomLeaf.
+    uint8_t existing_leaf_nibble(Child leaf, std::size_t d, std::size_t depth) const;
+
     Accounts& accounts_;
     Storages& storages_;
     // Declared node-count ceiling (header `numberOfNodes`); the build pass
