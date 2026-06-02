@@ -111,7 +111,7 @@ int main(int argc, char** argv) {
     if (std::getenv("ZEG_DUMP_SROOT_OFFSET") != nullptr) {
         std::fprintf(stderr, "SROOT_OFFSET=%zu\n", (size_t)(cursor - file_base));
     }
-    zeg::StateRoot state_root(cursor, accounts, storages);
+    zeg::StateRoot state_root(cursor, accounts, storages, consensus.gas_limit());
     if (state_root.old_state_root() != consensus.parent_hash()) {
         zeg::fatal("pre-execution state root mismatch");
     }

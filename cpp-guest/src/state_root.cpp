@@ -1,5 +1,6 @@
 #include "zeg/state_root.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -579,20 +580,35 @@ std::pair<const NodeR*, bool> eval_node(const Child& c, EvalCtx& ctx, std::size_
 
 StateRoot::StateRoot(const uint8_t*& cursor,
                      Accounts& accounts,
-                     Storages& storages)
+                     Storages& storages,
+                     uint64_t gas_limit)
     : accounts_(accounts),
       storages_(storages)
 {
     // Section header: three u64 counts. numberOfAccounts / numberOfStorages
-    // are exact and pre-size the two (empty) tables, which the build walk
-    // then fills one append at a time. numberOfNodes is a conservative upper
-    // bound (the encoder emits stream_len/8) used as the node-array ceiling.
+    // are exact WITNESS counts; numberOfNodes is a conservative upper bound
+    // (the encoder emits stream_len/8) used as the node-array ceiling.
     const uint64_t num_nodes    = read_u64_le(cursor);
     const uint64_t num_accounts = read_u64_le(cursor);
     const uint64_t num_storages = read_u64_le(cursor);
-    node_limit_ = num_nodes;
-    accounts_.reserve(num_accounts);
-    storages_.reserve(num_storages);
+    node_limit_           = num_nodes;
+    num_witness_accounts_ = num_accounts;
+    num_witness_storages_ = num_storages;
+
+    // Pre-size each table to the witness count PLUS a slack for keys created
+    // during execution, so created rows append in-place (no realloc → stable
+    // View / leaf pointers). Creating an account costs >= ~12.5k gas and a
+    // fresh storage slot >= ~20k gas, and total gas <= gas_limit, so
+    // gas_limit/10000 is a sound upper bound on created rows — BUT test
+    // fixtures set absurd gas_limits (e.g. 1e14), so cap the slack at a value
+    // no realistic block reaches (65536 created keys needs >1.6e9 gas of
+    // actual work). `append` still fatals if the slack is somehow exceeded,
+    // plus a small constant floor for tiny-gas blocks.
+    constexpr uint64_t kMaxCreatedSlack = 1u << 16;  // 65536
+    const uint64_t slack =
+        std::min<uint64_t>(gas_limit / 10000 + 64, kMaxCreatedSlack);
+    accounts_.reserve(num_accounts + slack);
+    storages_.reserve(num_storages + slack);
 
     BuildCtx ctx{accounts_, storages_, branch_nodes_, aux_,
                  /*next_state_idx=*/0, /*next_storage_idx=*/0,

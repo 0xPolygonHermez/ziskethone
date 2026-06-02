@@ -37,16 +37,20 @@ public:
     // ----- public API -------------------------------------------------------
 
     // Reads the section's three header counts, pre-sizes the (empty)
-    // `accounts` / `storages` tables, then walks the stream once with the
-    // original (block-start) values the leaf opcodes carry: it APPENDS one
-    // row per keyed leaf, materializes the node array, computes the old
+    // `accounts` / `storages` tables (witness count + a gas-bounded slack
+    // for keys CREATED during execution), then walks the stream once with
+    // the original (block-start) values the leaf opcodes carry: it APPENDS
+    // one row per keyed leaf, materializes the node array, computes the old
     // state root, and caches every node's result. `cursor` is advanced past
     // the counts and every byte consumed by the walk. The tables must be
-    // empty on entry and are owned by the caller (the EVM mutates them
-    // after this constructor returns).
+    // empty on entry and are owned by the caller (the EVM mutates them — and
+    // may append created rows into the slack — after this returns).
+    // `gas_limit` (from the verified consensus header) bounds how many keys
+    // the block can create, sizing the slack.
     StateRoot(const uint8_t*& cursor,
               Accounts& accounts,
-              Storages& storages);
+              Storages& storages,
+              uint64_t gas_limit);
 
     // O(1) — the value computed in the constructor.
     const evmc::bytes32& old_state_root() const noexcept { return old_root_; }
@@ -64,6 +68,10 @@ private:
     // Declared node-count ceiling (header `numberOfNodes`); the build pass
     // fatals if `branch_nodes_` + `aux_` would exceed it.
     uint64_t        node_limit_ = 0;
+    // Witness leaf counts (header). Rows appended beyond these during
+    // execution are keys CREATED this block; the new-root pass inserts them.
+    uint64_t        num_witness_accounts_ = 0;
+    uint64_t        num_witness_storages_ = 0;
     evmc::bytes32   old_root_{};
 
     // The materialized node array. `branch_nodes_` holds every 16-ary
