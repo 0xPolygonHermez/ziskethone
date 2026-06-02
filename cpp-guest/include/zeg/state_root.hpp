@@ -70,26 +70,12 @@ public:
 
     using NodeR = std::variant<EmptyR, HashR, ExtR, AccountLeafR, StorageLeafR, PhantomLeafR>;
 
-    struct CacheEntry {
-        NodeR       result;
-        std::size_t bytes_consumed;
-        // The running state/storage leaf indices right AFTER this cached
-        // subtree finished in the old-root pass. `Op::Leaf` carries no
-        // index; the walker derives it from a per-pass counter. The
-        // new-root pass replays a cached subtree without re-walking it, so
-        // it SETS the counters to these recorded values, keeping the index
-        // of every leaf that FOLLOWS the cached subtree aligned with the
-        // old-root pass.
-        std::size_t state_idx_after;
-        std::size_t storage_idx_after;
-    };
-
     // ----- public API -------------------------------------------------------
 
-    // Walks the stream once with the original values, computes and
-    // caches the old state root, and records one cache entry per NodeR
-    // subtree found directly under a NodeRW parent. `cursor` is
-    // advanced past every byte consumed during this walk.
+    // Walks the stream once with the original (block-start) values,
+    // computes the old state root, and records EVERY node's result in
+    // `cache_` (in post-order). `cursor` is advanced past every byte
+    // consumed during this walk.
     StateRoot(const uint8_t*& cursor,
               const Accounts& accounts,
               const Storages& storages);
@@ -98,10 +84,10 @@ public:
     const evmc::bytes32& old_state_root() const noexcept { return old_root_; }
 
     // Re-walks from the remembered start cursor with the current
-    // values, substituting the cached results for every
-    // NodeR-under-NodeRW subtree. Skips path-prefix / owner /
-    // NodeRW-under-NodeR checks already validated during the old-root
-    // pass.
+    // (post-execution) values. Read-only-ness is derived dynamically (a
+    // leaf is read-only iff its original == current value; a node iff all
+    // its children are), and the cached old-root result is reused for any
+    // read-only node instead of re-hashing it.
     evmc::bytes32 calculate_new_state_root();
 
 private:
@@ -109,7 +95,10 @@ private:
     const Storages& storages_;
     const uint8_t*  start_cursor_ = nullptr;
     evmc::bytes32   old_root_{};
-    std::vector<CacheEntry> cache_;
+    // Per-node result cache filled by the old-root pass in post-order;
+    // the new-root pass reads it back in the same order, reusing the
+    // result for read-only nodes.
+    std::vector<NodeR> cache_;
     std::size_t cache_read_pos_ = 0;
 };
 
