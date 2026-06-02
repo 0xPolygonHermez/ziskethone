@@ -54,9 +54,14 @@ sized to a multiple of 8, so the next section starts 8-byte aligned.
 | Offset | Size | Field     | Description |
 |-------:|-----:|-----------|-------------|
 |      0 |    4 | `magic`   | ASCII `"ZEG0"` (`0x3047455A` little-endian, see [`binary_format.hpp`](cpp-guest/include/zeg/binary_format.hpp)) |
-|      4 |    4 | `version` | `u32` little-endian format version (`kVersion`, currently `3`). Also keeps the cursor 8-byte aligned for everything that follows |
+|      4 |    4 | `version` | `u32` little-endian format version (`kVersion`, currently `4`). Also keeps the cursor 8-byte aligned for everything that follows |
 
 The guest fatals on magic mismatch or on a `version` other than `kVersion`.
+Version `4` made the StateRoot trie hints **witness-only**: the encoder
+transcribes the pre-state MPT straight from the execution witness and no
+longer pre-emits leaves for keys created during the block — the guest
+inserts those into the node array during the new-root pass. The byte layout
+is unchanged from v3.
 Version `3` removed the standalone Accounts and Storages sections: the
 StateRoot section now begins with three `u64` counts and every `Op::Leaf`
 carries its key + block-start values, so the guest builds both tables while
@@ -281,8 +286,14 @@ two passes differ:
   trusted parent anchor by the caller; a missing or misplaced row makes
   that match fail, so a complete, correctly-placed witness is required.
 * **Post-execution (new-root) pass** — re-walks against the post-block
-  values to recompute the root. The tables already exist, so it only
-  advances the counters (no appends) and skips the path checks.
+  values to recompute the root, and **inserts keys created during the
+  block**. As of v4 the encoder is witness-only and does not pre-emit
+  leaves for created keys; the guest navigates `keccak256(key)` in the node
+  array and places the leaf at an `Empty` slot or splits a colliding sibling
+  into a fresh branch. Deletion is not structural — a zeroed account/slot
+  becomes empty and the branch folds. (A child referencing the empty-trie
+  root is emitted as `Op::Empty`, so a first write into empty storage is an
+  insert, not a fatal.)
 
 Read-only-ness is **derived dynamically**, not declared on the wire:
 a leaf is read-only iff its original value equals its current value; a

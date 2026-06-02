@@ -595,18 +595,19 @@ StateRoot::StateRoot(const uint8_t*& cursor,
     num_witness_accounts_ = num_accounts;
     num_witness_storages_ = num_storages;
 
-    // Pre-size each table to the witness count PLUS a slack for keys created
-    // during execution, so created rows append in-place (no realloc → stable
-    // View / leaf pointers). Creating an account costs >= ~12.5k gas and a
-    // fresh storage slot >= ~20k gas, and total gas <= gas_limit, so
-    // gas_limit/10000 is a sound upper bound on created rows — BUT test
-    // fixtures set absurd gas_limits (e.g. 1e14), so cap the slack at a value
-    // no realistic block reaches (65536 created keys needs >1.6e9 gas of
-    // actual work). `append` still fatals if the slack is somehow exceeded,
-    // plus a small constant floor for tiny-gas blocks.
+    // Pre-size each table to the witness count PLUS a slack for rows
+    // appended during execution, so they append in-place (no realloc →
+    // stable View / leaf pointers). Rows are appended for keys CREATED this
+    // block and for witness-absent accounts merely ACCESSED (an empty row,
+    // so EIP-2929 warmth can be tracked). The cheapest such event is a cold
+    // account access (~2600 gas), and total gas <= gas_limit, so
+    // gas_limit/2500 is a sound upper bound — BUT test fixtures set absurd
+    // gas_limits (e.g. 1e14), so cap the slack at a value no realistic block
+    // reaches. `append` still fatals if the slack is somehow exceeded, plus
+    // a small constant floor for tiny-gas blocks.
     constexpr uint64_t kMaxCreatedSlack = 1u << 16;  // 65536
     const uint64_t slack =
-        std::min<uint64_t>(gas_limit / 10000 + 64, kMaxCreatedSlack);
+        std::min<uint64_t>(gas_limit / 2500 + 64, kMaxCreatedSlack);
     accounts_.reserve(num_accounts + slack);
     storages_.reserve(num_storages + slack);
 

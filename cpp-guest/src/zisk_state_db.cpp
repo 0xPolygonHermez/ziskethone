@@ -278,7 +278,7 @@ bool ZiskStateDB::selfdestruct(const evmc::address& addr,
     //
     // All field clears go through the journal so a revert of the
     // surrounding frame restores the contract intact.
-    const size_t src_idx = accounts_.index_of(addr);
+    const size_t src_idx = ensure_account(addr);
     const bool same_tx_created = created_this_tx_idx_.count(src_idx) != 0;
 
     if (addr == beneficiary) {
@@ -296,7 +296,7 @@ bool ZiskStateDB::selfdestruct(const evmc::address& addr,
     }
 
     // Log + transfer balance.
-    const size_t dst_idx = accounts_.index_of(beneficiary);
+    const size_t dst_idx = ensure_account(beneficiary);
     journal_.log_balance(src_idx, accounts_.balance_at(src_idx),
                          accounts_.last_tx_idx_at(src_idx));
     journal_.log_balance(dst_idx, accounts_.balance_at(dst_idx),
@@ -338,6 +338,19 @@ void ZiskStateDB::commit_dynamic_storage() noexcept {
     // their owning account's storage subtree by calculate_new_state_root.
     // No journaling: the tx has committed and no revert crosses the boundary.
     for (const auto& [addr, inner] : dynamic_storage_.entries()) {
+        // Skip slots whose owning account ended empty / absent: an empty
+        // account (nonce=0, balance=0, code=EMPTY) is removed by EIP-161
+        // along with its storage, so its slots must not enter the trie. An
+        // account never added to the table is empty by definition.
+        if (!accounts_.contains(addr)) {
+            continue;
+        }
+        const size_t a_idx = accounts_.index_of(addr);
+        if (is_empty_account(accounts_.nonce_at(a_idx),
+                             accounts_.balance_at(a_idx),
+                             accounts_.code_hash_at(a_idx))) {
+            continue;
+        }
         for (const auto& [pos, slot] : inner) {
             if (slot.value == evmc::bytes32{}) {
                 continue;
@@ -502,22 +515,13 @@ evmc_access_status ZiskStateDB::access_account(const evmc::address& addr) noexce
     if (evmone::state::is_precompile(active_revision(), addr)) {
         return EVMC_ACCESS_WARM;
     }
-    // Soft-phantom: if the address isn't in our table, neither the
-    // prestate tracer nor the execution witness surfaced it (e.g. an
-    // EXTCODESIZE in a failed/OOG'd frame — see block 25192931).
-    // Return COLD without warming. evmone's call-sites that use
-    // access_account (EXTCODESIZE/EXTCODEHASH/BALANCE/CALL/etc.)
-    // perform the cold-access gas check immediately after; if gas is
-    // insufficient the opcode OOGs without invoking the downstream
-    // getter (get_code_size/get_balance/...). If gas IS sufficient,
-    // the getter will be invoked next and fatal on the missing addr —
-    // by design, to surface a real input-completeness gap rather than
-    // silently return wrong values when the chain account might have
-    // non-default code/balance.
-    if (!accounts_.contains(addr)) {
-        return EVMC_ACCESS_COLD;
-    }
-    const size_t idx      = accounts_.index_of(addr);
+    // A witness-absent address is non-existent (empty) — but we still must
+    // track its EIP-2929 warm/cold state across accesses within the tx
+    // (e.g. a delegate target read twice: cold then warm). `ensure_account`
+    // gives it an empty table row so the normal warm machinery (below)
+    // applies; the empty row is skipped by the new-root walk, so it doesn't
+    // enter the trie.
+    const size_t idx      = ensure_account(addr);
     const bool   was_warm = accounts_.is_warm_at(idx, tx_counter_);
     if (!was_warm) {
         // Journal the cold→warm transition so a reverted EVM frame
@@ -612,6 +616,14 @@ void ZiskStateDB::execute_block(const Transactions& transactions) noexcept {
     pre_execute_block ();
     process_transactions(transactions);
     post_execute_block();
+
+    // Commit every surviving fresh-account slot (block-original 0) from the
+    // dynamic scratchpad into the static `Storages` table so the new-root
+    // walk inserts them. Done ONCE at block-end — captures the pre-block
+    // (EIP-2935/4788) and post-block (EIP-7002/7251) system-call writes,
+    // which run outside the tx loop. Same-tx-SELFDESTRUCT'd slots were
+    // already dropped by erase_account, so they aren't committed.
+    commit_dynamic_storage();
 
     // Receipts trie root: built from the finalized tx_receipts_, one
     // leaf per tx keyed by RLP(tx_index).
@@ -729,7 +741,7 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
 
     // 1. Derive the new contract address. Sender's nonce *before* the
     //    create-time increment is the input to the CREATE hash.
-    const size_t   sender_idx       = accounts_.index_of(msg.sender);
+    const size_t   sender_idx       = ensure_account(msg.sender);
     const uint64_t sender_nonce_pre = accounts_.nonce_at(sender_idx);
     const auto     new_addr         =
         derive_create_address(msg, sender_nonce_pre, init_code, init_size);
@@ -1014,7 +1026,7 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         set_tx_context(build_per_tx_context(tx, blob_hashes, initcodes_vec));
 
         // Pre-EVM accounting (NOT journaled — survives EVM revert).
-        const size_t  sender_idx    = accounts_.index_of(tx.sender());
+        const size_t  sender_idx    = ensure_account(tx.sender());
         const int64_t intrinsic_gas = apply_pre_evm_accounting(tx, sender_idx);
 
         // EIP-7702 authorization list (Type-4 only). Returns the
@@ -1044,13 +1056,6 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         // See pending_destruct_ in the header for the rationale.
         apply_pending_destructs();
 
-        // Commit any surviving fresh-account slots (block-original 0) from
-        // the per-tx dynamic scratchpad into the static `Storages` table so
-        // the post-block new-root walk can insert them. Runs AFTER
-        // apply_pending_destructs, so same-tx-SELFDESTRUCT'd slots (already
-        // erased) are not committed.
-        commit_dynamic_storage();
-
         // Detach tracer after the traced tx so later txs don't trace.
         if (trace_env != nullptr && i == static_cast<size_t>(std::atoi(trace_env))) {
             vm_ev->remove_tracers();
@@ -1068,14 +1073,12 @@ void ZiskStateDB::pre_warm_for_tx(const Transactions::View& tx) noexcept {
         if (evmone::state::is_precompile(active_revision(), a)) {
             return;
         }
-        // EIP-2930 lets a tx pre-declare addrs/slots it might touch
-        // but never actually access (paying for the warming up front
-        // is the trade-off). If our prestate doesn't have the addr —
-        // because the EVM never reached it — skip; nothing to warm.
-        if (!accounts_.contains(a)) {
-            return;
-        }
-        const size_t idx = accounts_.index_of(a);
+        // EIP-2930 lets a tx pre-declare addrs it might touch. A
+        // witness-absent address is empty; `ensure_account` gives it a row
+        // so its warmth can be tracked (matching the static branch), so the
+        // first real access is WARM. The empty row is skipped by the
+        // new-root walk.
+        const size_t idx = ensure_account(a);
         accounts_.mark_touched_at(idx, tx_counter_);
     };
 
@@ -1127,7 +1130,12 @@ void ZiskStateDB::pre_warm_for_tx(const Transactions::View& tx) noexcept {
                 evmc::bytes32 slot;
                 std::memcpy(slot.bytes, k.payload.data(), 32);
                 if (!storages_.contains(a, slot)) {
-                    continue;  // unused access-list slot; skip.
+                    // Witness-absent access-list slot (block-original 0):
+                    // pre-warm it in the dynamic table so its first SLOAD/
+                    // SSTORE is WARM (EIP-2930). Mirrors the static branch
+                    // (not journaled — access-list warming is tx-initial).
+                    dynamic_storage_.mark_touched(a, slot, tx_counter_);
+                    continue;
                 }
                 const size_t sidx = storages_.index_of(a, slot);
                 storages_.mark_touched_at(sidx, tx_counter_);
@@ -1406,23 +1414,12 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item&          auth
         verify_signature_and_get_signer(pk_span.data(),
                                         a_hash, a_r, a_s);
 
-    // Witness-completeness: a well-formed auth signature deterministically
-    // recovers `signer` from public inputs (chain_id, address, nonce, r, s,
-    // v). The prover knows this address in advance, so the prestate MUST
-    // include it. A "soft skip" here would be exploitable: a malicious
-    // prover could omit `signer` from accounts_ and substitute Op::Hash
-    // with the honest parent/post leaf hashes (both public-chain-derivable),
-    // causing cpp-guest to silently drop the auth while the state-root
-    // walk still matches the canonical roots — i.e., the proof would
-    // attest a different STF than consensus's. Honest input-gen injects
-    // every recovered signer in both offline mode (rust-input-gen/src/
-    // enrich.rs `inject_tx_addresses`) and online mode, so this fatal
-    // only fires on an incomplete or adversarial witness.
-    if (!accounts_.contains(signer)) {
-        fatal("EIP-7702: recovered authority address absent from "
-              "accounts table — witness incomplete or adversarial");
-    }
-    const size_t signer_idx = accounts_.index_of(signer);
+    // A well-formed auth signature deterministically recovers `signer`. If
+    // the witness didn't reveal it, it's a fresh authority with empty
+    // block-state — `ensure_account` appends an empty row and the new-root
+    // pass inserts it (fataling if its trie path is an unrevealed Hash, so a
+    // prover can't hide a real account behind Op::Hash to drop the auth).
+    const size_t signer_idx = ensure_account(signer);
 
     // EIP-7702: refuse to bump if signer's nonce is already at the
     // u64 ceiling — the bump would overflow. reth applies this guard
@@ -1540,7 +1537,7 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
         msg.recipient = new_addr;
         const auto entry_code = tx.data();
 
-        const size_t new_idx = accounts_.index_of(new_addr);
+        const size_t new_idx = ensure_account(new_addr);
         // EIP-684 collision: if the target already has a nonce or
         // code, the CREATE fails with all gas consumed.
         if (accounts_.nonce_at(new_idx) != 0 ||
@@ -1751,7 +1748,7 @@ uint64_t ZiskStateDB::settle_tx_gas(const Transactions::View& tx,
         const auto fee_u =
             intx::uint256{static_cast<uint64_t>(gas_used)} * priority_u;
         const size_t coinbase_idx =
-            accounts_.index_of(consensus_.beneficiary());
+            ensure_account(consensus_.beneficiary());
         const auto bal_u =
             intx::be::load<intx::uint256>(accounts_.balance_at(coinbase_idx));
         accounts_.set_balance_at(coinbase_idx,
@@ -1824,7 +1821,7 @@ void ZiskStateDB::credit_block_reward() noexcept {
     if (!is_pow) return;
 
     const auto reward_u = intx::uint256{2} * intx::uint256{1'000'000'000'000'000'000ULL};
-    const size_t coinbase_idx = accounts_.index_of(consensus_.beneficiary());
+    const size_t coinbase_idx = ensure_account(consensus_.beneficiary());
     const auto bal_u =
         intx::be::load<intx::uint256>(accounts_.balance_at(coinbase_idx));
     accounts_.set_balance_at(coinbase_idx,
@@ -1839,7 +1836,7 @@ void ZiskStateDB::credit_withdrawals() noexcept {
     // amounts are in gwei; balances are in wei.
     const auto gwei_to_wei = intx::uint256{1'000'000'000};
     for (const auto& w : consensus_.withdrawals()) {
-        const size_t idx = accounts_.index_of(w.address());
+        const size_t idx = ensure_account(w.address());
         const auto   bal_u =
             intx::be::load<intx::uint256>(accounts_.balance_at(idx));
         const auto credit_u =

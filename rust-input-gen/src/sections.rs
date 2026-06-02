@@ -18,6 +18,10 @@ use crate::writer::Writer;
 
 /// On-wire format version, written in the 4 bytes after the magic.
 /// Must match the guest's `kVersion` in `cpp-guest/include/zeg/binary_format.hpp`.
+/// v4: witness-only StateRoot — the encoder transcribes the pre-state MPT
+/// straight from the execution witness and no longer pre-emits leaves for
+/// keys created during the block (the guest inserts them). Byte layout is
+/// unchanged from v3.
 /// v3: dropped the Accounts/Storages sections; the StateRoot section starts
 /// with three u64 counts and each `Op::Leaf` carries its key + block-start
 /// values, so the guest builds both tables during the old-root walk.
@@ -26,7 +30,7 @@ use crate::writer::Writer;
 /// derives read-only-ness dynamically (original == current).
 /// v1: StateRoot `Op::Leaf` carries no index (keccak-sorted tables +
 /// counter-derived index in the guest).
-pub const FORMAT_VERSION: u32 = 3;
+pub const FORMAT_VERSION: u32 = 4;
 
 /// File magic prefix (8 bytes): 4 B ASCII `"ZEG0"` + 4 B little-endian
 /// format version, which also keeps the cursor 8-byte aligned for the

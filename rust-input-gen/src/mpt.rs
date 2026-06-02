@@ -229,9 +229,13 @@ fn follow_child<'a>(
     }
 }
 
-/// Minimal RLP encoder — only used to materialise inline children we
-/// already have as a decoded `Rlp::List`. We never write trees from
-/// scratch so this stays small.
+/// Minimal RLP encoder — used to materialise inline children we already
+/// have as a decoded `Rlp`. We never write trees from scratch so this
+/// stays small.
+pub fn rlp_encode(item: &Rlp<'_>) -> Vec<u8> {
+    encode(item)
+}
+
 fn encode(item: &Rlp<'_>) -> Vec<u8> {
     match item {
         Rlp::Bytes(b) => encode_bytes(b),
@@ -287,14 +291,58 @@ fn leak(v: Vec<u8>) -> &'static [u8] {
 /// Decode an Ethereum account leaf value: `RLP([nonce, balance, storageRoot, codeHash])`.
 /// Returns `storageRoot`.
 pub fn account_storage_root(value: &[u8]) -> Result<[u8; 32]> {
+    let (_, balance, root, _) = decode_account(value)?;
+    let _ = balance;
+    Ok(root)
+}
+
+/// Decode an Ethereum account leaf value `RLP([nonce, balance, storageRoot,
+/// codeHash])` into `(nonce, balance_be32, storageRoot, codeHash)`. `nonce`
+/// and `balance` are left-padded big-endian; `storageRoot`/`codeHash` are
+/// exactly 32 bytes.
+pub fn decode_account(value: &[u8]) -> Result<(u64, [u8; 32], [u8; 32], [u8; 32])> {
     let (item, _) = Rlp::decode(value)?;
     let fields = item.as_list()?;
     if fields.len() != 4 {
         return Err(anyhow!("account leaf: expected 4 fields, got {}", fields.len()));
     }
+    let nonce_bytes = fields[0].as_bytes()?;
+    if nonce_bytes.len() > 8 {
+        return Err(anyhow!("account leaf: nonce is {} bytes, want <= 8", nonce_bytes.len()));
+    }
+    let mut nonce = 0u64;
+    for &b in nonce_bytes {
+        nonce = (nonce << 8) | (b as u64);
+    }
+    let balance = left_pad_32(fields[1].as_bytes()?)?;
     let root = fields[2].as_bytes()?;
     if root.len() != 32 {
         return Err(anyhow!("account leaf: storageRoot is {} bytes, want 32", root.len()));
     }
-    Ok(<[u8; 32]>::try_from(root).unwrap())
+    let code_hash = fields[3].as_bytes()?;
+    if code_hash.len() != 32 {
+        return Err(anyhow!("account leaf: codeHash is {} bytes, want 32", code_hash.len()));
+    }
+    Ok((
+        nonce,
+        balance,
+        <[u8; 32]>::try_from(root).unwrap(),
+        <[u8; 32]>::try_from(code_hash).unwrap(),
+    ))
+}
+
+/// Decode a storage-trie leaf value `RLP(u256)` into a left-padded 32-byte
+/// big-endian value.
+pub fn decode_storage_value(value: &[u8]) -> Result<[u8; 32]> {
+    let (item, _) = Rlp::decode(value)?;
+    left_pad_32(item.as_bytes()?)
+}
+
+fn left_pad_32(bytes: &[u8]) -> Result<[u8; 32]> {
+    if bytes.len() > 32 {
+        return Err(anyhow!("value is {} bytes, want <= 32", bytes.len()));
+    }
+    let mut out = [0u8; 32];
+    out[32 - bytes.len()..].copy_from_slice(bytes);
+    Ok(out)
 }

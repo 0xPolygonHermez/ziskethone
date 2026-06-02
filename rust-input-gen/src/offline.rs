@@ -124,36 +124,15 @@ pub fn build_binary(sources: &OfflineSources, output: &Path) -> Result<()> {
     sections::write_transactions(&mut w, &sources.current)?;
     sections::write_contracts(&mut w, &prestate, &sources.diff, &sources.current)?;
     sections::write_previous_blocks(&mut w, &sources.ancestors);
-    // The Accounts and Storages sections are gone — their values now ride
-    // inside the StateRoot `Op::Leaf` payloads, and the guest builds both
-    // tables during the old-root walk. `state_root::write` sources those
-    // values from `prestate`/`diff` exactly as `write_accounts` /
-    // `write_storages` used to.
-    //
-    // `force_writable_addrs` / `system_contract_slots` previously drove the
-    // per-subtree NodeR/NodeRW choice; with a single `Branch` opcode that
-    // distinction is gone, but they're still threaded through (the encoder
-    // ignores the derived `is_write`).
-    let mut force_writable_addrs: std::collections::BTreeSet<alloy::primitives::Address> =
-        std::collections::BTreeSet::new();
-    force_writable_addrs.insert(sources.current.header.beneficiary);
-    if let Some(wds) = &sources.current.withdrawals {
-        for wd in wds.iter() {
-            force_writable_addrs.insert(wd.address);
-        }
-    }
-    for (addr, _) in &sources.system_contract_slots {
-        force_writable_addrs.insert(*addr);
-    }
+    // The StateRoot trie hints are now witness-only: `state_root::write`
+    // transcribes the pre-state MPT straight from `witness.state` +
+    // `witness.keys`, emitting every revealed leaf and leaving created keys
+    // for the guest to insert. It no longer consumes prestate/diff/touch.
     state_root::write(
         &mut w,
         sources.parent.header.state_root,
         &sources.witness.state,
-        &touch,
-        &sources.diff,
-        &prestate,
-        &force_writable_addrs,
-        &sources.system_contract_slots,
+        &sources.witness.keys,
     )?;
 
     let bytes = w.into_bytes();

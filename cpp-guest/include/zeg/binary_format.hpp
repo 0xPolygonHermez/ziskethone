@@ -12,6 +12,11 @@ namespace zeg {
 
 constexpr uint32_t kMagic   = 0x3047455Au; // "ZEG0" little-endian
 // Format version, stored in the 4 bytes immediately after the magic.
+// v4: StateRoot trie hints are now WITNESS-ONLY — the encoder transcribes
+//     the pre-state MPT straight from debug_executionWitness and no longer
+//     pre-emits leaves for keys created during the block; the guest inserts
+//     them into the node array during the new-root pass. Byte layout is
+//     unchanged from v3, but a v4 stream requires the inserting guest.
 // v3: dropped the Accounts/Storages sections — the StateRoot section now
 //     starts with three u64 counts (numberOfNodes, numberOfAccounts,
 //     numberOfStorages) and each `Op::Leaf` carries its key + block-start
@@ -22,7 +27,7 @@ constexpr uint32_t kMagic   = 0x3047455Au; // "ZEG0" little-endian
 //     guest derives read-only-ness dynamically (original == current).
 // v1: StateRoot `Op::Leaf` carries no index; keccak-sorted tables.
 // The guest rejects any version != kVersion.
-constexpr uint32_t kVersion = 3;
+constexpr uint32_t kVersion = 4;
 
 enum class SectionKind : uint32_t {
     ParentHeader      = 1,
