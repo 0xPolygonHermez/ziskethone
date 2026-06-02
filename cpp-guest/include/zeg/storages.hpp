@@ -25,6 +25,8 @@
 
 #include <evmc/evmc.hpp>
 
+#include "zeg/trie_node.hpp"
+
 namespace zeg {
 
 class Storages {
@@ -86,6 +88,27 @@ public:
     const evmc::bytes32&  position_at    (size_t idx) const noexcept;
     evmc::bytes32         value_at       (size_t idx) const noexcept;
     const evmc::bytes32&  value_orig_at  (size_t idx) const noexcept;
+
+    // ----- storage-trie leaf node (owned per row) -----
+    //
+    // Each row caches the `NodeR` result of its storage-trie leaf and the
+    // keccak(position) used to rebuild the leaf path. `build_value`
+    // (old-root pass) builds the cached leaf from the ORIGINAL value at path
+    // `nib`; `update_value` (new-root pass) recomputes it ONLY if the slot
+    // value changed. Both return a pointer to the row's cached union.
+    const NodeR* build_value(size_t idx,
+                             const std::vector<uint8_t>& nib,
+                             const evmc::bytes32& pos_hash);
+    const NodeR* update_value(size_t idx,
+                              const std::vector<uint8_t>& nib);
+
+    const NodeR* cached_at(size_t idx) const noexcept { return &leaf_[idx].cached; }
+    const evmc::bytes32& pos_hash_at(size_t idx) const noexcept { return leaf_[idx].pos_hash; }
+
+    // True iff the slot value did not change since block start.
+    bool value_unchanged_at(size_t idx) const noexcept {
+        return value_orig_at(idx) == value_at(idx);
+    }
 
     // Look up the array index of (addr, position). Aborts the guest via
     // zeg::fatal if the slot isn't in the table — the guest is supposed
@@ -225,13 +248,20 @@ private:
         }
     };
 
+    // Per-row storage-trie leaf cache (parallel to `originals_`).
+    struct LeafCache {
+        NodeR         cached{};    // storage-leaf NodeR result
+        evmc::bytes32 pos_hash{};  // keccak(position) — for the leaf path
+    };
+
     // Owned backing buffer for the original records. Pre-sized exactly by
     // `reserve`; never reallocated, so `View` pointers stay valid.
     std::vector<uint8_t> record_store_;
     uint64_t             capacity_ = 0;
 
-    std::vector<View> originals_;
-    std::vector<Mods> mods_;
+    std::vector<View>      originals_;
+    std::vector<Mods>      mods_;
+    std::vector<LeafCache> leaf_;
     std::unordered_map<Key, size_t, KeyHash, KeyEq> index_;
     // address -> its storage indices (see slots_of).
     std::unordered_map<evmc::address, std::vector<size_t>, AddressHash, AddressEq>

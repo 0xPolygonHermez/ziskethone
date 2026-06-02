@@ -28,6 +28,8 @@
 
 #include <evmc/evmc.hpp>
 
+#include "zeg/trie_node.hpp"
+
 namespace zeg {
 
 class Accounts {
@@ -79,6 +81,40 @@ public:
     const evmc::uint256be& balance_orig_at  (size_t idx) const noexcept;
     uint64_t              nonce_orig_at     (size_t idx) const noexcept;
     const evmc::bytes32&  code_hash_orig_at (size_t idx) const noexcept;
+
+    // ----- state-trie leaf node (owned per row) -----
+    //
+    // Each row caches the `NodeR` result of its account-trie leaf, the
+    // keccak(address) used to rebuild the leaf path, and a `Child` link to
+    // its storage-subtree root node. `StateRoot` fills these during the
+    // old-root walk and consumes them during the new-root walk.
+    //
+    // `build_value` (old-root pass) builds the cached leaf from the ORIGINAL
+    // fields at path `nib`; `update_value` (new-root pass) recomputes it
+    // ONLY if the original fields differ from the current ones or the passed
+    // storage root differs from the cached one. Both return a pointer to the
+    // row's cached union for the tree walk to consume. `nib` is the leaf's
+    // remaining path nibbles; `storage_root` is the hash of the account's
+    // storage subtree at the relevant value set.
+    const NodeR* build_value(size_t idx,
+                             const std::vector<uint8_t>& nib,
+                             const evmc::bytes32& addr_hash,
+                             Child storage_root_child,
+                             const evmc::bytes32& storage_root);
+    const NodeR* update_value(size_t idx,
+                              const std::vector<uint8_t>& nib,
+                              const evmc::bytes32& storage_root);
+
+    const NodeR* cached_at(size_t idx) const noexcept { return &leaf_[idx].cached; }
+    Child storage_root_child_at(size_t idx) const noexcept { return leaf_[idx].storage_root; }
+    const evmc::bytes32& addr_hash_at(size_t idx) const noexcept { return leaf_[idx].addr_hash; }
+
+    // True iff none of nonce / balance / code_hash changed since block start.
+    bool fields_unchanged_at(size_t idx) const noexcept {
+        return nonce_orig_at(idx)     == nonce_at(idx)
+            && balance_orig_at(idx)   == balance_at(idx)
+            && code_hash_orig_at(idx) == code_hash_at(idx);
+    }
 
     // ----- write accessors (mark the field dirty) -----
     void set_balance   (const evmc::address& addr, const evmc::uint256be& v,
@@ -205,14 +241,23 @@ private:
         }
     };
 
+    // Per-row state-trie leaf cache (parallel to `originals_`). Owned by
+    // the table so the leaf recompute lives next to the values it reads.
+    struct LeafCache {
+        NodeR         cached{};        // account-leaf NodeR result
+        evmc::bytes32 addr_hash{};     // keccak(address) — for the leaf path
+        Child         storage_root{};  // link to the storage-subtree root node
+    };
+
     // Owned backing buffer for the original records. Pre-sized exactly by
     // `reserve`; never reallocated afterwards, so the `View` pointers in
     // `originals_` stay valid for the lifetime of the table.
     std::vector<uint8_t> record_store_;
     uint64_t             capacity_ = 0;
 
-    std::vector<View> originals_;
-    std::vector<Mods> mods_;
+    std::vector<View>      originals_;
+    std::vector<Mods>      mods_;
+    std::vector<LeafCache> leaf_;
     std::unordered_map<evmc::address, size_t, AddressHash, AddressEq> index_;
 };
 

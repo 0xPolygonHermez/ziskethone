@@ -12,6 +12,7 @@ void Storages::reserve(uint64_t count) {
     capacity_ = count;
     originals_.reserve(count);
     mods_.reserve(count);
+    leaf_.reserve(count);
     index_.reserve(count);
 }
 
@@ -28,9 +29,36 @@ size_t Storages::append(const evmc::address& address,
     std::memcpy(rec + View::kValueOffset,    value.bytes,    sizeof(value.bytes));
     originals_.push_back(View{rec});
     mods_.push_back(Mods{});
+    leaf_.push_back(LeafCache{});
     index_.emplace(Key{address, position}, idx);
     addr_slots_[address].push_back(idx);
     return idx;
+}
+
+const NodeR* Storages::build_value(size_t idx,
+                                   const std::vector<uint8_t>& nib,
+                                   const evmc::bytes32& pos_hash) {
+    LeafCache& lc = leaf_[idx];
+    lc.pos_hash = pos_hash;
+    if (is_zero_value(value_orig_at(idx))) {
+        lc.cached.emplace<EmptyR>();
+    } else {
+        lc.cached.emplace<StorageLeafR>(nib, idx);
+    }
+    return &lc.cached;
+}
+
+const NodeR* Storages::update_value(size_t idx, const std::vector<uint8_t>& nib) {
+    LeafCache& lc = leaf_[idx];
+    if (value_unchanged_at(idx)) {
+        return &lc.cached;
+    }
+    if (is_zero_value(value_at(idx))) {
+        lc.cached.emplace<EmptyR>();
+    } else {
+        lc.cached.emplace<StorageLeafR>(nib, idx);
+    }
+    return &lc.cached;
 }
 
 const std::vector<size_t>& Storages::slots_of(

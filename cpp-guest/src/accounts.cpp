@@ -15,6 +15,7 @@ void Accounts::reserve(uint64_t count) {
     capacity_ = count;
     originals_.reserve(count);
     mods_.reserve(count);
+    leaf_.reserve(count);
     index_.reserve(count);
 }
 
@@ -33,8 +34,48 @@ size_t Accounts::append(const evmc::address&   address,
     std::memcpy(rec + View::kCodeHashOffset, code_hash.bytes, sizeof(code_hash.bytes));
     originals_.push_back(View{rec});
     mods_.push_back(Mods{});
+    leaf_.push_back(LeafCache{});
     index_.emplace(address, idx);
     return idx;
+}
+
+const NodeR* Accounts::build_value(size_t idx,
+                                   const std::vector<uint8_t>& nib,
+                                   const evmc::bytes32& addr_hash,
+                                   Child storage_root_child,
+                                   const evmc::bytes32& storage_root) {
+    LeafCache& lc = leaf_[idx];
+    lc.addr_hash    = addr_hash;
+    lc.storage_root = storage_root_child;
+    // Build from the ORIGINAL (block-start) fields.
+    if (is_empty_account(nonce_orig_at(idx), balance_orig_at(idx), code_hash_orig_at(idx))) {
+        lc.cached.emplace<EmptyR>();
+    } else {
+        lc.cached.emplace<AccountLeafR>(nib, idx, storage_root);
+    }
+    return &lc.cached;
+}
+
+const NodeR* Accounts::update_value(size_t idx,
+                                    const std::vector<uint8_t>& nib,
+                                    const evmc::bytes32& storage_root) {
+    LeafCache& lc = leaf_[idx];
+    // Fast path: nothing the leaf depends on changed → reuse the cached node.
+    if (fields_unchanged_at(idx)) {
+        if (const auto* al = std::get_if<AccountLeafR>(&lc.cached)) {
+            if (al->storage_root == storage_root) return &lc.cached;
+        } else {
+            // Cached is EmptyR and the fields are unchanged → still empty.
+            return &lc.cached;
+        }
+    }
+    // Recompute from the CURRENT fields + storage root.
+    if (is_empty_account(nonce_at(idx), balance_at(idx), code_hash_at(idx))) {
+        lc.cached.emplace<EmptyR>();
+    } else {
+        lc.cached.emplace<AccountLeafR>(nib, idx, storage_root);
+    }
+    return &lc.cached;
 }
 
 size_t Accounts::index_of(const evmc::address& addr) const {
