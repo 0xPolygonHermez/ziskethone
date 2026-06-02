@@ -25,10 +25,10 @@ namespace zeg {
 class Accounts {
 public:
     // Wire-format record size in bytes. Documented in `View` below.
-    static constexpr uint64_t kRecordSize = 136;
+    static constexpr uint64_t kRecordSize = 128;
 
     // Build the table by reading a `u64` count from `cursor` followed
-    // by `count` consecutive 136-byte records. Advances `cursor` past
+    // by `count` consecutive 128-byte records. Advances `cursor` past
     // every byte consumed. The buffer must outlive this instance.
     explicit Accounts(const uint8_t*& cursor);
 
@@ -60,10 +60,6 @@ public:
     // updated as a side effect of recomputing the storage trie, never via
     // a setter on Accounts, so this getter returns the original.
     const evmc::bytes32&  storage_root_at   (size_t idx) const noexcept;
-    // True iff the input stream marked this account read-only (e.g. a
-    // prestate-only access that must not be modified). The flag lives
-    // in the stream; there is no setter.
-    bool                  is_read_only_at   (size_t idx) const noexcept;
 
     // ----- write accessors (mark the field dirty) -----
     void set_balance   (const evmc::address& addr, const evmc::uint256be& v,
@@ -120,15 +116,8 @@ public:
 
     uint64_t size() const noexcept { return originals_.size(); }
 
-    // Walk every account flagged read-only in the input stream and
-    // assert balance / nonce / code_hash still match their originals.
-    // Read-only accounts are part of the witness but the prover claims
-    // they are not mutated; if execution wrote to one, the new state
-    // root would diverge silently. Aborts via zeg::fatal on mismatch.
-    void check_read_only_unchanged() const;
-
 private:
-    // Zero-copy view into one 136-byte record. Wire layout:
+    // Zero-copy view into one 128-byte record. Wire layout:
     //   offset  size  field
     //        0   20   address       (raw bytes)
     //       20    4   pad           (keeps cursor 8-aligned past address)
@@ -136,8 +125,7 @@ private:
     //       56    8   nonce         (little-endian u64)
     //       64   32   storage_root  (keccak hash)
     //       96   32   code_hash     (keccak hash)
-    //      128    8   is_read_only  (u64, 1 = true, 0 = false)
-    //      136         end of record
+    //      128         end of record
     struct View {
         const uint8_t* data;
 
@@ -146,7 +134,6 @@ private:
         static constexpr size_t kNonceOffset       = 56;
         static constexpr size_t kStorageRootOffset = 64;
         static constexpr size_t kCodeHashOffset    = 96;
-        static constexpr size_t kIsReadOnlyOffset  = 128;
 
         const evmc::address& address() const noexcept {
             return *reinterpret_cast<const evmc::address*>(data + kAddressOffset);
@@ -164,11 +151,6 @@ private:
         }
         const evmc::bytes32& code_hash() const noexcept {
             return *reinterpret_cast<const evmc::bytes32*>(data + kCodeHashOffset);
-        }
-        bool is_read_only() const noexcept {
-            uint64_t v;
-            std::memcpy(&v, std::assume_aligned<8>(data + kIsReadOnlyOffset), sizeof(v));
-            return v != 0;
         }
     };
 

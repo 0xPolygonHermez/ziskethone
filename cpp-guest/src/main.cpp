@@ -149,11 +149,6 @@ int main(int argc, char** argv) {
         zeg::fatal("pre-execution state root mismatch");
     }
 
-    // (The read-only-unchanged invariant — every is_read_only account /
-    //  slot must hold its block-start value — is enforced inside
-    //  StateRoot::calculate_new_state_root, just before it reuses the
-    //  cached read-only subtrees.)
-
     // DEBUG: full dump of post-execution state for Python MPT reference.
     if (std::getenv("ZEG_DUMP_ALL") != nullptr) {
         for (uint64_t i = 0; i < accounts.size(); ++i) {
@@ -166,7 +161,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, " ch=");
             const auto ch = accounts.code_hash_at(i);
             for (uint8_t b : ch.bytes) std::fprintf(stderr, "%02x", b);
-            std::fprintf(stderr, " ro=%d\n", (int)accounts.is_read_only_at(i));
+            std::fprintf(stderr, "\n");
         }
         for (uint64_t i = 0; i < storages.size(); ++i) {
             const auto& a = storages.address_at(i);
@@ -178,7 +173,7 @@ int main(int argc, char** argv) {
             for (uint8_t b : p.bytes) std::fprintf(stderr, "%02x", b);
             std::fprintf(stderr, " val=");
             for (uint8_t b : v.bytes) std::fprintf(stderr, "%02x", b);
-            std::fprintf(stderr, " ro=%d\n", (int)storages.is_read_only_at(i));
+            std::fprintf(stderr, "\n");
         }
     }
 

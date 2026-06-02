@@ -84,9 +84,6 @@ const evmc::bytes32& Accounts::code_hash_orig_at(size_t idx) const noexcept {
     return originals_[idx].code_hash();
 }
 
-bool Accounts::is_read_only_at(size_t idx) const noexcept {
-    return originals_[idx].is_read_only();
-}
 
 // ----- write accessors -----
 
@@ -150,30 +147,6 @@ void Accounts::set_warm_at(size_t idx, uint64_t tx_idx) noexcept {
     // `last_tx_idx` backward — used by the journal's rollback path
     // to restore the pre-write value.
     mods_[idx].last_tx_idx = tx_idx;
-}
-
-void Accounts::check_read_only_unchanged() const {
-    for (size_t i = 0; i < originals_.size(); ++i) {
-        if (!originals_[i].is_read_only()) continue;
-        if (balance_at(i)   != originals_[i].balance()) {
-            std::fprintf(stderr, "DBG read-only account mutated (balance) idx=%zu addr=0x", i);
-            for (uint8_t b : originals_[i].address().bytes) std::fprintf(stderr, "%02x", b);
-            std::fprintf(stderr, "\n");
-            fatal("Accounts::check_read_only_unchanged: balance mutated");
-        }
-        if (nonce_at(i)     != originals_[i].nonce()) {
-            std::fprintf(stderr, "DBG read-only account mutated (nonce) idx=%zu addr=0x", i);
-            for (uint8_t b : originals_[i].address().bytes) std::fprintf(stderr, "%02x", b);
-            std::fprintf(stderr, "\n");
-            fatal("Accounts::check_read_only_unchanged: nonce mutated");
-        }
-        if (code_hash_at(i) != originals_[i].code_hash()) {
-            std::fprintf(stderr, "DBG read-only account mutated (code_hash) idx=%zu addr=0x", i);
-            for (uint8_t b : originals_[i].address().bytes) std::fprintf(stderr, "%02x", b);
-            std::fprintf(stderr, "\n");
-            fatal("Accounts::check_read_only_unchanged: code_hash mutated");
-        }
-    }
 }
 
 } // namespace zeg

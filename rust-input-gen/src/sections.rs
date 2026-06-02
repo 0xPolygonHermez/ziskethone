@@ -19,9 +19,12 @@ use crate::writer::Writer;
 
 /// On-wire format version, written in the 4 bytes after the magic.
 /// Must match the guest's `kVersion` in `cpp-guest/include/zeg/binary_format.hpp`.
+/// v2: single `Op::Branch` opcode (no NodeR/NodeRW); `is_read_only` dropped
+/// from the Accounts (now 128 B) and Storages (now 88 B) records — the guest
+/// derives read-only-ness dynamically (original == current).
 /// v1: StateRoot `Op::Leaf` carries no index (keccak-sorted tables +
 /// counter-derived index in the guest).
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// File magic prefix (8 bytes): 4 B ASCII `"ZEG0"` + 4 B little-endian
 /// format version, which also keeps the cursor 8-byte aligned for the
@@ -255,19 +258,9 @@ fn keccak256(bytes: &[u8]) -> B256 {
 ///   * storage_root           ← **placeholder zeros** (filled in Phase 5
 ///                              via debug_executionWitness; eth_getProof
 ///                              is unusable on pruned nodes).
-///   * is_read_only           ← 1 iff the address was never written
-///                              (absent from `diff.pre ∪ diff.post`).
-///                              The block-level coinbase and every
-///                              withdrawal recipient are force-marked
-///                              writable: the prestate tracer in diff
-///                              mode misses priority-fee credits to
-///                              the coinbase and never reports EIP-4895
-///                              withdrawals (consensus-layer, outside
-///                              any tx), but the cpp-guest mutates the
-///                              balance of both, so leaving them
-///                              read-only would trip the invariant
-///                              check and silently embed stale values
-///                              in the post-state-root subtree cache.
+///
+/// `is_read_only` is no longer emitted — the guest derives read-only-ness
+/// dynamically by comparing each leaf's original and current values.
 pub fn write_accounts(
     w: &mut Writer,
     prestate: &Prestate,
@@ -275,24 +268,9 @@ pub fn write_accounts(
     touch: &TouchSet,
     block: &alloy::rpc::types::Block,
 ) -> Result<()> {
-    let mut written: BTreeSet<Address> = diff
-        .pre
-        .keys()
-        .chain(diff.post.keys())
-        .copied()
-        .collect();
-
-    // Coinbase: receives priority fees from every non-zero-gas tx, so
-    // its balance changes even though the prestate tracer may omit it.
-    written.insert(block.header.beneficiary);
-
-    // EIP-4895 withdrawal recipients: credited at the block boundary,
-    // not by any tx — so the prestate tracer never sees them.
-    if let Some(withdrawals) = &block.withdrawals {
-        for wd in withdrawals.iter() {
-            written.insert(wd.address);
-        }
-    }
+    // `block` was only used to derive `is_read_only` (coinbase + withdrawal
+    // recipients force-writable), which is no longer emitted.
+    let _ = block;
 
     w.u64_le(touch.addrs.len() as u64);
 
@@ -337,8 +315,8 @@ pub fn write_accounts(
         w.pad(32);
         // 96..128 code_hash
         w.bytes(code_hash.as_slice());
-        // 128..136 is_read_only (u64; 1 = true)
-        w.u64_le(if written.contains(addr) { 0 } else { 1 });
+        // end of record (128 B). `is_read_only` is no longer emitted — the
+        // guest derives read-only-ness dynamically (original == current).
     }
     w.assert_aligned();
     Ok(())
@@ -417,7 +395,7 @@ pub fn write_contracts(
 
 /// Section 5 — `Storages`.
 ///
-/// One 96-byte record per touched (address, slot). The slot set is
+/// One 88-byte record per touched (address, slot). The slot set is
 /// the union of every (addr, slot) seen in:
 ///   * prestate.storage              — read or written, value present.
 ///   * diff.pre.storage              — read AND written, value present.
@@ -426,14 +404,10 @@ pub fn write_contracts(
 ///                                      in prestate or diff.pre).
 ///
 /// Block-start value prefers prestate → diff.pre → zero. `is_read_only`
-/// is 1 iff the slot was never written
-/// (not in `diff.pre[*].storage ∪ diff.post[*].storage`).
-///
-/// `force_writable` is the set of (addr, slot) pairs the caller knows
-/// the cpp-guest will mutate outside of tx execution — currently the
-/// Pectra system contracts' deterministic slots (EIP-4788 / 2935 /
-/// 7002 / 7251), which the prestate tracer never sees because the
-/// pre/post-block system calls aren't transactions.
+/// is no longer emitted — the guest derives read-only-ness dynamically by
+/// comparing each slot's original and current values. `force_writable`
+/// (the Pectra system-contract slots the guest mutates outside of tx
+/// execution) is therefore unused but kept in the signature for now.
 pub fn write_storages(
     w: &mut Writer,
     prestate: &Prestate,
@@ -460,19 +434,9 @@ pub fn write_storages(
         }
     }
 
-    let mut written: BTreeSet<(Address, B256)> = BTreeSet::new();
-    for side in [&diff.pre, &diff.post] {
-        for (addr, info) in side {
-            for slot in info.storage.keys() {
-                written.insert((*addr, *slot));
-            }
-        }
-    }
-    // Pectra system contracts (EIP-4788 / 2935 / 7002 / 7251): the
-    // pre/post-block system calls write deterministic ring-buffer
-    // slots that no tx touches, so the prestate diff never reports
-    // them. Force-mark them writable.
-    written.extend(force_writable.iter().copied());
+    // `is_read_only` is no longer emitted, so the written-slot set and
+    // `force_writable` are no longer needed to derive it.
+    let _ = force_writable;
 
     w.u64_le(touch.slots.len() as u64);
     for (addr, slot) in &touch.slots {
@@ -481,7 +445,7 @@ pub fn write_storages(
         w.pad(4);
         w.bytes(slot.as_slice());
         w.bytes(value.as_slice());
-        w.u64_le(if written.contains(&(*addr, *slot)) { 0 } else { 1 });
+        // end of record (88 B) — no is_read_only.
     }
     w.assert_aligned();
     Ok(())

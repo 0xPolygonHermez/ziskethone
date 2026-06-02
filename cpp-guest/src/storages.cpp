@@ -115,22 +115,4 @@ const evmc::bytes32& Storages::value_orig_at(size_t idx) const noexcept {
     return originals_[idx].value();
 }
 
-bool Storages::is_read_only_at(size_t idx) const noexcept {
-    return originals_[idx].is_read_only();
-}
-
-void Storages::check_read_only_unchanged() const {
-    for (size_t i = 0; i < originals_.size(); ++i) {
-        if (!originals_[i].is_read_only()) continue;
-        if (value_at(i) != originals_[i].value()) {
-            std::fprintf(stderr, "DBG read-only slot mutated idx=%zu addr=0x", i);
-            for (uint8_t b : originals_[i].address().bytes)  std::fprintf(stderr, "%02x", b);
-            std::fprintf(stderr, " pos=0x");
-            for (uint8_t b : originals_[i].position().bytes) std::fprintf(stderr, "%02x", b);
-            std::fprintf(stderr, "\n");
-            fatal("Storages::check_read_only_unchanged: value mutated");
-        }
-    }
-}
-
 } // namespace zeg

@@ -12,11 +12,12 @@ namespace zeg {
 
 constexpr uint32_t kMagic   = 0x3047455Au; // "ZEG0" little-endian
 // Format version, stored in the 4 bytes immediately after the magic.
-// v1: StateRoot `Op::Leaf` carries no index — the Accounts/Storages
-// tables are keccak-sorted (trie-walk order) and the guest derives each
-// leaf's index from a running counter. v0 inputs (idx-in-stream) would
-// misparse, so the guest rejects any version != kVersion.
-constexpr uint32_t kVersion = 1;
+// v2: single `Op::Branch` opcode (no NodeR/NodeRW); `is_read_only` dropped
+//     from the Accounts (now 128 B) and Storages (now 88 B) records — the
+//     guest derives read-only-ness dynamically (original == current).
+// v1: StateRoot `Op::Leaf` carries no index; keccak-sorted tables.
+// The guest rejects any version != kVersion.
+constexpr uint32_t kVersion = 2;
 
 enum class SectionKind : uint32_t {
     ParentHeader      = 1,

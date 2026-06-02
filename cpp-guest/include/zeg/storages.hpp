@@ -24,10 +24,10 @@ namespace zeg {
 class Storages {
 public:
     // Wire-format record size in bytes. Documented in `View` below.
-    static constexpr uint64_t kRecordSize = 96;
+    static constexpr uint64_t kRecordSize = 88;
 
     // Build the table by reading a `u64` count from `cursor` followed
-    // by `count` consecutive 96-byte records. Advances `cursor` past
+    // by `count` consecutive 88-byte records. Advances `cursor` past
     // every byte consumed. The buffer must outlive this instance.
     explicit Storages(const uint8_t*& cursor);
 
@@ -68,9 +68,6 @@ public:
     const evmc::bytes32&  position_at    (size_t idx) const noexcept;
     evmc::bytes32         value_at       (size_t idx) const noexcept;
     const evmc::bytes32&  value_orig_at  (size_t idx) const noexcept;
-    // True iff the input stream marked this slot read-only. The flag
-    // lives in the stream; there is no setter.
-    bool                  is_read_only_at(size_t idx) const noexcept;
 
     // Look up the array index of (addr, position). Aborts the guest via
     // zeg::fatal if the slot isn't in the table — the guest is supposed
@@ -109,13 +106,6 @@ public:
     // smaller than the current one — `mark_touched_at` only bumps up).
     void                 set_warm_at(size_t idx, uint64_t tx_idx) noexcept;
 
-    // Walk every slot flagged read-only in the input stream and assert
-    // the current value still matches its original. Read-only slots
-    // are part of the witness but the prover claims they are not
-    // mutated; if execution wrote to one, the new storage trie would
-    // diverge silently. Aborts via zeg::fatal on mismatch.
-    void                 check_read_only_unchanged() const;
-
     // Value at the start of the tx that last touched this slot. Only
     // meaningful when `is_warm_at(idx, current_tx_idx) == true`.
     const evmc::bytes32& tx_original_at(size_t idx) const noexcept;
@@ -130,21 +120,19 @@ public:
     const std::vector<size_t>& slots_of(const evmc::address& addr) const noexcept;
 
 private:
-    // Zero-copy view into one 96-byte record. Wire layout:
+    // Zero-copy view into one 88-byte record. Wire layout:
     //   offset  size  field
     //        0   20   address       (raw bytes)
     //       20    4   pad           (keeps cursor 8-aligned past address)
     //       24   32   position      (storage slot key)
     //       56   32   value         (slot value)
-    //       88    8   is_read_only  (u64, 1 = true, 0 = false)
-    //       96         end of record
+    //       88         end of record
     struct View {
         const uint8_t* data;
 
         static constexpr size_t kAddressOffset    = 0;
         static constexpr size_t kPositionOffset   = 24;
         static constexpr size_t kValueOffset      = 56;
-        static constexpr size_t kIsReadOnlyOffset = 88;
 
         const evmc::address& address() const noexcept {
             return *reinterpret_cast<const evmc::address*>(data + kAddressOffset);
@@ -154,11 +142,6 @@ private:
         }
         const evmc::bytes32& value() const noexcept {
             return *reinterpret_cast<const evmc::bytes32*>(data + kValueOffset);
-        }
-        bool is_read_only() const noexcept {
-            uint64_t v;
-            std::memcpy(&v, std::assume_aligned<8>(data + kIsReadOnlyOffset), sizeof(v));
-            return v != 0;
         }
     };
 
