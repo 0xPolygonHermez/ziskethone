@@ -72,17 +72,18 @@ int main(int argc, char** argv) {
     const uint8_t* cursor = read_input_stream(argv[1]);
     const uint8_t* file_base = cursor - 8;  // back up past the magic+pad
 
-    // 2. Parse the six input-stream collections at main level. Stream-
-    //    order matters and must match the prover's write order:
-    //    contracts → accounts → storages → previous_blocks →
-    //    consensus_info → transactions. Each constructor consumes its
-    //    section and advances `cursor`.
+    // 2. Parse the input-stream collections at main level. Stream order
+    //    must match the prover's write order: consensus_info →
+    //    transactions → contracts → previous_blocks → StateRoot. The
+    //    Accounts and Storages tables are no longer separate sections —
+    //    they are built dynamically by the StateRoot old-root walk (step 4)
+    //    from the leaf payloads, so they're created empty here.
     zeg::ConsensusInfo  consensus       (cursor);
     zeg::Transactions   transactions    (cursor);
-    zeg::Accounts       accounts        (cursor);
     zeg::Contracts      contracts       (cursor);
-    zeg::Storages       storages        (cursor);
     zeg::PreviousBlocks previous_blocks (cursor);
+    zeg::Accounts       accounts;
+    zeg::Storages       storages;
 
     // 3. Anchor the ancestor chain to the block being computed.
     //    PreviousBlocks[0] must be the parent — every BLOCKHASH
@@ -99,13 +100,29 @@ int main(int argc, char** argv) {
         zeg::fatal("PreviousBlocks: block[0].state_root != consensus.parent_state_root");
     }
 
-    // 4. Construct the state DB. ZiskStateDB borrows the five
+    // 4. Build the Accounts/Storages tables and verify the pre-execution
+    //    state root, BEFORE executing. Constructing the StateRoot reads the
+    //    section's header counts, appends one table row per keyed leaf
+    //    (block-start values), computes the old root, and caches every
+    //    node's result for the new-root pass. In this guest's convention
+    //    `consensus.parent_hash()` carries the parent state root, so it is
+    //    the expected old root — checked here so a bad witness is rejected
+    //    before any execution happens. `cursor` is advanced past the section.
+    if (std::getenv("ZEG_DUMP_SROOT_OFFSET") != nullptr) {
+        std::fprintf(stderr, "SROOT_OFFSET=%zu\n", (size_t)(cursor - file_base));
+    }
+    zeg::StateRoot state_root(cursor, accounts, storages, consensus.gas_limit());
+    if (state_root.old_state_root() != consensus.parent_hash()) {
+        zeg::fatal("pre-execution state root mismatch");
+    }
+
+    // 5. Construct the state DB. ZiskStateDB borrows the five
     //    collections by reference for the rest of the run; Host
     //    callbacks pass data through them (or fatal-stub for overrides
     //    that need infrastructure not yet built).
     zeg::ZiskStateDB state(accounts, consensus, contracts, previous_blocks, storages);
 
-    // 5. Run the whole block: pre-block system calls, every tx, then
+    // 6. Run the whole block: pre-block system calls, every tx, then
     //    post-block side-effects. `state` owns the evmone VM and
     //    journals every state write so a revert at any depth rolls
     //    back cleanly.
@@ -134,26 +151,6 @@ int main(int argc, char** argv) {
         zeg::fatal("ZEG_STAGE: unknown value");
     }
 
-    // 6. Verify the pre-execution state root against the parent
-    //    anchor. In this guest's convention `consensus.parent_hash()`
-    //    carries the parent state root directly, so it is the expected
-    //    value for the old root. Constructing the StateRoot walks the
-    //    trie once with the original values, caches the result, and
-    //    records the per-NodeR cache entries the new-root pass will
-    //    reuse. `cursor` is advanced past every byte consumed.
-    if (std::getenv("ZEG_DUMP_SROOT_OFFSET") != nullptr) {
-        std::fprintf(stderr, "SROOT_OFFSET=%zu\n", (size_t)(cursor - file_base));
-    }
-    zeg::StateRoot state_root(cursor, accounts, storages);
-    if (state_root.old_state_root() != consensus.parent_hash()) {
-        zeg::fatal("pre-execution state root mismatch");
-    }
-
-    // (The read-only-unchanged invariant — every is_read_only account /
-    //  slot must hold its block-start value — is enforced inside
-    //  StateRoot::calculate_new_state_root, just before it reuses the
-    //  cached read-only subtrees.)
-
     // DEBUG: full dump of post-execution state for Python MPT reference.
     if (std::getenv("ZEG_DUMP_ALL") != nullptr) {
         for (uint64_t i = 0; i < accounts.size(); ++i) {
@@ -166,7 +163,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, " ch=");
             const auto ch = accounts.code_hash_at(i);
             for (uint8_t b : ch.bytes) std::fprintf(stderr, "%02x", b);
-            std::fprintf(stderr, " ro=%d\n", (int)accounts.is_read_only_at(i));
+            std::fprintf(stderr, "\n");
         }
         for (uint64_t i = 0; i < storages.size(); ++i) {
             const auto& a = storages.address_at(i);
@@ -178,7 +175,7 @@ int main(int argc, char** argv) {
             for (uint8_t b : p.bytes) std::fprintf(stderr, "%02x", b);
             std::fprintf(stderr, " val=");
             for (uint8_t b : v.bytes) std::fprintf(stderr, "%02x", b);
-            std::fprintf(stderr, " ro=%d\n", (int)storages.is_read_only_at(i));
+            std::fprintf(stderr, "\n");
         }
     }
 

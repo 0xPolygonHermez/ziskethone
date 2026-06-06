@@ -1,9 +1,9 @@
 #include "zeg/state_root.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <type_traits>
 #include <utility>
@@ -16,116 +16,30 @@
 #include "zeg/rlp.hpp"
 #include "zeg/storages.hpp"
 #include "zeg/stream.hpp"
+#include "zeg/trie_node.hpp"
 
 namespace zeg {
 
 namespace {
 
-// Pull the StateRoot-nested variant types into local names so the rest
-// of this TU reads exactly like before the flatten.
-using EmptyR       = StateRoot::EmptyR;
-using HashR        = StateRoot::HashR;
-using ExtR         = StateRoot::ExtR;
-using AccountLeafR = StateRoot::AccountLeafR;
-using StorageLeafR = StateRoot::StorageLeafR;
-using PhantomLeafR = StateRoot::PhantomLeafR;
-using NodeR        = StateRoot::NodeR;
-using CacheEntry   = StateRoot::CacheEntry;
-
 // ===== enums & opcodes ======================================================
 
-// Which pass of the trie we're running: the old-root pass writes cache
-// entries and runs full validation; the new-root pass reads from the
-// cache and skips checks already done during the old-root pass.
-enum class WalkPass : uint8_t { OldRoot, NewRoot };
-
-// Which set of values the leaf-packing helpers should fetch from
-// Accounts/Storages.
+// Which set of values the leaf-packing helpers fetch from Accounts/Storages.
 enum class ValueSet : uint8_t { Original, Current };
 
 enum class TreeKind : uint8_t { State, Storage };
 
-// Stream-encoded node opcodes (u64 each, 8-byte aligned).
-//
-// `NodeRW` and `NodeR` are two flavours of branch node:
-//   * `NodeRW` — a normal read/write branch.
-//   * `NodeR`  — a read-only branch. Every leaf in this subtree must
-//     have `is_read_only == true`, and every nested branch opcode must
-//     also be `NodeR` (checked only during the old-root pass).
+// Stream-encoded node opcodes (u64 each, 8-byte aligned). See BINARY_FORMAT.md.
 enum class Op : uint64_t {
     Empty         = 0,
     Hash          = 1,
     ExtensionHash = 2,
     Leaf          = 3,
-    NodeRW        = 4,
-    NodeR         = 5,
-    /// Fallback: carries a sibling leaf inline when Reth omits its
-    /// keccak preimage from `witness.keys` so it never became a target
-    /// in the sorted Accounts/Storages table. Payload: u64 path_nib_count
-    /// + nib_count×u64 (low 4 bits) + u64 value_len + value_len bytes
-    /// (pad to 8). The common path (preimage present → enriched into
-    /// prestate) goes through bare `Op::Leaf` instead, its table index
-    /// derived from the walk counter.
-    PhantomLeaf   = 6,
+    Branch        = 4,
+    PhantomLeaf   = 5,
 };
 
-// Helper: construct a NodeR holding alternative `T`. We default-construct
-// the variant and then `.emplace<T>(...)` rather than relying on
-// variant's converting constructor or its `in_place_type` constructor —
-// VS Code's IntelliSense parser (a Microsoft EDG fork) does not
-// recognise either of those for our variant, even though every real
-// compiler does. The emplace member template parses cleanly there.
-template <typename T, typename... Args>
-NodeR mk_node(Args&&... args) {
-    NodeR n;
-    n.template emplace<T>(std::forward<Args>(args)...);
-    return n;
-}
-
-// ===== constants ============================================================
-
-// keccak256(rlp("")) — empty-trie root.
-constexpr evmc::bytes32 kEmptyTrieRoot{{
-    0x56,0xe8,0x1f,0x17,0x1b,0xcc,0x55,0xa6,
-    0xff,0x83,0x45,0xe6,0x92,0xc0,0xf8,0x6e,
-    0x5b,0x48,0xe0,0x1b,0x99,0x6c,0xad,0xc0,
-    0x01,0x62,0x2f,0xb5,0xe3,0x63,0xb4,0x21,
-}};
-
-// keccak256("") — code hash of an account with no code.
-constexpr evmc::bytes32 kEmptyCodeHash{{
-    0xc5,0xd2,0x46,0x01,0x86,0xf7,0x23,0x3c,
-    0x92,0x7e,0x7d,0xb2,0xdc,0xc7,0x03,0xc0,
-    0xe5,0x00,0xb6,0x53,0xca,0x82,0x27,0x3b,
-    0x7b,0xfa,0xd8,0x04,0x5d,0x85,0xa4,0x70,
-}};
-
 // ===== helpers ==============================================================
-
-bool is_empty_account(uint64_t nonce,
-                      const evmc::uint256be& balance,
-                      const evmc::bytes32& code_hash) {
-    if (nonce != 0) return false;
-    static constexpr evmc::uint256be kZeroBalance{};
-    if (std::memcmp(&balance, &kZeroBalance, sizeof(balance)) != 0) return false;
-    if (std::memcmp(&code_hash, &kEmptyCodeHash, sizeof(code_hash)) != 0) return false;
-    return true;
-}
-
-bool is_zero_value(const evmc::bytes32& v) {
-    static constexpr evmc::bytes32 kZero{};
-    return std::memcmp(&v, &kZero, sizeof(v)) == 0;
-}
-
-std::vector<uint8_t> nibbles_from(const evmc::bytes32& hash, size_t start_nibble) {
-    std::vector<uint8_t> out;
-    out.reserve(64 - start_nibble);
-    for (size_t i = start_nibble; i < 64; ++i) {
-        const uint8_t b = hash.bytes[i / 2];
-        out.push_back(static_cast<uint8_t>((i % 2 == 0) ? (b >> 4) : (b & 0x0f)));
-    }
-    return out;
-}
 
 void verify_path_prefix(const std::vector<uint8_t>& walked,
                         const evmc::bytes32& hash) {
@@ -263,15 +177,7 @@ evmc::bytes32 pack_phantom_leaf(
 }
 
 // Return the bytes that should occupy this child's slot inside a parent
-// branch node. Implements the MPT cap function (Yellow Paper App. D):
-//   * EmptyR → RLP empty string (`{0x80}`).
-//   * HashR / ExtR → 33-byte RLP-encoded 32-byte hash (the prover sent
-//     us a hash already, so the subtree's RLP size is either unknown
-//     or guaranteed ≥ 32; embed it as a hash reference).
-//   * AccountLeafR / StorageLeafR → compute the leaf's full RLP; if it
-//     is < 32 bytes embed it inline (it's a 2-element list, which is a
-//     valid RLP list element on its own), otherwise hash it and embed
-//     the hash reference.
+// branch node (MPT cap function — Yellow Paper App. D).
 rlp::Bytes pack_to_child_ref(const NodeR& r,
                              const Accounts& accounts,
                              const Storages& storages,
@@ -287,9 +193,6 @@ rlp::Bytes pack_to_child_ref(const NodeR& r,
             return rlp::encode(BytesView{x.hash.bytes, sizeof(x.hash.bytes)});
         } else if constexpr (std::is_same_v<T, ExtR>) {
             const auto node_rlp = build_extension_rlp(x.ext_nibbles, x.hash);
-            // Extension wrapping a 32-byte hash is always ≥ 35 bytes,
-            // so the inline branch is unreachable in practice — but the
-            // check stays so the rule is stated in one place.
             if (node_rlp.size() < 32) return node_rlp;
             const auto h = keccak256_bytes32(node_rlp.data(), node_rlp.size());
             return rlp::encode(BytesView{h.bytes, sizeof(h.bytes)});
@@ -314,9 +217,7 @@ rlp::Bytes pack_to_child_ref(const NodeR& r,
     }, r);
 }
 
-// Assemble a branch node from 16 pre-computed child slot byte-blobs
-// (each is either a 1-byte 0x80, an inline RLP list, or a 33-byte
-// RLP-encoded hash). The 17th slot is the always-empty branch value.
+// Assemble a branch node from 16 pre-computed child slot byte-blobs.
 evmc::bytes32 pack_branch(const std::array<rlp::Bytes, 16>& child_refs) {
     using rlp::BytesView;
 
@@ -336,44 +237,6 @@ evmc::bytes32 pack_branch(const std::array<rlp::Bytes, 16>& child_refs) {
 
     return keccak256_bytes32(branch_rlp.data(), branch_rlp.size());
 }
-
-// ===== walk context =========================================================
-
-// All state the walker / reduce_branch need, borrowed by reference
-// from the StateRoot that drives them. The walker uses ctx.cache /
-// ctx.cache_read_pos to write or read cache entries; the StateRoot
-// member functions set up the right pass / ValueSet before calling.
-struct WalkContext {
-    const Accounts&            accounts;
-    const Storages&            storages;
-    std::vector<CacheEntry>&   cache;
-    std::size_t&               cache_read_pos;
-    WalkPass                   pass;
-    ValueSet                   which;
-    // Running leaf counters. `Op::Leaf` no longer carries an index; the
-    // table is sorted in trie-walk order, so the n-th state/storage leaf
-    // visited IS Accounts[n] / Storages[n]. Each leaf consumes the next
-    // counter value. The old-root pass asserts both reach size() (every
-    // row appears as exactly one leaf — none repeated, none missing).
-    std::size_t&               next_state_idx;
-    std::size_t&               next_storage_idx;
-};
-
-// Forward declarations.
-NodeR walk_node(
-    const uint8_t*& cursor,
-    WalkContext& ctx,
-    TreeKind kind,
-    std::vector<uint8_t>& nibbles_walked,
-    const evmc::address* owning_address,
-    bool readonly_mode);
-
-evmc::bytes32 finalize(const NodeR& r,
-                       const Accounts& accounts,
-                       const Storages& storages,
-                       ValueSet which);
-
-// ===== walker + reduction + finalize ========================================
 
 evmc::bytes32 finalize(const NodeR& r,
                        const Accounts& accounts,
@@ -399,11 +262,18 @@ evmc::bytes32 finalize(const NodeR& r,
     }, r);
 }
 
-NodeR reduce_branch(std::array<NodeR, 16> children, WalkContext& ctx) {
+// Reduce 16 child results into the branch's own result, applying the MPT
+// fold: a single non-empty child collapses into an extension / extended
+// leaf; otherwise the children are packed into a 16-ary branch hash.
+NodeR reduce_branch(const std::array<const NodeR*, 16>& children,
+                    const Accounts& accounts,
+                    const Storages& storages,
+                    ValueSet which)
+{
     int count = 0;
     int single = -1;
     for (int k = 0; k < 16; ++k) {
-        if (!std::holds_alternative<EmptyR>(children[k])) {
+        if (!std::holds_alternative<EmptyR>(*children[k])) {
             ++count;
             single = k;
         }
@@ -415,66 +285,108 @@ NodeR reduce_branch(std::array<NodeR, 16> children, WalkContext& ctx) {
 
     if (count == 1) {
         const uint8_t nibble = static_cast<uint8_t>(single);
-        NodeR& only = children[single];
-        if (auto* leaf = std::get_if<AccountLeafR>(&only)) {
-            AccountLeafR moved = std::move(*leaf);
-            moved.path_nibbles.insert(moved.path_nibbles.begin(), nibble);
-            return mk_node<AccountLeafR>(std::move(moved));
+        const NodeR& only = *children[single];
+        if (const auto* leaf = std::get_if<AccountLeafR>(&only)) {
+            AccountLeafR copy = *leaf;
+            copy.path_nibbles.insert(copy.path_nibbles.begin(), nibble);
+            return mk_node<AccountLeafR>(std::move(copy));
         }
-        if (auto* leaf = std::get_if<StorageLeafR>(&only)) {
-            StorageLeafR moved = std::move(*leaf);
-            moved.path_nibbles.insert(moved.path_nibbles.begin(), nibble);
-            return mk_node<StorageLeafR>(std::move(moved));
+        if (const auto* leaf = std::get_if<StorageLeafR>(&only)) {
+            StorageLeafR copy = *leaf;
+            copy.path_nibbles.insert(copy.path_nibbles.begin(), nibble);
+            return mk_node<StorageLeafR>(std::move(copy));
         }
-        if (auto* leaf = std::get_if<PhantomLeafR>(&only)) {
-            PhantomLeafR moved = std::move(*leaf);
-            moved.path_nibbles.insert(moved.path_nibbles.begin(), nibble);
-            return mk_node<PhantomLeafR>(std::move(moved));
+        if (const auto* leaf = std::get_if<PhantomLeafR>(&only)) {
+            PhantomLeafR copy = *leaf;
+            copy.path_nibbles.insert(copy.path_nibbles.begin(), nibble);
+            return mk_node<PhantomLeafR>(std::move(copy));
         }
-        if (auto* h = std::get_if<HashR>(&only)) {
+        if (const auto* h = std::get_if<HashR>(&only)) {
             return mk_node<ExtR>(std::vector<uint8_t>{nibble}, h->hash);
         }
-        if (auto* e = std::get_if<ExtR>(&only)) {
-            ExtR moved = std::move(*e);
-            moved.ext_nibbles.insert(moved.ext_nibbles.begin(), nibble);
-            return mk_node<ExtR>(std::move(moved));
+        if (const auto* e = std::get_if<ExtR>(&only)) {
+            ExtR copy = *e;
+            copy.ext_nibbles.insert(copy.ext_nibbles.begin(), nibble);
+            return mk_node<ExtR>(std::move(copy));
         }
     }
 
     std::array<rlp::Bytes, 16> child_refs;
     for (int k = 0; k < 16; ++k) {
-        child_refs[k] = pack_to_child_ref(children[k], ctx.accounts,
-                                          ctx.storages, ctx.which);
+        child_refs[k] = pack_to_child_ref(*children[k], accounts, storages, which);
     }
     return mk_node<HashR>(pack_branch(child_refs));
 }
 
-NodeR walk_node(
-    const uint8_t*& cursor,
-    WalkContext& ctx,
-    TreeKind kind,
-    std::vector<uint8_t>& nibbles_walked,
-    const evmc::address* owning_address,
-    bool readonly_mode)
+// ===== build pass (stream -> node array) ====================================
+
+// Borrowed state for the old-root build walk.
+struct BuildCtx {
+    Accounts&                accounts;
+    Storages&                storages;
+    std::vector<BranchNode>& branch_nodes;
+    std::vector<NodeR>&      aux;
+    std::size_t              next_state_idx;
+    std::size_t              next_storage_idx;
+    std::size_t              node_limit;
+};
+
+// The result-node of a static EmptyR child (shared, read-only).
+const NodeR& empty_result() {
+    static const NodeR kEmpty = mk_node<EmptyR>();
+    return kEmpty;
+}
+
+// Pointer to a child's current cached result. Valid for both passes:
+// branch/aux results live in StateRoot's vectors, leaf results on the rows
+// (all pre-reserved or appended before use). Tables' `leaf_` is pre-reserved
+// so these pointers stay stable; `branch_nodes`/`aux` only grow during build,
+// and callers gather these pointers AFTER all siblings are built (so no
+// intervening reallocation invalidates them before they are consumed).
+const NodeR* result_ptr(const Child& c,
+                        const std::vector<BranchNode>& branch_nodes,
+                        const std::vector<NodeR>& aux,
+                        const Accounts& accounts,
+                        const Storages& storages) {
+    switch (c.type) {
+        case NodeType::Empty:        return &empty_result();
+        case NodeType::Branch:       return &branch_nodes[c.idx].cached;
+        case NodeType::Account:      return accounts.cached_at(c.idx);
+        case NodeType::Storage:      return storages.cached_at(c.idx);
+        case NodeType::Hash:
+        case NodeType::ExtensionHash:
+        case NodeType::PhantomLeaf:  return &aux[c.idx];
+    }
+    fatal("state_root: invalid node type");
+}
+
+uint32_t aux_push(BuildCtx& ctx, NodeR n) {
+    if (ctx.branch_nodes.size() + ctx.aux.size() >= ctx.node_limit) {
+        fatal("state_root: more nodes than declared (numberOfNodes overflow)");
+    }
+    ctx.aux.push_back(std::move(n));
+    return static_cast<uint32_t>(ctx.aux.size() - 1);
+}
+
+// Walk one node from the stream, materialize it (and its subtree) into the
+// node array / tables using ORIGINAL values, and return its Child link.
+Child build_node(const uint8_t*& cursor,
+                 BuildCtx& ctx,
+                 TreeKind kind,
+                 std::vector<uint8_t>& walked,
+                 const evmc::address* owning_address)
 {
     const Op op = static_cast<Op>(read_u64_le(cursor));
 
     switch (op) {
         case Op::Empty:
-            return mk_node<EmptyR>();
+            return Child{NodeType::Empty, 0};
 
         case Op::Hash: {
             evmc::bytes32 h;
             std::memcpy(h.bytes, cursor, sizeof(h.bytes));
             cursor += sizeof(h.bytes);  // 32 B — already 8-aligned
-            // An Op::Hash stands in for an UNTOUCHED subtree only — i.e.
-            // one that contains no Accounts/Storages table rows. It does
-            // not advance the leaf counters. If the witness were missing a
-            // node over read-only table rows, the encoder would still emit
-            // Op::Hash here, but then those rows would have no leaf and the
-            // old-root-pass `count == size()` check fatals (strict: an
-            // incomplete witness is rejected, not silently skipped).
-            return mk_node<HashR>(h);
+            return Child{NodeType::Hash, aux_push(ctx, mk_node<HashR>(h))};
         }
 
         case Op::ExtensionHash: {
@@ -487,112 +399,8 @@ NodeR walk_node(
             evmc::bytes32 h;
             std::memcpy(h.bytes, cursor, sizeof(h.bytes));
             cursor += sizeof(h.bytes);
-            return mk_node<ExtR>(std::move(ext), h);
-        }
-
-        case Op::Leaf: {
-            if (kind == TreeKind::State) {
-                // No index in the stream: the n-th state leaf visited is
-                // Accounts[n] (the table is sorted in trie-walk order).
-                // Bounds-guard catches a stream with more leaves than
-                // accounts; the end-of-old-root-pass check catches fewer.
-                if (ctx.next_state_idx >= ctx.accounts.size()) {
-                    fatal("state_root: more state leaves than accounts");
-                }
-                const uint64_t idx = ctx.next_state_idx++;
-
-                if (ctx.pass == WalkPass::OldRoot
-                    && readonly_mode
-                    && !ctx.accounts.is_read_only_at(idx)) {
-                    fatal("state_root: read-write account leaf under a NodeR subtree");
-                }
-
-                const evmc::address& addr = ctx.accounts.address_at(idx);
-                const evmc::bytes32 addr_hash =
-                    keccak256_bytes32(addr.bytes, sizeof(addr.bytes));
-
-                if (ctx.pass == WalkPass::OldRoot) {
-                    verify_path_prefix(nibbles_walked, addr_hash);
-                }
-
-                std::vector<uint8_t> storage_walked;
-                NodeR storage_subtree = walk_node(
-                    cursor, ctx, TreeKind::Storage, storage_walked,
-                    &addr, readonly_mode);
-                const evmc::bytes32 storage_root =
-                    finalize(storage_subtree, ctx.accounts, ctx.storages, ctx.which);
-                if (std::getenv("ZEG_DUMP_SROOT") != nullptr
-                    && ctx.pass == WalkPass::NewRoot) {
-                    std::fprintf(stderr, "SROOT %llu addr=", (unsigned long long)idx);
-                    for (uint8_t b : addr.bytes) std::fprintf(stderr, "%02x", b);
-                    std::fprintf(stderr, " sroot=");
-                    for (uint8_t b : storage_root.bytes) std::fprintf(stderr, "%02x", b);
-                    std::fprintf(stderr, "\n");
-                }
-
-                const uint64_t nonce =
-                    (ctx.which == ValueSet::Original) ? ctx.accounts.nonce_orig_at(idx)
-                                                      : ctx.accounts.nonce_at     (idx);
-                const evmc::uint256be balance =
-                    (ctx.which == ValueSet::Original) ? ctx.accounts.balance_orig_at(idx)
-                                                      : ctx.accounts.balance_at     (idx);
-                const evmc::bytes32 code_hash =
-                    (ctx.which == ValueSet::Original) ? ctx.accounts.code_hash_orig_at(idx)
-                                                      : ctx.accounts.code_hash_at     (idx);
-                if (is_empty_account(nonce, balance, code_hash)) {
-                    return mk_node<EmptyR>();
-                }
-
-                auto path = nibbles_from(addr_hash, nibbles_walked.size());
-                return mk_node<AccountLeafR>(std::move(path),
-                                             static_cast<size_t>(idx),
-                                             storage_root);
-            } else {
-                // No index in the stream: the n-th storage leaf visited
-                // is Storages[n]. The single global counter stays
-                // monotonic because the table is sorted by (keccak addr,
-                // keccak slot) and the walk visits account-after-account,
-                // slot-after-slot.
-                if (ctx.next_storage_idx >= ctx.storages.size()) {
-                    fatal("state_root: more storage leaves than storage slots");
-                }
-                const uint64_t idx = ctx.next_storage_idx++;
-
-                if (ctx.pass == WalkPass::OldRoot
-                    && readonly_mode
-                    && !ctx.storages.is_read_only_at(idx)) {
-                    fatal("state_root: read-write storage leaf under a NodeR subtree");
-                }
-
-                const evmc::address& storage_addr = ctx.storages.address_at(idx);
-                const evmc::bytes32& pos = ctx.storages.position_at(idx);
-
-                if (ctx.pass == WalkPass::OldRoot) {
-                    if (owning_address == nullptr
-                        || std::memcmp(&storage_addr, owning_address,
-                                       sizeof(evmc::address)) != 0) {
-                        fatal("state_root: storage leaf address does not match owning account");
-                    }
-                }
-
-                const evmc::bytes32 pos_hash =
-                    keccak256_bytes32(pos.bytes, sizeof(pos.bytes));
-
-                if (ctx.pass == WalkPass::OldRoot) {
-                    verify_path_prefix(nibbles_walked, pos_hash);
-                }
-
-                const evmc::bytes32 value =
-                    (ctx.which == ValueSet::Original) ? ctx.storages.value_orig_at(idx)
-                                                      : ctx.storages.value_at     (idx);
-                if (is_zero_value(value)) {
-                    return mk_node<EmptyR>();
-                }
-
-                auto path = nibbles_from(pos_hash, nibbles_walked.size());
-                return mk_node<StorageLeafR>(std::move(path),
-                                             static_cast<size_t>(idx));
-            }
+            return Child{NodeType::ExtensionHash,
+                         aux_push(ctx, mk_node<ExtR>(std::move(ext), h))};
         }
 
         case Op::PhantomLeaf: {
@@ -606,72 +414,162 @@ NodeR walk_node(
             std::vector<uint8_t> value(cursor, cursor + value_len);
             cursor += value_len;
             align_to_u64(cursor, value_len);
-            return mk_node<PhantomLeafR>(std::move(path), std::move(value));
+            return Child{NodeType::PhantomLeaf,
+                         aux_push(ctx, mk_node<PhantomLeafR>(std::move(path), std::move(value)))};
         }
 
-        case Op::NodeR: {
-            // NodeR is only a cache *point* when it's the child of a
-            // NodeRW (handled in the NodeRW arm). Reaching this arm
-            // means we're either inside a NodeR already or the trie
-            // root itself is NodeR — either way, just walk normally
-            // with readonly_mode = true.
-            std::array<NodeR, 16> children;
-            for (uint8_t k = 0; k < 16; ++k) {
-                nibbles_walked.push_back(k);
-                children[k] = walk_node(cursor, ctx, kind, nibbles_walked,
-                                        owning_address, /*readonly=*/true);
-                nibbles_walked.pop_back();
-            }
-            return reduce_branch(std::move(children), ctx);
-        }
+        case Op::Leaf: {
+            if (kind == TreeKind::State) {
+                // address(20) pad(4) balance(u256be,32) nonce(u64) code_hash(32)
+                evmc::address addr;
+                std::memcpy(addr.bytes, cursor, sizeof(addr.bytes));
+                cursor += sizeof(addr.bytes) + 4;
+                evmc::uint256be balance;
+                std::memcpy(balance.bytes, cursor, sizeof(balance.bytes));
+                cursor += sizeof(balance.bytes);
+                const uint64_t nonce = read_u64_le(cursor);
+                evmc::bytes32 code_hash;
+                std::memcpy(code_hash.bytes, cursor, sizeof(code_hash.bytes));
+                cursor += sizeof(code_hash.bytes);
 
-        case Op::NodeRW: {
-            if (ctx.pass == WalkPass::OldRoot && readonly_mode) {
-                fatal("state_root: NodeRW found inside a NodeR subtree");
-            }
+                const size_t idx = ctx.next_state_idx++;
+                const size_t a = ctx.accounts.append(addr, nonce, balance, code_hash);
+                if (a != idx) fatal("state_root: account append index desync");
 
-            std::array<NodeR, 16> children;
-            for (uint8_t k = 0; k < 16; ++k) {
-                nibbles_walked.push_back(k);
+                const evmc::bytes32 addr_hash =
+                    keccak256_bytes32(addr.bytes, sizeof(addr.bytes));
+                // Bind the payload address to its trie position.
+                verify_path_prefix(walked, addr_hash);
 
-                // Cache point: peek at the child's opcode. If it's a
-                // NodeR, write a cache entry (old-root) or replay one
-                // (new-root) instead of recursing every time.
-                if (peek_u64_le(cursor) == static_cast<uint64_t>(Op::NodeR)) {
-                    if (ctx.pass == WalkPass::OldRoot) {
-                        const uint8_t* before = cursor;
-                        children[k] = walk_node(cursor, ctx, kind, nibbles_walked,
-                                                owning_address, /*readonly=*/true);
-                        // Record the leaf indices reached AFTER this cached
-                        // subtree so the new-root pass can resume without
-                        // re-walking it (see below).
-                        ctx.cache.push_back(
-                            {children[k], static_cast<size_t>(cursor - before),
-                             ctx.next_state_idx, ctx.next_storage_idx});
-                    } else {
-                        const auto& entry = ctx.cache[ctx.cache_read_pos++];
-                        cursor += entry.bytes_consumed;
-                        // The subtree is replayed, not re-walked, so its
-                        // Op::Leaf opcodes are skipped — set the leaf
-                        // counters to the recorded post-subtree values so
-                        // every following leaf gets the same index as the
-                        // old-root pass.
-                        ctx.next_state_idx   = entry.state_idx_after;
-                        ctx.next_storage_idx = entry.storage_idx_after;
-                        children[k] = entry.result;
-                    }
-                } else {
-                    children[k] = walk_node(cursor, ctx, kind, nibbles_walked,
-                                            owning_address, /*readonly=*/false);
+                // Build the per-account storage subtree (`addr` is a stable
+                // local for the duration of the nested walk).
+                std::vector<uint8_t> storage_walked;
+                const Child storage_child = build_node(
+                    cursor, ctx, TreeKind::Storage, storage_walked, &addr);
+                const evmc::bytes32 storage_root = finalize(
+                    *result_ptr(storage_child, ctx.branch_nodes, ctx.aux,
+                                ctx.accounts, ctx.storages),
+                    ctx.accounts, ctx.storages, ValueSet::Original);
+
+                auto nib = nibbles_from(addr_hash, walked.size());
+                ctx.accounts.build_value(idx, nib, addr_hash, storage_child, storage_root);
+                return Child{NodeType::Account, static_cast<uint32_t>(idx)};
+            } else {
+                // position(32) value(32); owning address from the account leaf.
+                if (owning_address == nullptr) {
+                    fatal("state_root: storage leaf outside any account");
                 }
+                evmc::bytes32 position;
+                std::memcpy(position.bytes, cursor, sizeof(position.bytes));
+                cursor += sizeof(position.bytes);
+                evmc::bytes32 value;
+                std::memcpy(value.bytes, cursor, sizeof(value.bytes));
+                cursor += sizeof(value.bytes);
 
-                nibbles_walked.pop_back();
+                const size_t idx = ctx.next_storage_idx++;
+                const size_t a = ctx.storages.append(*owning_address, position, value);
+                if (a != idx) fatal("state_root: storage append index desync");
+
+                const evmc::bytes32 pos_hash =
+                    keccak256_bytes32(position.bytes, sizeof(position.bytes));
+                verify_path_prefix(walked, pos_hash);
+
+                auto nib = nibbles_from(pos_hash, walked.size());
+                ctx.storages.build_value(idx, nib, pos_hash);
+                return Child{NodeType::Storage, static_cast<uint32_t>(idx)};
             }
-            return reduce_branch(std::move(children), ctx);
+        }
+
+        case Op::Branch: {
+            BranchNode bn;
+            for (uint8_t k = 0; k < 16; ++k) {
+                walked.push_back(k);
+                bn.children[k] = build_node(cursor, ctx, kind, walked, owning_address);
+                walked.pop_back();
+            }
+            // Gather child results AFTER every child is built (no further
+            // pushes happen before reduce_branch consumes them).
+            std::array<const NodeR*, 16> child_results;
+            for (int k = 0; k < 16; ++k) {
+                child_results[k] = result_ptr(bn.children[k], ctx.branch_nodes,
+                                              ctx.aux, ctx.accounts, ctx.storages);
+            }
+            bn.cached = reduce_branch(child_results, ctx.accounts, ctx.storages,
+                                      ValueSet::Original);
+
+            if (ctx.branch_nodes.size() + ctx.aux.size() >= ctx.node_limit) {
+                fatal("state_root: more nodes than declared (numberOfNodes overflow)");
+            }
+            ctx.branch_nodes.push_back(std::move(bn));
+            return Child{NodeType::Branch,
+                         static_cast<uint32_t>(ctx.branch_nodes.size() - 1)};
         }
     }
 
     fatal("state_root: invalid opcode in stream");
+}
+
+// ===== eval pass (node array -> new root) ===================================
+
+struct EvalCtx {
+    Accounts&                accounts;
+    Storages&                storages;
+    std::vector<BranchNode>& branch_nodes;
+    std::vector<NodeR>&      aux;
+};
+
+// Walk one node of the materialized array against CURRENT values. Returns a
+// pointer to the node's current result and whether it is read-only (== its
+// old-root result). Read-only nodes reuse their cached result; changed ones
+// are recomputed. No vector grows here, so the returned pointers stay valid.
+std::pair<const NodeR*, bool> eval_node(const Child& c, EvalCtx& ctx, std::size_t depth) {
+    switch (c.type) {
+        case NodeType::Empty:
+            return {&empty_result(), true};
+
+        case NodeType::Hash:
+        case NodeType::ExtensionHash:
+        case NodeType::PhantomLeaf:
+            // Untouched subtree/leaf — fixed result, always read-only.
+            return {&ctx.aux[c.idx], true};
+
+        case NodeType::Account: {
+            const size_t idx = c.idx;
+            const Child sc = ctx.accounts.storage_root_child_at(idx);
+            const auto [sres, storage_ro] = eval_node(sc, ctx, 0);
+            const evmc::bytes32 storage_root =
+                finalize(*sres, ctx.accounts, ctx.storages, ValueSet::Current);
+            auto nib = nibbles_from(ctx.accounts.addr_hash_at(idx), depth);
+            const NodeR* r = ctx.accounts.update_value(idx, nib, storage_root);
+            const bool read_only = ctx.accounts.fields_unchanged_at(idx) && storage_ro;
+            return {r, read_only};
+        }
+
+        case NodeType::Storage: {
+            const size_t idx = c.idx;
+            auto nib = nibbles_from(ctx.storages.pos_hash_at(idx), depth);
+            const NodeR* r = ctx.storages.update_value(idx, nib);
+            return {r, ctx.storages.value_unchanged_at(idx)};
+        }
+
+        case NodeType::Branch: {
+            BranchNode& bn = ctx.branch_nodes[c.idx];
+            std::array<const NodeR*, 16> child_results;
+            bool all_ro = true;
+            for (uint8_t k = 0; k < 16; ++k) {
+                const auto [cr, cro] = eval_node(bn.children[k], ctx, depth + 1);
+                child_results[k] = cr;
+                all_ro = all_ro && cro;
+            }
+            if (all_ro) {
+                return {&bn.cached, true};
+            }
+            bn.cached = reduce_branch(child_results, ctx.accounts, ctx.storages,
+                                      ValueSet::Current);
+            return {&bn.cached, false};
+        }
+    }
+    fatal("state_root: invalid node type");
 }
 
 } // namespace
@@ -681,66 +579,181 @@ NodeR walk_node(
 // ============================================================================
 
 StateRoot::StateRoot(const uint8_t*& cursor,
-                     const Accounts& accounts,
-                     const Storages& storages)
+                     Accounts& accounts,
+                     Storages& storages,
+                     uint64_t gas_limit)
     : accounts_(accounts),
-      storages_(storages),
-      start_cursor_(cursor)
+      storages_(storages)
 {
-    std::size_t next_state_idx = 0, next_storage_idx = 0;
-    WalkContext ctx{accounts_, storages_, cache_, cache_read_pos_,
-                    WalkPass::OldRoot, ValueSet::Original,
-                    next_state_idx, next_storage_idx};
-    std::vector<uint8_t> nibbles_walked;
-    nibbles_walked.reserve(64);  // max trie depth
-    NodeR root = walk_node(cursor, ctx, TreeKind::State, nibbles_walked,
-                           /*owning_address=*/nullptr, /*readonly_mode=*/false);
-    old_root_ = finalize(root, accounts_, storages_, ValueSet::Original);
+    // Section header: three u64 counts. numberOfAccounts / numberOfStorages
+    // are exact WITNESS counts; numberOfNodes is a conservative upper bound
+    // (the encoder emits stream_len/8) used as the node-array ceiling.
+    const uint64_t num_nodes    = read_u64_le(cursor);
+    const uint64_t num_accounts = read_u64_le(cursor);
+    const uint64_t num_storages = read_u64_le(cursor);
+    node_limit_           = num_nodes;
+    num_witness_accounts_ = num_accounts;
+    num_witness_storages_ = num_storages;
 
-    // Bijection check (pre-block only): every Accounts / Storages row must
-    // appear as exactly one leaf in the pre-block trie. The per-leaf
-    // bounds-guard already rejected a stream with too MANY leaves; these
-    // assertions reject too FEW. Together they pin every table row's
-    // original value into old_root_ (which is matched against the trusted
-    // parent anchor), closing the read-only-leaf → Op::Hash substitution
-    // gap. The post-block pass reuses this validated structure, so it is
-    // not re-checked there.
-    if (next_state_idx != accounts_.size()) {
-        fatal("state_root: not every account appears as a pre-block leaf");
-    }
-    if (next_storage_idx != storages_.size()) {
-        fatal("state_root: not every storage slot appears as a pre-block leaf");
+    // Pre-size each table to the witness count PLUS a slack for rows
+    // appended during execution, so they append in-place (no realloc →
+    // stable View / leaf pointers). Rows are appended for keys CREATED this
+    // block and for witness-absent accounts merely ACCESSED (an empty row,
+    // so EIP-2929 warmth can be tracked). The cheapest such event is a cold
+    // account access (~2600 gas), and total gas <= gas_limit, so
+    // gas_limit/2500 is a sound upper bound — BUT test fixtures set absurd
+    // gas_limits (e.g. 1e14), so cap the slack at a value no realistic block
+    // reaches. `append` still fatals if the slack is somehow exceeded, plus
+    // a small constant floor for tiny-gas blocks.
+    constexpr uint64_t kMaxCreatedSlack = 1u << 16;  // 65536
+    const uint64_t slack =
+        std::min<uint64_t>(gas_limit / 2500 + 64, kMaxCreatedSlack);
+    accounts_.reserve(num_accounts + slack);
+    storages_.reserve(num_storages + slack);
+
+    BuildCtx ctx{accounts_, storages_, branch_nodes_, aux_,
+                 /*next_state_idx=*/0, /*next_storage_idx=*/0,
+                 static_cast<std::size_t>(num_nodes)};
+    std::vector<uint8_t> walked;
+    walked.reserve(64);  // max trie depth
+    root_ = build_node(cursor, ctx, TreeKind::State, walked, /*owning=*/nullptr);
+
+    old_root_ = finalize(
+        *result_ptr(root_, branch_nodes_, aux_, accounts_, storages_),
+        accounts_, storages_, ValueSet::Original);
+
+    // No bijection check needed: the tables ARE the leaves (built here), so
+    // every row appears as exactly one leaf by construction. Soundness comes
+    // from old_root_ == the trusted parent anchor (checked by the caller)
+    // plus each leaf's verify_path_prefix binding its key to its position.
+}
+
+// ===== new-root insert (Stage 3) ============================================
+
+uint8_t StateRoot::existing_leaf_nibble(Child leaf, std::size_t d,
+                                        std::size_t depth) const {
+    switch (leaf.type) {
+        case NodeType::Account:
+            return nibble_at(accounts_.addr_hash_at(leaf.idx), d);
+        case NodeType::Storage:
+            return nibble_at(storages_.pos_hash_at(leaf.idx), d);
+        case NodeType::PhantomLeaf:
+            // The phantom's stored path is relative to where it sits (depth).
+            return std::get<PhantomLeafR>(aux_[leaf.idx]).path_nibbles[d - depth];
+        default:
+            fatal("state_root: existing_leaf_nibble on a non-leaf node");
     }
 }
 
-evmc::bytes32 StateRoot::calculate_new_state_root() {
-    // Read-only reuse precondition: the new-root pass replays the cached
-    // read-only (NodeR-under-NodeRW) subtrees from the old-root pass and
-    // never re-walks them. That is only sound if no read-only row changed
-    // during execution — otherwise a cached node would embed the stale
-    // value and the new root would silently diverge. Enforce it here,
-    // where the reuse happens, so the check can't be skipped or reordered
-    // by callers. (Originals come from the stream; current values are
-    // final once execution has run, which it has by the time the new root
-    // is computed.)
-    accounts_.check_read_only_unchanged();
-    storages_.check_read_only_unchanged();
+Child StateRoot::split_leaf(Child existing, const evmc::bytes32& key_hash,
+                            Child leaf, std::size_t depth) {
+    // First nibble at which the new key and the existing leaf's key diverge.
+    std::size_t d = depth;
+    while (true) {
+        if (d >= 64) fatal("state_root: insert collides with an identical key");
+        if (nibble_at(key_hash, d) != existing_leaf_nibble(existing, d, depth)) break;
+        ++d;
+    }
+    const uint8_t existing_nib = existing_leaf_nibble(existing, d, depth);
 
-    cache_read_pos_ = 0;
-    const uint8_t* cursor = start_cursor_;
-    // Fresh counters for this pass. They still run (so read-write leaves
-    // outside cached subtrees get the right table index), advanced through
-    // cached subtrees via the per-entry leaf counts. No end-of-pass check:
-    // the pre-block pass already validated the bijection.
-    std::size_t next_state_idx = 0, next_storage_idx = 0;
-    WalkContext ctx{accounts_, storages_, cache_, cache_read_pos_,
-                    WalkPass::NewRoot, ValueSet::Current,
-                    next_state_idx, next_storage_idx};
-    std::vector<uint8_t> nibbles_walked;
-    nibbles_walked.reserve(64);
-    NodeR root = walk_node(cursor, ctx, TreeKind::State, nibbles_walked,
-                           /*owning_address=*/nullptr, /*readonly_mode=*/false);
-    return finalize(root, accounts_, storages_, ValueSet::Current);
+    // A keyless PhantomLeaf carries its path inline, so shorten it to its new
+    // (deeper) position d+1. Keyed leaves recompute their path from depth in
+    // the eval pass, so they need no surgery here.
+    if (existing.type == NodeType::PhantomLeaf) {
+        auto& path = std::get<PhantomLeafR>(aux_[existing.idx]).path_nibbles;
+        path.erase(path.begin(),
+                   path.begin() + static_cast<std::ptrdiff_t>(d + 1 - depth));
+    }
+
+    // 2-child branch at depth d holding both leaves.
+    BranchNode bd;
+    bd.children[nibble_at(key_hash, d)] = leaf;
+    bd.children[existing_nib]           = existing;
+    branch_nodes_.push_back(std::move(bd));
+    Child cur{NodeType::Branch, static_cast<uint32_t>(branch_nodes_.size() - 1)};
+
+    // Single-child branches for the shared nibbles depth..d-1 (reduce_branch
+    // folds the chain into an extension at hash time).
+    for (std::size_t dd = d; dd > depth; --dd) {
+        BranchNode b;
+        b.children[nibble_at(key_hash, dd - 1)] = cur;
+        branch_nodes_.push_back(std::move(b));
+        cur = Child{NodeType::Branch, static_cast<uint32_t>(branch_nodes_.size() - 1)};
+    }
+    return cur;
+}
+
+Child StateRoot::insert_into(Child node, const evmc::bytes32& key_hash,
+                             Child leaf, std::size_t depth) {
+    switch (node.type) {
+        case NodeType::Empty:
+            return leaf;
+        case NodeType::Branch: {
+            const uint8_t nib = nibble_at(key_hash, depth);
+            const Child child = branch_nodes_[node.idx].children[nib];  // copy
+            const Child newchild = insert_into(child, key_hash, leaf, depth + 1);
+            // Re-index after the recursion (which may have grown branch_nodes_).
+            branch_nodes_[node.idx].children[nib] = newchild;
+            return node;
+        }
+        case NodeType::Account:
+        case NodeType::Storage:
+        case NodeType::PhantomLeaf:
+            return split_leaf(node, key_hash, leaf, depth);
+        case NodeType::Hash:
+        case NodeType::ExtensionHash:
+            fatal("state_root: insert into an unrevealed (Hash) subtree — "
+                  "witness incomplete");
+    }
+    fatal("state_root: insert_into invalid node type");
+}
+
+evmc::bytes32 StateRoot::calculate_new_state_root() {
+    // ----- Phase 1: insert keys CREATED during execution -----
+    // Rows appended beyond the witness counts are created keys. Splice them
+    // into the node array (index-based, so branch_nodes_ may grow freely).
+
+    // Initialise each created account's leaf metadata (it was appended at
+    // run-time via ensure_account, not through build_value).
+    for (std::size_t i = num_witness_accounts_; i < accounts_.size(); ++i) {
+        const evmc::address& a = accounts_.address_at(i);
+        accounts_.set_addr_hash(i, keccak256_bytes32(a.bytes, sizeof(a.bytes)));
+        accounts_.set_storage_root_child(i, Child{NodeType::Empty, 0});
+    }
+
+    // Insert created storage slots into their owning account's subtree first,
+    // so the account leaf's storage root reflects them when evaluated.
+    for (std::size_t i = num_witness_storages_; i < storages_.size(); ++i) {
+        if (is_zero_value(storages_.value_at(i))) {
+            continue;  // a zeroed slot has no trie effect
+        }
+        const evmc::bytes32& pos = storages_.position_at(i);
+        const evmc::bytes32 pos_hash =
+            keccak256_bytes32(pos.bytes, sizeof(pos.bytes));
+        storages_.set_pos_hash(i, pos_hash);
+        const std::size_t acct = accounts_.index_of(storages_.address_at(i));
+        const Child new_root = insert_into(
+            accounts_.storage_root_child_at(acct), pos_hash,
+            Child{NodeType::Storage, static_cast<uint32_t>(i)}, 0);
+        accounts_.set_storage_root_child(acct, new_root);
+    }
+
+    // Insert created accounts into the state trie (skip ones that ended empty,
+    // e.g. created-then-SELFDESTRUCT'd).
+    for (std::size_t i = num_witness_accounts_; i < accounts_.size(); ++i) {
+        if (is_empty_account(accounts_.nonce_at(i), accounts_.balance_at(i),
+                             accounts_.code_hash_at(i))) {
+            continue;
+        }
+        root_ = insert_into(root_, accounts_.addr_hash_at(i),
+                            Child{NodeType::Account, static_cast<uint32_t>(i)}, 0);
+    }
+
+    // ----- Phase 2: evaluate the augmented node array against current values.
+    EvalCtx ctx{accounts_, storages_, branch_nodes_, aux_};
+    const auto [root_res, root_ro] = eval_node(root_, ctx, 0);
+    (void)root_ro;
+    return finalize(*root_res, accounts_, storages_, ValueSet::Current);
 }
 
 } // namespace zeg

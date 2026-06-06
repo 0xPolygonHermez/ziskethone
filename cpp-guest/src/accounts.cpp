@@ -7,18 +7,78 @@
 
 namespace zeg {
 
-Accounts::Accounts(const uint8_t*& cursor) {
-    const uint64_t count   = read_u64_le(cursor);
-    const uint8_t* records = cursor;
+void Accounts::reserve(uint64_t count) {
+    // Pre-size the backing buffer to exactly `count` records and fill with
+    // zero (so the unused storage_root gap + any pad bytes are defined).
+    // Fixed size => no realloc => stable View pointers.
+    record_store_.assign(count * kRecordSize, 0);
+    capacity_ = count;
     originals_.reserve(count);
-    mods_.resize(count);
+    mods_.reserve(count);
+    leaf_.reserve(count);
     index_.reserve(count);
-    for (uint64_t i = 0; i < count; ++i) {
-        const uint8_t* record = records + i * kRecordSize;
-        originals_.push_back(View{record});
-        index_.emplace(originals_.back().address(), i);
+}
+
+size_t Accounts::append(const evmc::address&   address,
+                        uint64_t               nonce,
+                        const evmc::uint256be& balance,
+                        const evmc::bytes32&   code_hash) {
+    const size_t idx = originals_.size();
+    if (idx >= capacity_) {
+        fatal("Accounts::append: more rows than reserve() allowed (numberOfAccounts overflow)");
     }
-    cursor += count * kRecordSize;
+    uint8_t* rec = record_store_.data() + idx * kRecordSize;
+    std::memcpy(rec + View::kAddressOffset,  address.bytes,   sizeof(address.bytes));
+    std::memcpy(rec + View::kBalanceOffset,  balance.bytes,   sizeof(balance.bytes));
+    std::memcpy(rec + View::kNonceOffset,    &nonce,          sizeof(nonce));
+    std::memcpy(rec + View::kCodeHashOffset, code_hash.bytes, sizeof(code_hash.bytes));
+    originals_.push_back(View{rec});
+    mods_.push_back(Mods{});
+    leaf_.push_back(LeafCache{});
+    index_.emplace(address, idx);
+    return idx;
+}
+
+const NodeR* Accounts::build_value(size_t idx,
+                                   const std::vector<uint8_t>& nib,
+                                   const evmc::bytes32& addr_hash,
+                                   Child storage_root_child,
+                                   const evmc::bytes32& storage_root) {
+    LeafCache& lc = leaf_[idx];
+    lc.addr_hash    = addr_hash;
+    lc.storage_root = storage_root_child;
+    // Build from the ORIGINAL (block-start) fields.
+    if (is_empty_account(nonce_orig_at(idx), balance_orig_at(idx), code_hash_orig_at(idx))) {
+        lc.cached.emplace<EmptyR>();
+    } else {
+        lc.cached.emplace<AccountLeafR>(nib, idx, storage_root);
+    }
+    return &lc.cached;
+}
+
+const NodeR* Accounts::update_value(size_t idx,
+                                    const std::vector<uint8_t>& nib,
+                                    const evmc::bytes32& storage_root) {
+    LeafCache& lc = leaf_[idx];
+    // Always rebuild from the CURRENT fields + storage root at path `nib`.
+    // This is cheap (no keccak — packing happens at the parent branch) and
+    // keeps the leaf path correct even when a new-root insert moved this
+    // leaf deeper via a split. The keccak-saving read-only reuse happens at
+    // the BRANCH level (a read-only branch reuses its cached hash).
+    if (is_empty_account(nonce_at(idx), balance_at(idx), code_hash_at(idx))) {
+        lc.cached.emplace<EmptyR>();
+    } else {
+        lc.cached.emplace<AccountLeafR>(nib, idx, storage_root);
+    }
+    return &lc.cached;
+}
+
+void Accounts::set_addr_hash(size_t idx, const evmc::bytes32& addr_hash) {
+    leaf_[idx].addr_hash = addr_hash;
+}
+
+void Accounts::set_storage_root_child(size_t idx, Child storage_root) {
+    leaf_[idx].storage_root = storage_root;
 }
 
 size_t Accounts::index_of(const evmc::address& addr) const {
@@ -68,10 +128,6 @@ evmc::bytes32 Accounts::code_hash_at(size_t idx) const noexcept {
     return mods_[idx].code_hash_dirty ? mods_[idx].code_hash : originals_[idx].code_hash();
 }
 
-const evmc::bytes32& Accounts::storage_root_at(size_t idx) const noexcept {
-    return originals_[idx].storage_root();
-}
-
 const evmc::uint256be& Accounts::balance_orig_at(size_t idx) const noexcept {
     return originals_[idx].balance();
 }
@@ -84,9 +140,6 @@ const evmc::bytes32& Accounts::code_hash_orig_at(size_t idx) const noexcept {
     return originals_[idx].code_hash();
 }
 
-bool Accounts::is_read_only_at(size_t idx) const noexcept {
-    return originals_[idx].is_read_only();
-}
 
 // ----- write accessors -----
 
@@ -150,30 +203,6 @@ void Accounts::set_warm_at(size_t idx, uint64_t tx_idx) noexcept {
     // `last_tx_idx` backward — used by the journal's rollback path
     // to restore the pre-write value.
     mods_[idx].last_tx_idx = tx_idx;
-}
-
-void Accounts::check_read_only_unchanged() const {
-    for (size_t i = 0; i < originals_.size(); ++i) {
-        if (!originals_[i].is_read_only()) continue;
-        if (balance_at(i)   != originals_[i].balance()) {
-            std::fprintf(stderr, "DBG read-only account mutated (balance) idx=%zu addr=0x", i);
-            for (uint8_t b : originals_[i].address().bytes) std::fprintf(stderr, "%02x", b);
-            std::fprintf(stderr, "\n");
-            fatal("Accounts::check_read_only_unchanged: balance mutated");
-        }
-        if (nonce_at(i)     != originals_[i].nonce()) {
-            std::fprintf(stderr, "DBG read-only account mutated (nonce) idx=%zu addr=0x", i);
-            for (uint8_t b : originals_[i].address().bytes) std::fprintf(stderr, "%02x", b);
-            std::fprintf(stderr, "\n");
-            fatal("Accounts::check_read_only_unchanged: nonce mutated");
-        }
-        if (code_hash_at(i) != originals_[i].code_hash()) {
-            std::fprintf(stderr, "DBG read-only account mutated (code_hash) idx=%zu addr=0x", i);
-            for (uint8_t b : originals_[i].address().bytes) std::fprintf(stderr, "%02x", b);
-            std::fprintf(stderr, "\n");
-            fatal("Accounts::check_read_only_unchanged: code_hash mutated");
-        }
-    }
 }
 
 } // namespace zeg

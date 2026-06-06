@@ -4,7 +4,7 @@
 //! Phase 4: every section is real; no more placeholders. (StateRoot
 //! trie-hint stream remains a Phase-5 stub for now.)
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use alloy::consensus::TxEnvelope;
 use alloy::eips::eip2718::Encodable2718;
@@ -14,14 +14,23 @@ use anyhow::Result;
 use sha3::{Digest, Keccak256};
 
 use crate::rpc::{Prestate, PrestateDiff};
-use crate::touchset::TouchSet;
 use crate::writer::Writer;
 
 /// On-wire format version, written in the 4 bytes after the magic.
 /// Must match the guest's `kVersion` in `cpp-guest/include/zeg/binary_format.hpp`.
+/// v4: witness-only StateRoot — the encoder transcribes the pre-state MPT
+/// straight from the execution witness and no longer pre-emits leaves for
+/// keys created during the block (the guest inserts them). Byte layout is
+/// unchanged from v3.
+/// v3: dropped the Accounts/Storages sections; the StateRoot section starts
+/// with three u64 counts and each `Op::Leaf` carries its key + block-start
+/// values, so the guest builds both tables during the old-root walk.
+/// v2: single `Op::Branch` opcode (no NodeR/NodeRW); `is_read_only` dropped
+/// from the Accounts (now 128 B) and Storages (now 88 B) records — the guest
+/// derives read-only-ness dynamically (original == current).
 /// v1: StateRoot `Op::Leaf` carries no index (keccak-sorted tables +
 /// counter-derived index in the guest).
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 4;
 
 /// File magic prefix (8 bytes): 4 B ASCII `"ZEG0"` + 4 B little-endian
 /// format version, which also keeps the cursor 8-byte aligned for the
@@ -237,111 +246,48 @@ fn keccak256(bytes: &[u8]) -> B256 {
     B256::from_slice(&hasher.finalize())
 }
 
-/// Section 3 — `Accounts`.
+/// Block-start (original) account fields for one address — the values
+/// that used to populate the now-removed `Accounts` section, sourced
+/// identically. The StateRoot encoder embeds these in each state
+/// `Op::Leaf` payload; the guest builds its Accounts table from them.
 ///
-/// One 136-byte record per touched account, ordered by `BTreeSet`
-/// iteration (deterministic by address). The address set is the
-/// union of prestate.keys ∪ diff.pre.keys ∪ diff.post.keys — covers
-/// addresses freshly created during the block too (CREATE/CREATE2,
-/// EIP-7702 delegations) that the prestate doesn't list.
-///
-/// Field sourcing per address:
+/// Field sourcing:
 ///   * balance, nonce, code   ← prestate (block-start). Falls back to
 ///                              diff.pre (also a block-start value) if
 ///                              the address is only present there;
-///                              else zero/empty defaults (newly
-///                              created — was non-existent pre-block).
+///                              else zero/empty defaults (newly created
+///                              — was non-existent pre-block).
 ///   * code_hash              ← keccak256(code) or EMPTY_CODE_HASH.
-///   * storage_root           ← **placeholder zeros** (filled in Phase 5
-///                              via debug_executionWitness; eth_getProof
-///                              is unusable on pruned nodes).
-///   * is_read_only           ← 1 iff the address was never written
-///                              (absent from `diff.pre ∪ diff.post`).
-///                              The block-level coinbase and every
-///                              withdrawal recipient are force-marked
-///                              writable: the prestate tracer in diff
-///                              mode misses priority-fee credits to
-///                              the coinbase and never reports EIP-4895
-///                              withdrawals (consensus-layer, outside
-///                              any tx), but the cpp-guest mutates the
-///                              balance of both, so leaving them
-///                              read-only would trip the invariant
-///                              check and silently embed stale values
-///                              in the post-state-root subtree cache.
-pub fn write_accounts(
-    w: &mut Writer,
+pub fn account_original_fields(
+    addr: &Address,
     prestate: &Prestate,
     diff: &PrestateDiff,
-    touch: &TouchSet,
-    block: &alloy::rpc::types::Block,
-) -> Result<()> {
-    let mut written: BTreeSet<Address> = diff
-        .pre
-        .keys()
-        .chain(diff.post.keys())
-        .copied()
-        .collect();
+) -> (U256, u64, B256) {
+    // Created-during-block: present in diff.post but NOT in diff.pre. The
+    // non-diff prestate may carry post-creation values (the first tx that
+    // READ the account ran AFTER the CREATE), but the block-START values
+    // must be empty for the old-root reconstruction to match.
+    let created_this_block =
+        !diff.pre.contains_key(addr) && diff.post.contains_key(addr);
 
-    // Coinbase: receives priority fees from every non-zero-gas tx, so
-    // its balance changes even though the prestate tracer may omit it.
-    written.insert(block.header.beneficiary);
-
-    // EIP-4895 withdrawal recipients: credited at the block boundary,
-    // not by any tx — so the prestate tracer never sees them.
-    if let Some(withdrawals) = &block.withdrawals {
-        for wd in withdrawals.iter() {
-            written.insert(wd.address);
-        }
+    if created_this_block {
+        return (U256::ZERO, 0u64, EMPTY_CODE_HASH);
     }
-
-    w.u64_le(touch.addrs.len() as u64);
-
-    for addr in &touch.addrs {
-        // Created-during-block: present in diff.post but NOT in
-        // diff.pre. The non-diff prestate may carry post-creation
-        // values (the first tx that READ the account ran AFTER the
-        // CREATE), but the block-START values must be empty for the
-        // old-pass state root reconstruction to match.
-        let created_this_block =
-            !diff.pre.contains_key(addr) && diff.post.contains_key(addr);
-
-        let (balance, nonce, code_hash) = if created_this_block {
-            (U256::ZERO, 0u64, EMPTY_CODE_HASH)
-        } else {
-            let ps_main = prestate.get(addr);
-            let ps_fallback = diff.pre.get(addr);
-            let balance = ps_main.and_then(|p| p.balance)
-                .or_else(|| ps_fallback.and_then(|p| p.balance))
-                .unwrap_or(U256::ZERO);
-            let nonce = ps_main.and_then(|p| p.nonce)
-                .or_else(|| ps_fallback.and_then(|p| p.nonce))
-                .unwrap_or(0);
-            let code = ps_main.and_then(|p| p.code.as_ref())
-                .or_else(|| ps_fallback.and_then(|p| p.code.as_ref()));
-            let code_hash = match code {
-                Some(c) if !c.is_empty() => keccak256(c),
-                _ => EMPTY_CODE_HASH,
-            };
-            (balance, nonce, code_hash)
-        };
-
-        //  0..20 address
-        w.bytes(addr.as_slice());
-        // 20..24 pad
-        w.pad(4);
-        // 24..56 balance (uint256be, 32 B BE)
-        w.bytes(&balance.to_be_bytes::<32>());
-        // 56..64 nonce
-        w.u64_le(nonce);
-        // 64..96 storage_root  (placeholder zeros — see doc above)
-        w.pad(32);
-        // 96..128 code_hash
-        w.bytes(code_hash.as_slice());
-        // 128..136 is_read_only (u64; 1 = true)
-        w.u64_le(if written.contains(addr) { 0 } else { 1 });
-    }
-    w.assert_aligned();
-    Ok(())
+    let ps_main = prestate.get(addr);
+    let ps_fallback = diff.pre.get(addr);
+    let balance = ps_main.and_then(|p| p.balance)
+        .or_else(|| ps_fallback.and_then(|p| p.balance))
+        .unwrap_or(U256::ZERO);
+    let nonce = ps_main.and_then(|p| p.nonce)
+        .or_else(|| ps_fallback.and_then(|p| p.nonce))
+        .unwrap_or(0);
+    let code = ps_main.and_then(|p| p.code.as_ref())
+        .or_else(|| ps_fallback.and_then(|p| p.code.as_ref()));
+    let code_hash = match code {
+        Some(c) if !c.is_empty() => keccak256(c),
+        _ => EMPTY_CODE_HASH,
+    };
+    (balance, nonce, code_hash)
 }
 
 /// Section 4 — `Contracts`.
@@ -415,34 +361,17 @@ pub fn write_contracts(
     Ok(())
 }
 
-/// Section 5 — `Storages`.
+/// Block-start (original) value for every touched (address, slot) — the
+/// data that used to populate the now-removed `Storages` section, sourced
+/// identically. The StateRoot encoder embeds each value in its storage
+/// `Op::Leaf` payload; the guest builds its Storages table from them.
 ///
-/// One 96-byte record per touched (address, slot). The slot set is
-/// the union of every (addr, slot) seen in:
-///   * prestate.storage              — read or written, value present.
-///   * diff.pre.storage              — read AND written, value present.
-///   * diff.post.storage             — written, possibly newly created
-///                                      (value before block = 0 if not
-///                                      in prestate or diff.pre).
-///
-/// Block-start value prefers prestate → diff.pre → zero. `is_read_only`
-/// is 1 iff the slot was never written
-/// (not in `diff.pre[*].storage ∪ diff.post[*].storage`).
-///
-/// `force_writable` is the set of (addr, slot) pairs the caller knows
-/// the cpp-guest will mutate outside of tx execution — currently the
-/// Pectra system contracts' deterministic slots (EIP-4788 / 2935 /
-/// 7002 / 7251), which the prestate tracer never sees because the
-/// pre/post-block system calls aren't transactions.
-pub fn write_storages(
-    w: &mut Writer,
+/// Block-start value prefers prestate → diff.pre → zero (a slot only in
+/// diff.post is newly created, so its pre-block value is zero).
+pub fn storage_original_values(
     prestate: &Prestate,
     diff: &PrestateDiff,
-    touch: &TouchSet,
-    force_writable: &BTreeSet<(Address, B256)>,
-) -> Result<()> {
-    // Pre-block value for each (addr, slot) — prestate wins, falling
-    // back to diff.pre, with zero for slots only present in diff.post.
+) -> BTreeMap<(Address, B256), B256> {
     let mut value_of: BTreeMap<(Address, B256), B256> = BTreeMap::new();
     for (addr, ps) in prestate {
         for (slot, value) in &ps.storage {
@@ -459,32 +388,7 @@ pub fn write_storages(
             value_of.entry((*addr, *slot)).or_insert(B256::ZERO);
         }
     }
-
-    let mut written: BTreeSet<(Address, B256)> = BTreeSet::new();
-    for side in [&diff.pre, &diff.post] {
-        for (addr, info) in side {
-            for slot in info.storage.keys() {
-                written.insert((*addr, *slot));
-            }
-        }
-    }
-    // Pectra system contracts (EIP-4788 / 2935 / 7002 / 7251): the
-    // pre/post-block system calls write deterministic ring-buffer
-    // slots that no tx touches, so the prestate diff never reports
-    // them. Force-mark them writable.
-    written.extend(force_writable.iter().copied());
-
-    w.u64_le(touch.slots.len() as u64);
-    for (addr, slot) in &touch.slots {
-        let value = value_of.get(&(*addr, *slot)).copied().unwrap_or(B256::ZERO);
-        w.bytes(addr.as_slice());
-        w.pad(4);
-        w.bytes(slot.as_slice());
-        w.bytes(value.as_slice());
-        w.u64_le(if written.contains(&(*addr, *slot)) { 0 } else { 1 });
-    }
-    w.assert_aligned();
-    Ok(())
+    value_of
 }
 
 /// Section 6 — `PreviousBlocks`.

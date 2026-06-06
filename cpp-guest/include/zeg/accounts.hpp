@@ -1,9 +1,17 @@
 // Accounts — world-state account table for the ZisK Ethereum guest.
 //
 // Holds, for every account the block touches:
-//   * the *original* values (zero-copy view into the input stream), and
+//   * the *original* (block-start) values, and
 //   * an in-memory *modifications* slot tracking any writes performed
 //     during EVM re-execution (balance, nonce, codeHash, code).
+//
+// The table is no longer parsed from a dedicated stream section: it is
+// built dynamically by `StateRoot`'s old-root walk, which `append`s one
+// row per state-trie leaf (the leaf opcode carries the account's address
+// + original fields). The originals live in an owned byte buffer
+// (`record_store_`) that `reserve` pre-sizes exactly from the StateRoot
+// header's `numberOfAccounts`, so the `View` pointers stay stable as
+// rows are appended.
 //
 // Lookup is by 20-byte address through an internal hashmap. Addresses
 // are already pseudo-random (keccak outputs in most cases), so the
@@ -20,17 +28,34 @@
 
 #include <evmc/evmc.hpp>
 
+#include "zeg/trie_node.hpp"
+
 namespace zeg {
 
 class Accounts {
 public:
-    // Wire-format record size in bytes. Documented in `View` below.
-    static constexpr uint64_t kRecordSize = 136;
+    // Internal record stride in bytes. Documented in `View` below. No
+    // longer a wire size — the table is built via `append`, not parsed.
+    static constexpr uint64_t kRecordSize = 128;
 
-    // Build the table by reading a `u64` count from `cursor` followed
-    // by `count` consecutive 136-byte records. Advances `cursor` past
-    // every byte consumed. The buffer must outlive this instance.
-    explicit Accounts(const uint8_t*& cursor);
+    // Starts empty. Call `reserve(numberOfAccounts)` once, then `append`
+    // one row per state-trie leaf during the StateRoot old-root walk.
+    Accounts() = default;
+
+    // Pre-size the owned record buffer to exactly `count` rows. Must be
+    // called before any `append`, and `count` must equal the number of
+    // rows that will be appended (the StateRoot header's
+    // `numberOfAccounts`): the buffer is fixed at this size so `View`
+    // pointers into it stay stable, and `append` fatals on overflow.
+    void reserve(uint64_t count);
+
+    // Append one account row (original/block-start values) and return its
+    // index. Registers the address in the lookup map. Fatals if more rows
+    // are appended than `reserve` allowed.
+    size_t append(const evmc::address&    address,
+                  uint64_t                nonce,
+                  const evmc::uint256be&  balance,
+                  const evmc::bytes32&    code_hash);
 
     // ----- read accessors (return modified value if dirty, else original) -----
     // Take `tx_idx` and touch the account for EIP-2929 warm tracking
@@ -56,14 +81,45 @@ public:
     const evmc::uint256be& balance_orig_at  (size_t idx) const noexcept;
     uint64_t              nonce_orig_at     (size_t idx) const noexcept;
     const evmc::bytes32&  code_hash_orig_at (size_t idx) const noexcept;
-    // storage_root is read straight from the stream view — it can only be
-    // updated as a side effect of recomputing the storage trie, never via
-    // a setter on Accounts, so this getter returns the original.
-    const evmc::bytes32&  storage_root_at   (size_t idx) const noexcept;
-    // True iff the input stream marked this account read-only (e.g. a
-    // prestate-only access that must not be modified). The flag lives
-    // in the stream; there is no setter.
-    bool                  is_read_only_at   (size_t idx) const noexcept;
+
+    // ----- state-trie leaf node (owned per row) -----
+    //
+    // Each row caches the `NodeR` result of its account-trie leaf, the
+    // keccak(address) used to rebuild the leaf path, and a `Child` link to
+    // its storage-subtree root node. `StateRoot` fills these during the
+    // old-root walk and consumes them during the new-root walk.
+    //
+    // `build_value` (old-root pass) builds the cached leaf from the ORIGINAL
+    // fields at path `nib`; `update_value` (new-root pass) recomputes it
+    // ONLY if the original fields differ from the current ones or the passed
+    // storage root differs from the cached one. Both return a pointer to the
+    // row's cached union for the tree walk to consume. `nib` is the leaf's
+    // remaining path nibbles; `storage_root` is the hash of the account's
+    // storage subtree at the relevant value set.
+    const NodeR* build_value(size_t idx,
+                             const std::vector<uint8_t>& nib,
+                             const evmc::bytes32& addr_hash,
+                             Child storage_root_child,
+                             const evmc::bytes32& storage_root);
+    const NodeR* update_value(size_t idx,
+                              const std::vector<uint8_t>& nib,
+                              const evmc::bytes32& storage_root);
+
+    const NodeR* cached_at(size_t idx) const noexcept { return &leaf_[idx].cached; }
+    Child storage_root_child_at(size_t idx) const noexcept { return leaf_[idx].storage_root; }
+    const evmc::bytes32& addr_hash_at(size_t idx) const noexcept { return leaf_[idx].addr_hash; }
+
+    // Setters used by the new-root insert phase to wire a created account's
+    // leaf metadata (it was appended at run-time, not via build_value).
+    void set_addr_hash(size_t idx, const evmc::bytes32& addr_hash);
+    void set_storage_root_child(size_t idx, Child storage_root);
+
+    // True iff none of nonce / balance / code_hash changed since block start.
+    bool fields_unchanged_at(size_t idx) const noexcept {
+        return nonce_orig_at(idx)     == nonce_at(idx)
+            && balance_orig_at(idx)   == balance_at(idx)
+            && code_hash_orig_at(idx) == code_hash_at(idx);
+    }
 
     // ----- write accessors (mark the field dirty) -----
     void set_balance   (const evmc::address& addr, const evmc::uint256be& v,
@@ -120,33 +176,23 @@ public:
 
     uint64_t size() const noexcept { return originals_.size(); }
 
-    // Walk every account flagged read-only in the input stream and
-    // assert balance / nonce / code_hash still match their originals.
-    // Read-only accounts are part of the witness but the prover claims
-    // they are not mutated; if execution wrote to one, the new state
-    // root would diverge silently. Aborts via zeg::fatal on mismatch.
-    void check_read_only_unchanged() const;
-
 private:
-    // Zero-copy view into one 136-byte record. Wire layout:
+    // View into one 128-byte record in `record_store_`. Layout:
     //   offset  size  field
     //        0   20   address       (raw bytes)
-    //       20    4   pad           (keeps cursor 8-aligned past address)
+    //       20    4   pad           (keeps the record 8-aligned past address)
     //       24   32   balance       (big-endian uint256, evmc wire form)
-    //       56    8   nonce         (little-endian u64)
-    //       64   32   storage_root  (keccak hash)
+    //       56    8   nonce         (host-endian u64)
+    //       64   32   (unused — storage_root is recomputed by StateRoot)
     //       96   32   code_hash     (keccak hash)
-    //      128    8   is_read_only  (u64, 1 = true, 0 = false)
-    //      136         end of record
+    //      128         end of record
     struct View {
         const uint8_t* data;
 
         static constexpr size_t kAddressOffset     = 0;
         static constexpr size_t kBalanceOffset     = 24;
         static constexpr size_t kNonceOffset       = 56;
-        static constexpr size_t kStorageRootOffset = 64;
         static constexpr size_t kCodeHashOffset    = 96;
-        static constexpr size_t kIsReadOnlyOffset  = 128;
 
         const evmc::address& address() const noexcept {
             return *reinterpret_cast<const evmc::address*>(data + kAddressOffset);
@@ -159,16 +205,8 @@ private:
             std::memcpy(&v, std::assume_aligned<8>(data + kNonceOffset), sizeof(v));
             return v;
         }
-        const evmc::bytes32& storage_root() const noexcept {
-            return *reinterpret_cast<const evmc::bytes32*>(data + kStorageRootOffset);
-        }
         const evmc::bytes32& code_hash() const noexcept {
             return *reinterpret_cast<const evmc::bytes32*>(data + kCodeHashOffset);
-        }
-        bool is_read_only() const noexcept {
-            uint64_t v;
-            std::memcpy(&v, std::assume_aligned<8>(data + kIsReadOnlyOffset), sizeof(v));
-            return v != 0;
         }
     };
 
@@ -208,8 +246,23 @@ private:
         }
     };
 
-    std::vector<View> originals_;
-    std::vector<Mods> mods_;
+    // Per-row state-trie leaf cache (parallel to `originals_`). Owned by
+    // the table so the leaf recompute lives next to the values it reads.
+    struct LeafCache {
+        NodeR         cached{};        // account-leaf NodeR result
+        evmc::bytes32 addr_hash{};     // keccak(address) — for the leaf path
+        Child         storage_root{};  // link to the storage-subtree root node
+    };
+
+    // Owned backing buffer for the original records. Pre-sized exactly by
+    // `reserve`; never reallocated afterwards, so the `View` pointers in
+    // `originals_` stay valid for the lifetime of the table.
+    std::vector<uint8_t> record_store_;
+    uint64_t             capacity_ = 0;
+
+    std::vector<View>      originals_;
+    std::vector<Mods>      mods_;
+    std::vector<LeafCache> leaf_;
     std::unordered_map<evmc::address, size_t, AddressHash, AddressEq> index_;
 };
 

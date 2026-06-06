@@ -33,17 +33,18 @@ The file is one contiguous byte stream, consumed left-to-right:
 +---------------------------+
 |  Transactions             |
 +---------------------------+
-|  Accounts                 |
-+---------------------------+
 |  Contracts                |
-+---------------------------+
-|  Storages                 |
 +---------------------------+
 |  PreviousBlocks           |
 +---------------------------+
 |  StateRoot trie hints     |
 +---------------------------+
 ```
+
+The Accounts and Storages tables are no longer standalone sections: as
+of version `3` the guest builds them while walking the StateRoot trie
+hints (each `Op::Leaf` carries the key + block-start values), so they are
+described under Section 7 rather than as top-level sections.
 
 No padding between sections — each section's last record is itself
 sized to a multiple of 8, so the next section starts 8-byte aligned.
@@ -53,9 +54,21 @@ sized to a multiple of 8, so the next section starts 8-byte aligned.
 | Offset | Size | Field     | Description |
 |-------:|-----:|-----------|-------------|
 |      0 |    4 | `magic`   | ASCII `"ZEG0"` (`0x3047455A` little-endian, see [`binary_format.hpp`](cpp-guest/include/zeg/binary_format.hpp)) |
-|      4 |    4 | `version` | `u32` little-endian format version (`kVersion`, currently `1`). Also keeps the cursor 8-byte aligned for everything that follows |
+|      4 |    4 | `version` | `u32` little-endian format version (`kVersion`, currently `4`). Also keeps the cursor 8-byte aligned for everything that follows |
 
 The guest fatals on magic mismatch or on a `version` other than `kVersion`.
+Version `4` made the StateRoot trie hints **witness-only**: the encoder
+transcribes the pre-state MPT straight from the execution witness and no
+longer pre-emits leaves for keys created during the block — the guest
+inserts those into the node array during the new-root pass. The byte layout
+is unchanged from v3.
+Version `3` removed the standalone Accounts and Storages sections: the
+StateRoot section now begins with three `u64` counts and every `Op::Leaf`
+carries its key + block-start values, so the guest builds both tables while
+walking the trie hints (before it executes the block).
+Version `2` folded `NodeR`/`NodeRW` into a single `Branch` opcode and dropped
+the `is_read_only` field from the Account (now 128 B) and Storage (now 88 B)
+records — the guest derives read-only-ness dynamically (original == current).
 Version `1` dropped the per-leaf index from Section 7 (see below).
 
 ## Section 1 — `ConsensusInfo`
@@ -141,28 +154,12 @@ guest can verify the signature without running secp256k1 recovery; the
 signer address is then derived as `keccak256(pubkey)[12:]`. Same
 mechanism for each EIP-7702 auth signer.
 
-## Section 3 — `Accounts`
+## Section 3 — `Accounts` *(removed in v3)*
 
-State-trie account table for every account the block touches. Schema at
-[`accounts.hpp`](cpp-guest/include/zeg/accounts.hpp).
-
-| Offset | Size                          | Field      |
-|-------:|------------------------------:|------------|
-|      0 |                             8 | `count`    |
-|      8 | `count` × 136                 | records    |
-
-### Account record (136 bytes)
-
-| Offset | Size | Field         | Encoding |
-|-------:|-----:|---------------|----------|
-|      0 |   20 | `address`     | 20-byte address |
-|     20 |    4 | pad           | zero |
-|     24 |   32 | `balance`     | `uint256be` |
-|     56 |    8 | `nonce`       | `u64` |
-|     64 |   32 | `storage_root`| `bytes32` (root of the account's storage trie at block start) |
-|     96 |   32 | `code_hash`   | `bytes32` (keccak256 of the deployed code; `keccak256("")` for EOAs) |
-|    128 |    8 | `is_read_only`| `u64` — `1` if the prover marked this account read-only for this block, `0` otherwise |
-|    136 |      | end of record |          |
+The standalone account table no longer exists. The guest now builds its
+[`accounts.hpp`](cpp-guest/include/zeg/accounts.hpp) table from the
+StateRoot state-trie leaves: each state `Op::Leaf` carries the account's
+address + block-start fields (see [Section 7](#section-7--stateroot-trie-hints)).
 
 ## Section 4 — `Contracts`
 
@@ -190,26 +187,13 @@ The keccak256 of `code` is the lookup key (matching `code_hash` in the
 Account record). The guest accesses code zero-copy via the embedded
 pointer + length.
 
-## Section 5 — `Storages`
+## Section 5 — `Storages` *(removed in v3)*
 
-Per-account storage slots the block touches. Schema at
-[`storages.hpp`](cpp-guest/include/zeg/storages.hpp).
-
-| Offset | Size           | Field   |
-|-------:|---------------:|---------|
-|      0 |              8 | `count` |
-|      8 |  `count` × 96  | records |
-
-### Storage record (96 bytes)
-
-| Offset | Size | Field         | Encoding |
-|-------:|-----:|---------------|----------|
-|      0 |   20 | `address`     | 20-byte address |
-|     20 |    4 | pad           | zero |
-|     24 |   32 | `position`    | `bytes32` (storage slot key) |
-|     56 |   32 | `value`       | `bytes32` (slot value at block start) |
-|     88 |    8 | `is_read_only`| `u64` — `1` if the prover marked this slot read-only, `0` otherwise |
-|     96 |      | end of record |          |
+The standalone storage table no longer exists. The guest builds its
+[`storages.hpp`](cpp-guest/include/zeg/storages.hpp) table from the
+StateRoot storage-trie leaves: each storage `Op::Leaf` carries the slot
+position + block-start value (the owning address comes from the enclosing
+account leaf — see [Section 7](#section-7--stateroot-trie-hints)).
 
 ## Section 6 — `PreviousBlocks`
 
@@ -261,50 +245,62 @@ All fields are at 8-byte-aligned offsets:
 
 Trie-walk hints used by [`state_root.cpp`](cpp-guest/src/state_root.cpp)
 to recompute the world-state trie root in two passes (pre-execution
-against original values, post-execution against modified values).
+against original values, post-execution against modified values). As of
+version `3` this section is also where the guest builds its Accounts and
+Storages tables — one row per keyed leaf.
 
-The format is an opcode-tagged depth-first walk. Each opcode is a
-`u64` (so consumed reads stay 8-byte aligned), followed by an
-opcode-specific payload:
+### Header (3 × `u64`)
+
+| Offset | Field              | Description |
+|-------:|--------------------|-------------|
+|      0 | `numberOfNodes`    | Conservative upper bound on the node count (the encoder emits `stream_len / 8`, since every node is ≥ one 8-byte opcode word). The guest uses it as a cache-overflow ceiling. |
+|      8 | `numberOfAccounts` | Exact number of state-trie leaves = Accounts table size. Pre-sizes the table. |
+|     16 | `numberOfStorages` | Exact number of storage-trie leaves = Storages table size. Pre-sizes the table. |
+
+The opcode stream follows the header. The format is an opcode-tagged
+depth-first walk. Each opcode is a `u64` (so consumed reads stay 8-byte
+aligned), followed by an opcode-specific payload:
 
 | Opcode (u64) | Name            | Payload |
 |-------------:|-----------------|---------|
 |            0 | `Empty`         | — (zero payload) |
-|            1 | `Hash`          | 32 B `bytes32` (a subtree's already-known root hash). Stands in for an UNTOUCHED subtree only — one with no Accounts/Storages table rows under it — so it skips no leaves and leaves the guest's leaf counters unchanged. |
+|            1 | `Hash`          | 32 B `bytes32` (a subtree's already-known root hash). Stands in for an UNTOUCHED subtree only — one with no table rows under it — so it appends no rows and leaves the guest's leaf counters unchanged. |
 |            2 | `ExtensionHash` | `u64 nibbles_count` + `nibbles_count` × `u64` (one nibble per `u64`, low 4 bits used) + 32 B `bytes32` |
-|            3 | `Leaf`          | — (no payload). The Accounts/Storages tables are sorted in trie-walk order (by `keccak256(address)` and `(keccak256(address), keccak256(slot))`), so the guest assigns each leaf the next index from a running per-type counter rather than reading it. Leaves walked under a state-trie `NodeRW` may contain a nested storage subtree via a recursive `walk_node` call |
-|            4 | `NodeRW`        | 16 sub-trees (one per branch nibble), each itself a recursive node |
-|            5 | `NodeR`         | Same shape as `NodeRW` but marks the subtree read-only — every contained leaf must reference an `is_read_only == true` entry in `Accounts` / `Storages`. The result of a `NodeR` subtree is cached during the old-root pass and reused unchanged in the new-root pass. |
+|            3 | `Leaf`          | The leaf's key + block-start values. **State leaf**: `address` (20 B) + 4 B zero pad + `balance` (`uint256be`, 32 B) + `nonce` (`u64`) + `code_hash` (32 B) = 96 B; then the nested storage subtree follows as a recursive node. **Storage leaf** (under a state leaf's subtree): `position` (32 B) + `value` (32 B) = 64 B (the owning address comes from the enclosing account leaf). The guest appends one Accounts/Storages row per leaf, indexed by the trie-walk order in which leaves are visited. |
+|            4 | `Branch`        | 16 sub-trees (one per branch nibble), each itself a recursive node |
+|            5 | `PhantomLeaf`   | `u64 nibbles_count` + `nibbles_count` × `u64` (remaining path nibbles, low 4 bits used) + `u64 value_len` + `value_len` bytes + zero pad to the next 8-byte boundary. A keyless sibling leaf (its preimage is missing from `witness.keys`), so it gets no table row — it contributes its hash but is never indexed. |
 
 The walk consumes exactly as many bytes as the trie requires; the
-guest does not pre-declare a total stream size — the trailing byte of
-the last payload is also the last byte of the file (modulo final
-alignment pad).
+trailing byte of the last payload is also the last byte of the file
+(modulo final alignment pad).
 
-Because `Leaf` carries no index, the guest derives it from running state
-and storage counters. The two passes differ:
+The guest assigns each leaf the next index from a running per-type
+counter, which is also the position at which it `append`s the row. The
+two passes differ:
 
-* **Pre-execution (old-root) pass** — walks every node against the
-  block-start values. Each `Leaf` takes the next counter value, and the
-  guest checks that the indexed Accounts/Storages key's hash matches the
-  walked path (`Leaf`s are thus accessed consecutively, keys must match).
-  Every leaf under a `NodeR` must reference a read-only row. At the end,
-  each counter must equal its table length exactly — so every row appears
-  as exactly one leaf, none repeated or missing. An `Op::Hash` stands in
-  only for untouched (0-row) subtrees; if reth's witness is missing a node
-  over read-only rows, those rows have no leaf and this check rejects the
-  block (a complete witness is required — strict).
+* **Pre-execution (old-root) pass** — runs **before** the block executes.
+  Walks every node against the block-start values, appending one
+  Accounts/Storages row per keyed leaf and checking that each leaf's
+  `keccak256(key)` matches its walked path (this binds the payload key to
+  its trie position). The resulting old root is matched against the
+  trusted parent anchor by the caller; a missing or misplaced row makes
+  that match fail, so a complete, correctly-placed witness is required.
 * **Post-execution (new-root) pass** — re-walks against the post-block
-  values to recompute the root, skipping the key and count checks. Before
-  it runs, the guest verifies every read-only Accounts/Storages row is
-  unchanged.
+  values to recompute the root, and **inserts keys created during the
+  block**. As of v4 the encoder is witness-only and does not pre-emit
+  leaves for created keys; the guest navigates `keccak256(key)` in the node
+  array and places the leaf at an `Empty` slot or splits a colliding sibling
+  into a fresh branch. Deletion is not structural — a zeroed account/slot
+  becomes empty and the branch folds. (A child referencing the empty-trie
+  root is emitted as `Op::Empty`, so a first write into empty storage is an
+  insert, not a fatal.)
 
-To avoid re-walking unchanged read-only regions, the old-root pass caches
-each `NodeR` found directly under a `NodeRW`: it records the node's walk
-result, the cursor advance, and the state/storage leaf indices reached
-**after** the subtree. The new-root pass replays the cache — advancing the
-cursor and **setting** the leaf counters to those recorded indices —
-instead of walking the subtree again.
+Read-only-ness is **derived dynamically**, not declared on the wire:
+a leaf is read-only iff its original value equals its current value; a
+`Branch`/`ExtensionHash` is read-only iff all its children are. The
+old-root pass records every node's computed result in a per-node array (in
+post-order); the new-root pass walks the same array and, for a read-only
+node, reuses the cached result instead of re-hashing.
 
 ## Encoding conventions cheat-sheet
 

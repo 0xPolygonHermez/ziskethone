@@ -1,9 +1,15 @@
 // Storages — per-account storage-slot table for the ZisK Ethereum guest.
 //
 // Holds, for every (account, slot) pair the block touches:
-//   * the *original* slot value (zero-copy view into the input stream), and
+//   * the *original* (block-start) slot value, and
 //   * an in-memory dirty/new-value pair tracking any SSTORE performed
 //     during EVM re-execution.
+//
+// Like Accounts, the table is no longer parsed from a stream section: it
+// is built by `StateRoot`'s old-root walk via `append` (one row per
+// storage-trie leaf — the leaf opcode carries position + original value;
+// the owning address comes from the enclosing account leaf). Originals
+// live in an owned buffer `reserve`d exactly from `numberOfStorages`.
 //
 // Lookup is by the composite (address, position) pair through an internal
 // hashmap. Both halves are already pseudo-random (keccak outputs / slot
@@ -19,17 +25,31 @@
 
 #include <evmc/evmc.hpp>
 
+#include "zeg/trie_node.hpp"
+
 namespace zeg {
 
 class Storages {
 public:
-    // Wire-format record size in bytes. Documented in `View` below.
-    static constexpr uint64_t kRecordSize = 96;
+    // Internal record stride in bytes. Documented in `View` below. No
+    // longer a wire size — the table is built via `append`, not parsed.
+    static constexpr uint64_t kRecordSize = 88;
 
-    // Build the table by reading a `u64` count from `cursor` followed
-    // by `count` consecutive 96-byte records. Advances `cursor` past
-    // every byte consumed. The buffer must outlive this instance.
-    explicit Storages(const uint8_t*& cursor);
+    // Starts empty. Call `reserve(numberOfStorages)` once, then `append`
+    // one row per storage-trie leaf during the StateRoot old-root walk.
+    Storages() = default;
+
+    // Pre-size the owned record buffer to exactly `count` rows. Must be
+    // called before any `append`; the buffer is fixed at this size so
+    // `View` pointers stay stable, and `append` fatals on overflow.
+    void reserve(uint64_t count);
+
+    // Append one storage row (original/block-start value) and return its
+    // index. Registers (address, position) in the lookup map and the
+    // per-address slot list. Fatals on overflow past `reserve`.
+    size_t append(const evmc::address& address,
+                  const evmc::bytes32& position,
+                  const evmc::bytes32& value);
 
     // Returns the current slot value: the dirty new value if `set_value`
     // has been called for this (addr, position), else the original from
@@ -68,9 +88,31 @@ public:
     const evmc::bytes32&  position_at    (size_t idx) const noexcept;
     evmc::bytes32         value_at       (size_t idx) const noexcept;
     const evmc::bytes32&  value_orig_at  (size_t idx) const noexcept;
-    // True iff the input stream marked this slot read-only. The flag
-    // lives in the stream; there is no setter.
-    bool                  is_read_only_at(size_t idx) const noexcept;
+
+    // ----- storage-trie leaf node (owned per row) -----
+    //
+    // Each row caches the `NodeR` result of its storage-trie leaf and the
+    // keccak(position) used to rebuild the leaf path. `build_value`
+    // (old-root pass) builds the cached leaf from the ORIGINAL value at path
+    // `nib`; `update_value` (new-root pass) recomputes it ONLY if the slot
+    // value changed. Both return a pointer to the row's cached union.
+    const NodeR* build_value(size_t idx,
+                             const std::vector<uint8_t>& nib,
+                             const evmc::bytes32& pos_hash);
+    const NodeR* update_value(size_t idx,
+                              const std::vector<uint8_t>& nib);
+
+    const NodeR* cached_at(size_t idx) const noexcept { return &leaf_[idx].cached; }
+    const evmc::bytes32& pos_hash_at(size_t idx) const noexcept { return leaf_[idx].pos_hash; }
+
+    // Set by the new-root insert phase for a created slot (appended at
+    // run-time, not via build_value).
+    void set_pos_hash(size_t idx, const evmc::bytes32& pos_hash);
+
+    // True iff the slot value did not change since block start.
+    bool value_unchanged_at(size_t idx) const noexcept {
+        return value_orig_at(idx) == value_at(idx);
+    }
 
     // Look up the array index of (addr, position). Aborts the guest via
     // zeg::fatal if the slot isn't in the table — the guest is supposed
@@ -109,13 +151,6 @@ public:
     // smaller than the current one — `mark_touched_at` only bumps up).
     void                 set_warm_at(size_t idx, uint64_t tx_idx) noexcept;
 
-    // Walk every slot flagged read-only in the input stream and assert
-    // the current value still matches its original. Read-only slots
-    // are part of the witness but the prover claims they are not
-    // mutated; if execution wrote to one, the new storage trie would
-    // diverge silently. Aborts via zeg::fatal on mismatch.
-    void                 check_read_only_unchanged() const;
-
     // Value at the start of the tx that last touched this slot. Only
     // meaningful when `is_warm_at(idx, current_tx_idx) == true`.
     const evmc::bytes32& tx_original_at(size_t idx) const noexcept;
@@ -130,21 +165,19 @@ public:
     const std::vector<size_t>& slots_of(const evmc::address& addr) const noexcept;
 
 private:
-    // Zero-copy view into one 96-byte record. Wire layout:
+    // View into one 88-byte record in `record_store_`. Layout:
     //   offset  size  field
     //        0   20   address       (raw bytes)
-    //       20    4   pad           (keeps cursor 8-aligned past address)
+    //       20    4   pad           (keeps the record 8-aligned past address)
     //       24   32   position      (storage slot key)
     //       56   32   value         (slot value)
-    //       88    8   is_read_only  (u64, 1 = true, 0 = false)
-    //       96         end of record
+    //       88         end of record
     struct View {
         const uint8_t* data;
 
         static constexpr size_t kAddressOffset    = 0;
         static constexpr size_t kPositionOffset   = 24;
         static constexpr size_t kValueOffset      = 56;
-        static constexpr size_t kIsReadOnlyOffset = 88;
 
         const evmc::address& address() const noexcept {
             return *reinterpret_cast<const evmc::address*>(data + kAddressOffset);
@@ -154,11 +187,6 @@ private:
         }
         const evmc::bytes32& value() const noexcept {
             return *reinterpret_cast<const evmc::bytes32*>(data + kValueOffset);
-        }
-        bool is_read_only() const noexcept {
-            uint64_t v;
-            std::memcpy(&v, std::assume_aligned<8>(data + kIsReadOnlyOffset), sizeof(v));
-            return v != 0;
         }
     };
 
@@ -224,8 +252,20 @@ private:
         }
     };
 
-    std::vector<View> originals_;
-    std::vector<Mods> mods_;
+    // Per-row storage-trie leaf cache (parallel to `originals_`).
+    struct LeafCache {
+        NodeR         cached{};    // storage-leaf NodeR result
+        evmc::bytes32 pos_hash{};  // keccak(position) — for the leaf path
+    };
+
+    // Owned backing buffer for the original records. Pre-sized exactly by
+    // `reserve`; never reallocated, so `View` pointers stay valid.
+    std::vector<uint8_t> record_store_;
+    uint64_t             capacity_ = 0;
+
+    std::vector<View>      originals_;
+    std::vector<Mods>      mods_;
+    std::vector<LeafCache> leaf_;
     std::unordered_map<Key, size_t, KeyHash, KeyEq> index_;
     // address -> its storage indices (see slots_of).
     std::unordered_map<evmc::address, std::vector<size_t>, AddressHash, AddressEq>

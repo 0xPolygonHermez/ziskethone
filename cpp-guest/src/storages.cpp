@@ -7,20 +7,62 @@
 
 namespace zeg {
 
-Storages::Storages(const uint8_t*& cursor) {
-    const uint64_t count   = read_u64_le(cursor);
-    const uint8_t* records = cursor;
+void Storages::reserve(uint64_t count) {
+    record_store_.assign(count * kRecordSize, 0);
+    capacity_ = count;
     originals_.reserve(count);
-    mods_.resize(count);
+    mods_.reserve(count);
+    leaf_.reserve(count);
     index_.reserve(count);
-    for (uint64_t i = 0; i < count; ++i) {
-        const uint8_t* record = records + i * kRecordSize;
-        originals_.push_back(View{record});
-        const View& v = originals_.back();
-        index_.emplace(Key{v.address(), v.position()}, i);
-        addr_slots_[v.address()].push_back(i);
+}
+
+size_t Storages::append(const evmc::address& address,
+                        const evmc::bytes32& position,
+                        const evmc::bytes32& value) {
+    const size_t idx = originals_.size();
+    if (idx >= capacity_) {
+        fatal("Storages::append: more rows than reserve() allowed (numberOfStorages overflow)");
     }
-    cursor += count * kRecordSize;
+    uint8_t* rec = record_store_.data() + idx * kRecordSize;
+    std::memcpy(rec + View::kAddressOffset,  address.bytes,  sizeof(address.bytes));
+    std::memcpy(rec + View::kPositionOffset, position.bytes, sizeof(position.bytes));
+    std::memcpy(rec + View::kValueOffset,    value.bytes,    sizeof(value.bytes));
+    originals_.push_back(View{rec});
+    mods_.push_back(Mods{});
+    leaf_.push_back(LeafCache{});
+    index_.emplace(Key{address, position}, idx);
+    addr_slots_[address].push_back(idx);
+    return idx;
+}
+
+const NodeR* Storages::build_value(size_t idx,
+                                   const std::vector<uint8_t>& nib,
+                                   const evmc::bytes32& pos_hash) {
+    LeafCache& lc = leaf_[idx];
+    lc.pos_hash = pos_hash;
+    if (is_zero_value(value_orig_at(idx))) {
+        lc.cached.emplace<EmptyR>();
+    } else {
+        lc.cached.emplace<StorageLeafR>(nib, idx);
+    }
+    return &lc.cached;
+}
+
+const NodeR* Storages::update_value(size_t idx, const std::vector<uint8_t>& nib) {
+    LeafCache& lc = leaf_[idx];
+    // Always rebuild at path `nib` (cheap — no keccak), so a leaf moved
+    // deeper by a new-root insert split gets its path recomputed. Branch-
+    // level read-only reuse provides the keccak saving.
+    if (is_zero_value(value_at(idx))) {
+        lc.cached.emplace<EmptyR>();
+    } else {
+        lc.cached.emplace<StorageLeafR>(nib, idx);
+    }
+    return &lc.cached;
+}
+
+void Storages::set_pos_hash(size_t idx, const evmc::bytes32& pos_hash) {
+    leaf_[idx].pos_hash = pos_hash;
 }
 
 const std::vector<size_t>& Storages::slots_of(
@@ -113,24 +155,6 @@ evmc::bytes32 Storages::value_at(size_t idx) const noexcept {
 
 const evmc::bytes32& Storages::value_orig_at(size_t idx) const noexcept {
     return originals_[idx].value();
-}
-
-bool Storages::is_read_only_at(size_t idx) const noexcept {
-    return originals_[idx].is_read_only();
-}
-
-void Storages::check_read_only_unchanged() const {
-    for (size_t i = 0; i < originals_.size(); ++i) {
-        if (!originals_[i].is_read_only()) continue;
-        if (value_at(i) != originals_[i].value()) {
-            std::fprintf(stderr, "DBG read-only slot mutated idx=%zu addr=0x", i);
-            for (uint8_t b : originals_[i].address().bytes)  std::fprintf(stderr, "%02x", b);
-            std::fprintf(stderr, " pos=0x");
-            for (uint8_t b : originals_[i].position().bytes) std::fprintf(stderr, "%02x", b);
-            std::fprintf(stderr, "\n");
-            fatal("Storages::check_read_only_unchanged: value mutated");
-        }
-    }
 }
 
 } // namespace zeg

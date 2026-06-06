@@ -122,44 +122,17 @@ pub fn build_binary(sources: &OfflineSources, output: &Path) -> Result<()> {
     sections::write_magic(&mut w);
     sections::write_consensus_info(&mut w, &sources.current, &sources.parent, sources.is_osaka);
     sections::write_transactions(&mut w, &sources.current)?;
-    sections::write_accounts(&mut w, &prestate, &sources.diff, &touch, &sources.current)?;
     sections::write_contracts(&mut w, &prestate, &sources.diff, &sources.current)?;
-    sections::write_storages(
-        &mut w,
-        &prestate,
-        &sources.diff,
-        &touch,
-        &sources.system_contract_slots,
-    )?;
     sections::write_previous_blocks(&mut w, &sources.ancestors);
-    // Addresses force-marked writable independent of the diff trace.
-    // Must align with the Accounts / Storages is_read_only flag so
-    // cpp-guest's state-root walker doesn't trip the NodeR/NodeRW
-    // invariant. Sources:
-    //   * coinbase (priority fees)            — write_accounts
-    //   * EIP-4895 withdrawal recipients      — write_accounts
-    //   * Pectra system contracts whose slots appear in
-    //     system_contract_slots — write_storages marks the slots
-    //     writable, so the parent account leaf must also be writable.
-    let mut force_writable_addrs: std::collections::BTreeSet<alloy::primitives::Address> =
-        std::collections::BTreeSet::new();
-    force_writable_addrs.insert(sources.current.header.beneficiary);
-    if let Some(wds) = &sources.current.withdrawals {
-        for wd in wds.iter() {
-            force_writable_addrs.insert(wd.address);
-        }
-    }
-    for (addr, _) in &sources.system_contract_slots {
-        force_writable_addrs.insert(*addr);
-    }
+    // The StateRoot trie hints are now witness-only: `state_root::write`
+    // transcribes the pre-state MPT straight from `witness.state` +
+    // `witness.keys`, emitting every revealed leaf and leaving created keys
+    // for the guest to insert. It no longer consumes prestate/diff/touch.
     state_root::write(
         &mut w,
         sources.parent.header.state_root,
         &sources.witness.state,
-        &touch,
-        &sources.diff,
-        &force_writable_addrs,
-        &sources.system_contract_slots,
+        &sources.witness.keys,
     )?;
 
     let bytes = w.into_bytes();
