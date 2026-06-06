@@ -158,3 +158,26 @@ add_custom_command(TARGET bls_selftest.elf POST_BUILD
     --remove-section .riscv.attributes
     $<TARGET_FILE:bls_selftest.elf> $<TARGET_FILE:bls_selftest.elf>
   COMMENT "Stripping ZisK-incompatible sections")
+
+# --- bigint_selftest.elf: on-emulator self-test of the MODEXP backend ---
+# Exercises the arith256 (0x801) precompile + bin_decomp/bigint_div fcalls.
+add_executable(bigint_selftest.elf
+  ${CMAKE_CURRENT_SOURCE_DIR}/bigint/test/selftest_backend_zisk.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
+  ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
+target_compile_definitions(bigint_selftest.elf PRIVATE ZEG_ZISK)
+target_compile_options(bigint_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
+target_include_directories(bigint_selftest.elf PRIVATE ${GUEST_ROOT}/include)
+target_link_options(bigint_selftest.elf PRIVATE
+  -T ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld -nostdlib -nostartfiles -Wl,--gc-sections)
+set_target_properties(bigint_selftest.elf PROPERTIES LINK_DEPENDS
+  ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld)
+add_custom_command(TARGET bigint_selftest.elf POST_BUILD
+  COMMAND ${CMAKE_OBJCOPY}
+    --remove-section .eh_frame --remove-section .eh_frame_hdr
+    --remove-section '.gcc_except_table*' --remove-section .comment
+    --remove-section .riscv.attributes
+    $<TARGET_FILE:bigint_selftest.elf> $<TARGET_FILE:bigint_selftest.elf>
+  COMMENT "Stripping ZisK-incompatible sections")
