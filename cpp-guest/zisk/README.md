@@ -56,8 +56,12 @@ The output must match the native guest:
   (`bls12_381_kzg.cpp` + the self-contained BLS12-381 pairing port in
   `bls12_381/`): field/curve precompiles (CSR 0x80B–0x810) + fcall hints. See
   `bls12_381/PORTING.md`; `bls_selftest.elf` validates the backend.
-- **Still stubbed** (`precompile_stubs.cpp`): EIP-2537 BLS12-381 (g1/g2
-  add·mul·msm·map, pairing) and MODEXP (0x05). Blocks using them mismatch.
+- **MODEXP (EIP-198, 0x05) uses the ZisK accelerators** (`modexp_zisk.cpp` +
+  the arbitrary-precision bigint port in `bigint/`): arith256/add256 precompiles
+  (CSR 0x801/0x811) + bin_decomp/bigint_div fcalls. `bigint_selftest.elf` and
+  `modexp_selftest.elf` validate the backend.
+- **Still stubbed** (`precompile_stubs.cpp`): EIP-2537 BLS12-381 only (g1/g2
+  add·mul·msm·map, pairing). Blocks using them mismatch.
 - **secp256k1 uses the ZisK accelerators** (`secp256k1.cpp`): field/scalar
   arithmetic and EC add/double via the precompiles (CSR 0x802/0x803/0x804) plus
   fcall hints (FN_INV, MSB_POS_256), a faithful port of ziskos's `zisklib`. The

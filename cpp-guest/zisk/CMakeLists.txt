@@ -93,6 +93,9 @@ set(ZISK_SUPPORT
   # KZG point-eval (EIP-4844) via the self-contained BLS12-381 pairing port
   # (bls12_381/*.hpp) on the ZisK precompiles + fcall hints.
   ${CMAKE_CURRENT_SOURCE_DIR}/bls12_381_kzg.cpp
+  # MODEXP (EIP-198) via the self-contained arbitrary-precision bigint port
+  # (bigint/*.hpp) on the ZisK arith256/add256 precompiles + fcall hints.
+  ${CMAKE_CURRENT_SOURCE_DIR}/modexp_zisk.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/precompile_stubs.cpp
 )
 
@@ -180,4 +183,26 @@ add_custom_command(TARGET bigint_selftest.elf POST_BUILD
     --remove-section '.gcc_except_table*' --remove-section .comment
     --remove-section .riscv.attributes
     $<TARGET_FILE:bigint_selftest.elf> $<TARGET_FILE:bigint_selftest.elf>
+  COMMENT "Stripping ZisK-incompatible sections")
+
+# --- modexp_selftest.elf: on-emulator EIP-198 modexp on the ZisK backend ---
+add_executable(modexp_selftest.elf
+  ${CMAKE_CURRENT_SOURCE_DIR}/bigint/test/selftest_modexp_zisk.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
+  ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
+target_compile_definitions(modexp_selftest.elf PRIVATE ZEG_ZISK)
+target_compile_options(modexp_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
+target_include_directories(modexp_selftest.elf PRIVATE ${GUEST_ROOT}/include)
+target_link_options(modexp_selftest.elf PRIVATE
+  -T ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld -nostdlib -nostartfiles -Wl,--gc-sections)
+set_target_properties(modexp_selftest.elf PROPERTIES LINK_DEPENDS
+  ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld)
+add_custom_command(TARGET modexp_selftest.elf POST_BUILD
+  COMMAND ${CMAKE_OBJCOPY}
+    --remove-section .eh_frame --remove-section .eh_frame_hdr
+    --remove-section '.gcc_except_table*' --remove-section .comment
+    --remove-section .riscv.attributes
+    $<TARGET_FILE:modexp_selftest.elf> $<TARGET_FILE:modexp_selftest.elf>
   COMMENT "Stripping ZisK-incompatible sections")
