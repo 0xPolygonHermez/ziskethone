@@ -31,6 +31,14 @@ inline void arith256_mod(const uint64_t a[4], const uint64_t b[4], const uint64_
     asm volatile("csrs 0x802, %0" : : "r"(&p) : "memory");
 }
 
+// 256-bit add: a + b + cin = cout|c (cout returned). CSR 0x811 (csrrs ret).
+inline uint64_t add256(const uint64_t a[4], const uint64_t b[4], uint64_t cin, uint64_t c[4]) {
+    struct { const uint64_t* a; const uint64_t* b; uint64_t cin; uint64_t* c; } p{a, b, cin, c};
+    uint64_t cout;
+    asm volatile("csrrs %0, 0x811, %1" : "=r"(cout) : "r"(&p) : "memory");
+    return cout;
+}
+
 // fcall direct-value param push (bucket 1 → CSR 0x8F0) and result read.
 inline void fc_param(uint64_t v) { asm volatile("csrs 0x8F0, %0" : : "r"(v) : "memory"); }
 inline uint64_t fc_get() { uint64_t v; asm volatile("csrr %0, 0xFFE" : "=r"(v)); return v; }
@@ -105,6 +113,14 @@ inline void arith256_mod(const uint64_t a[4], const uint64_t b[4], const uint64_
     uint64_t dl[4], dh[4]; arith256(a, b, c, dl, dh);
     uint64_t num[8]; for (int i = 0; i < 4; ++i) { num[i] = dl[i]; num[i+4] = dh[i]; }
     detail::mod512(num, m, d);
+}
+
+// 256-bit add a+b+cin = cout|c (software).
+inline uint64_t add256(const uint64_t a[4], const uint64_t b[4], uint64_t cin, uint64_t c[4]) {
+    unsigned __int128 carry = cin;
+    for (int i = 0; i < 4; ++i) { unsigned __int128 s = (unsigned __int128)a[i] + b[i] + carry;
+        c[i] = (uint64_t)s; carry = s >> 64; }
+    return (uint64_t)carry;
 }
 
 // bin_decomp (software): MSB→LSB bits of a[len_a], no leading zeros.
