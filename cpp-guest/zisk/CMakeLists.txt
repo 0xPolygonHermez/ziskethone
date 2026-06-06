@@ -87,9 +87,9 @@ set(ZISK_SUPPORT
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp
-  # secp256k1 via the ZisK precompiles + fcall hints (crypto_zisk.cpp).
-  # crypto_sw.cpp is the software baseline, kept in the tree as reference.
-  ${CMAKE_CURRENT_SOURCE_DIR}/crypto_zisk.cpp
+  # secp256k1 ECDSA. Default: ZisK precompiles + fcall hints. With
+  # -DZEG_SECP256K1_SW=ON: portable software baseline (same source, same result).
+  ${CMAKE_CURRENT_SOURCE_DIR}/secp256k1.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/precompile_stubs.cpp
 )
 
@@ -97,8 +97,12 @@ add_executable(zisk_eth_guest.elf
   ${GUEST_SRC} ${EVMONE_CORE} ${EVMMAX_SRC} ${PRECOMP_SRC} ${PAIRING_SRC}
   ${PRECOMP_C} ${STATE_SRC} ${ZISK_SUPPORT})
 
+# secp256k1 backend: precompiles+fcalls by default; software baseline when ON.
+option(ZEG_SECP256K1_SW "Use the software secp256k1 baseline (no accelerators)" OFF)
+
 target_compile_definitions(zisk_eth_guest.elf PRIVATE
   ZEG_ZISK
+  $<$<BOOL:${ZEG_SECP256K1_SW}>:ZEG_SECP256K1_SW>
   PROJECT_VERSION="0.21.0")          # normally injected by evmone's CMake
 target_compile_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
 

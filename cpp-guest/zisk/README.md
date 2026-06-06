@@ -55,10 +55,10 @@ The output must match the native guest:
 - **Heavy precompiles** BLS12-381 (EIP-2537), KZG point-eval (EIP-4844), and
   MODEXP (0x05) → failure stubs (`precompile_stubs.cpp`). Blocks that use them
   will mismatch; everything else runs.
-- **secp256k1 uses the ZisK accelerators** (`crypto_zisk.cpp`): field/scalar
+- **secp256k1 uses the ZisK accelerators** (`secp256k1.cpp`): field/scalar
   arithmetic and EC add/double via the precompiles (CSR 0x802/0x803/0x804) plus
-  fcall hints (FN_INV, MSB_POS_256), a faithful port of ziskos's `zisklib`.
-  `crypto_sw.cpp` remains as the software baseline/reference.
+  fcall hints (FN_INV, MSB_POS_256), a faithful port of ziskos's `zisklib`. The
+  same file builds a portable software baseline with `-DZEG_SECP256K1_SW=ON`.
 - **Keccak uses the ZisK accelerator** (`keccak_zisk.cpp`, CSR 0x800) — a
   drop-in for evmone's `keccak.c`, so all callers (state/MPT hashing, tx/header
   hashes, CREATE addresses, code hashes, the EVM `KECCAK256` opcode, …) hit it.
@@ -74,8 +74,7 @@ The output must match the native guest:
 | `runtime.cpp`     | bump allocator, `mem*`, no-op libc stdio stubs, C++ ABI |
 | `compiler_rt.cpp` | libgcc builtins, soft-float, 128-bit div/shift, `_Prime_rehash_policy` |
 | `stdcxx_stubs.cpp`| `halt()` stubs for dead iostream/pmr paths (tracer, etc.) |
-| `crypto_zisk.cpp` | secp256k1 `ecdsa_verify` via ZisK precompiles + fcall hints (linked) |
-| `crypto_sw.cpp`   | software secp256k1 `ecdsa_verify` baseline/reference (not linked) |
+| `secp256k1.cpp`   | secp256k1 `ecdsa_verify`: ZisK precompiles+fcalls, or software with `-DZEG_SECP256K1_SW` |
 | `keccak_zisk.cpp` | Keccak-256 via the ZisK keccakf precompile (CSR 0x800) |
 | `precompile_stubs.cpp` | bls/kzg/modexp failure stubs |
 | `include/zeg/zisk_io.hpp` | memory-mapped input/output (`ZEG_ZISK`) |
