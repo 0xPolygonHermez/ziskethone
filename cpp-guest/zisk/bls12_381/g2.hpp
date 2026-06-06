@@ -59,6 +59,13 @@ inline G2 g2_add_complete(const G2& a, const G2& b) {
     return g2_add(a, b);
 }
 
+inline G2 g2_sub_complete(const G2& a, const G2& b) {
+    if (g2_is_identity(a) && g2_is_identity(b)) return G2_IDENTITY;
+    if (g2_is_identity(a)) return g2_neg(b);
+    if (g2_is_identity(b)) return a;
+    return g2_sub(a, b);
+}
+
 // k·P for non-identity P, k ∈ Fr (4 limbs). MSB hinted, scalar recomposed.
 inline G2 g2_scalar_mul(const G2& p, const uint64_t k[4]) {
     if (k[0]==0 && k[1]==0 && k[2]==0 && k[3]==0) return G2_IDENTITY;

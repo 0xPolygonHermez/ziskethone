@@ -35,8 +35,12 @@ each layer verified before the next. See the plan in `~/.claude/plans/`.
    Miller-loop line-coeff fcalls (14/15) live in Layer 6. ✅
 6. **Miller loop + final exp + pairing** — done (`cyclo.hpp`, `pairing.hpp`,
    `test/test_pairing.cpp`; dbl-line KAT + pairing bilinearity & non-degeneracy). ✅
-7. kzg_verify_proof glue + constants — todo
-8. integrate (replace stub, CMake) + end-to-end block 25231946 — todo
+7. **kzg_verify_core + constants** — done (`kzg.hpp`, `test/test_kzg.cpp`;
+   trusted-setup [τ]₂, scalar canonicity, pairing equation; constant-poly valid +
+   invalid + full-pairing-path cases). The valid non-trivial path is covered by
+   the Layer-8 real-block test (can't construct a true vector without secret τ). ✅
+8. integrate: evmone::crypto::kzg_verify_proof wrapper (sha256 versioned-hash +
+   kzg_verify_core), CMake, end-to-end block 25231946 — todo
 
 ## Host tests
 

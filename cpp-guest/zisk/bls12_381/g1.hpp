@@ -149,6 +149,21 @@ inline bool g1_is_on_subgroup(const G1& p) {
     return g1_eq(lhs, rhs);
 }
 
+inline G1 g1_sub_complete(const G1& a, const G1& b) {
+    if (g1_is_identity(a) && g1_is_identity(b)) return G1_IDENTITY;
+    if (g1_is_identity(a)) return g1_neg(b);
+    if (g1_is_identity(b)) return a;
+    return g1_sub(a, b);
+}
+
+// point → 48-byte compressed (big-endian x with flag bits). For tests/round-trip.
+inline void g1_compress(const G1& p, uint8_t out[48]) {
+    if (g1_is_identity(p)) { for (int i = 0; i < 48; ++i) out[i] = 0; out[0] = 0xc0; return; }
+    fp_to_bytes_be(p.x, out);                            // x < p, so top 3 bits are 0
+    out[0] |= 0x80;                                      // compressed
+    if (fp_lt(fp_neg(p.y), p.y)) out[0] |= 0x20;         // y lexicographically largest
+}
+
 // 48-byte compressed → (point, is_infinity). Returns false on invalid input.
 inline bool g1_decompress(const uint8_t in[48], G1* out, bool* is_inf) {
     uint8_t flags = in[0];
