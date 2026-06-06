@@ -69,11 +69,14 @@ file(GLOB EVMONE_CORE   ${EVMONE_SRC}/lib/evmone/*.cpp)
 list(FILTER EVMONE_CORE EXCLUDE REGEX "/cpu_check\\.cpp$")
 file(GLOB EVMMAX_SRC    ${EVMONE_SRC}/lib/evmmax/*.cpp)
 file(GLOB PRECOMP_SRC   ${EVMONE_SRC}/lib/evmone_precompiles/*.cpp)
-# bls/kzg pull blst+c-kzg (asm); modexp pulls std::pmr. All three are stubbed
-# (see precompile_stubs.cpp) — fine until a block needs those precompiles.
-list(FILTER PRECOMP_SRC EXCLUDE REGEX "/bls\\.cpp$|/kzg\\.cpp$|/modexp\\.cpp$")
-# bn254 pairing lives in a subdirectory (ECPAIRING precompile).
+# bls/kzg pull blst+c-kzg (asm); modexp pulls std::pmr. bn254 (ecadd/ecmul) is
+# replaced by our ZisK-accelerated bn254_eip196.cpp. All are excluded here and
+# provided by the ZISK_SUPPORT wrapper TUs below.
+list(FILTER PRECOMP_SRC EXCLUDE REGEX "/bls\\.cpp$|/kzg\\.cpp$|/modexp\\.cpp$|/bn254\\.cpp$")
+# bn254 pairing lives in a subdirectory (ECPAIRING precompile); we provide our own
+# evmmax::bn254::pairing_check, so exclude evmone's software pairing too.
 file(GLOB PAIRING_SRC   ${EVMONE_SRC}/lib/evmone_precompiles/pairing/*/*.cpp)
+list(FILTER PAIRING_SRC EXCLUDE REGEX "/pairing/bn254/")
 # Keccak: instead of evmone's software keccak.c, compile our drop-in that
 # routes the Keccak-f[1600] permutation through the ZisK precompile (CSR 0x800).
 # Same public symbol (ethash_keccak256), so every Keccak call site is accelerated.
@@ -98,6 +101,9 @@ set(ZISK_SUPPORT
   ${CMAKE_CURRENT_SOURCE_DIR}/modexp_zisk.cpp
   # EIP-2537 BLS12-381 precompiles (0x0b–0x11) via the bls12_381/ port.
   ${CMAKE_CURRENT_SOURCE_DIR}/bls12_381_eip2537.cpp
+  # alt_bn128 / BN254 precompiles (ecAdd 0x06, ecMul 0x07, ecPairing 0x08) via the
+  # bn254/ port on the ZisK bn254 precompiles + fcall hints.
+  ${CMAKE_CURRENT_SOURCE_DIR}/bn254_eip196.cpp
 )
 
 add_executable(zisk_eth_guest.elf
@@ -112,6 +118,12 @@ target_compile_definitions(zisk_eth_guest.elf PRIVATE
   $<$<BOOL:${ZEG_SECP256K1_SW}>:ZEG_SECP256K1_SW>
   PROJECT_VERSION="0.21.0")          # normally injected by evmone's CMake
 target_compile_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
+
+# ECADD (0x06) reaches the generic evmmax::ecc::add_affine template inside
+# precompiles.cpp; force-include our explicit BN254 specialization so the dispatch
+# routes through the accelerated G1 add (definition in bn254_eip196.cpp).
+set_source_files_properties(${STATE_SRC} TARGET_DIRECTORY zisk_eth_guest.elf PROPERTIES
+  COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/bn254/add_affine_spec.hpp")
 
 target_include_directories(zisk_eth_guest.elf PRIVATE
   ${GUEST_ROOT}/include
@@ -230,4 +242,28 @@ add_custom_command(TARGET bls2537_selftest.elf POST_BUILD
     --remove-section '.gcc_except_table*' --remove-section .comment
     --remove-section .riscv.attributes
     $<TARGET_FILE:bls2537_selftest.elf> $<TARGET_FILE:bls2537_selftest.elf>
+  COMMENT "Stripping ZisK-incompatible sections")
+
+# --- bn254_selftest.elf: on-emulator self-test of the BN254 (alt_bn128) layers ---
+# Exercises ecAdd/ecMul (curve precompiles 0x806/0x807) + ecPairing (Fp2 complex
+# precompiles, fp_inv/fp2_inv/twist-line fcalls) on the precompile/fcall backend.
+add_executable(bn254_selftest.elf
+  ${CMAKE_CURRENT_SOURCE_DIR}/bn254/test/selftest_eip196_zisk.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
+  ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
+target_compile_definitions(bn254_selftest.elf PRIVATE ZEG_ZISK)
+target_compile_options(bn254_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
+target_include_directories(bn254_selftest.elf PRIVATE ${GUEST_ROOT}/include)
+target_link_options(bn254_selftest.elf PRIVATE
+  -T ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld -nostdlib -nostartfiles -Wl,--gc-sections)
+set_target_properties(bn254_selftest.elf PROPERTIES LINK_DEPENDS
+  ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld)
+add_custom_command(TARGET bn254_selftest.elf POST_BUILD
+  COMMAND ${CMAKE_OBJCOPY}
+    --remove-section .eh_frame --remove-section .eh_frame_hdr
+    --remove-section '.gcc_except_table*' --remove-section .comment
+    --remove-section .riscv.attributes
+    $<TARGET_FILE:bn254_selftest.elf> $<TARGET_FILE:bn254_selftest.elf>
   COMMENT "Stripping ZisK-incompatible sections")
