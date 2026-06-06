@@ -33,7 +33,8 @@ each layer verified before the next. See the plan in `~/.claude/plans/`.
 5. **G2 twist** — done (`g2.hpp`, `test/test_g2.cpp`; on-curve, r·G==O). Affine
    over Fp2, no precompile. KZG needs only add/dbl/neg/scalar-mul over constants;
    Miller-loop line-coeff fcalls (14/15) live in Layer 6. ✅
-6. Miller loop + final exp + pairing — todo
+6. **Miller loop + final exp + pairing** — done (`cyclo.hpp`, `pairing.hpp`,
+   `test/test_pairing.cpp`; dbl-line KAT + pairing bilinearity & non-degeneracy). ✅
 7. kzg_verify_proof glue + constants — todo
 8. integrate (replace stub, CMake) + end-to-end block 25231946 — todo
 
