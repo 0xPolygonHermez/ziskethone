@@ -10,6 +10,7 @@ extern "C" {
 #include "blst.h"
 }
 #include "../eip2537.hpp"
+#include "../g2_subgroup.hpp"
 
 using namespace zeg::bls;
 static int g_fail = 0;
@@ -72,6 +73,35 @@ int main() {
         if (std::memcmp(out, ref, 256) != 0) { allg2=false; break; }
     }
     check(allg2, "g2_add vs blst (300 random)");
+
+    // ---- B2: G2 subgroup check vs blst ----
+    // in-subgroup points must be accepted
+    bool sg = true;
+    for (int i = 0; i < 50; ++i) {
+        blst_p2_affine a; rand_g2(&a);
+        uint8_t e[256]; enc_g2(&a, e); G2 p; g2_parse(e, e+128, &p);
+        if (g2_is_on_subgroup(p) != (bool)blst_p2_affine_in_g2(&a) || !g2_is_on_subgroup(p)) { sg=false; break; }
+    }
+    check(sg, "g2 subgroup: in-subgroup accepted (vs blst)");
+    // on-curve but NOT in subgroup must be rejected
+    auto rfp = [](Fp* o){ for (int i=0;i<6;++i) o->c[i]=0; for(int i=0;i<5;++i){ s=s*6364136223846793005ULL+1; o->c[i]=s; } s=s*6364136223846793005ULL+1; o->c[5]=s>>8; };
+    bool nsg = true; int tested = 0;
+    for (int i = 0; i < 4000 && tested < 20; ++i) {
+        Fp2 x; rfp(&x.c0); rfp(&x.c1);
+        Fp2 rhs = fp2_add(fp2_mul(fp2_sqr(x), x), E2_B);   // x³ + 4(1+u)
+        bool has; Fp2 y = fp2_sqrt(rhs, &has); if (!has) continue;
+        G2 p{x, y};
+        // build blst oracle affine from our coords
+        blst_p2_affine ba; uint8_t t[48];
+        fp_to_bytes_be(x.c0,t); blst_fp_from_bendian(&ba.x.fp[0],t);
+        fp_to_bytes_be(x.c1,t); blst_fp_from_bendian(&ba.x.fp[1],t);
+        fp_to_bytes_be(y.c0,t); blst_fp_from_bendian(&ba.y.fp[0],t);
+        fp_to_bytes_be(y.c1,t); blst_fp_from_bendian(&ba.y.fp[1],t);
+        if (!blst_p2_affine_on_curve(&ba)) continue;
+        ++tested;
+        if (g2_is_on_subgroup(p) != (bool)blst_p2_affine_in_g2(&ba)) { nsg=false; break; }
+    }
+    check(nsg && tested > 0, "g2 subgroup: on-curve non-subgroup rejected (vs blst)");
 
     std::printf(g_fail ? "\n%d FAILED\n" : "\nALL PASS\n", g_fail);
     return g_fail ? 1 : 0;
