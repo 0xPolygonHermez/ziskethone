@@ -15,6 +15,16 @@
 #include <cstdint>
 #include <cstring>
 
+// <math.h> (pulled in transitively by evmone/intx in host tests) defines FP_ZERO
+// / FP_NORMAL etc. as float-classification macros; the freestanding guest never
+// sees them. Drop them so our field constants below keep their natural names.
+#ifdef FP_ZERO
+#undef FP_ZERO
+#endif
+#ifdef FP_ONE
+#undef FP_ONE
+#endif
+
 namespace zeg::bn {
 
 struct Fp { uint64_t c[4]; };
