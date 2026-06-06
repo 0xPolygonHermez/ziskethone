@@ -24,7 +24,7 @@ each layer verified before the next. See the plan in `~/.claude/plans/`.
 ## Layers / status
 
 1. **Fp** — done (`fp.hpp`, `test/test_fp.cpp`; KAT vs zisklib Rust tests). ✅
-2. Fp2 — todo
+2. **Fp2** — done (`fp2.hpp`, `test/test_fp2.cpp`; KAT vs zisklib Rust tests). ✅
 3. Fp6 / Fp12 (+ cyclotomic) — todo
 4. G1 (decompress/add/scalar-mul/subgroup) — todo
 5. G2 twist — todo
