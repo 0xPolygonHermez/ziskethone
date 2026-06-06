@@ -96,7 +96,8 @@ set(ZISK_SUPPORT
   # MODEXP (EIP-198) via the self-contained arbitrary-precision bigint port
   # (bigint/*.hpp) on the ZisK arith256/add256 precompiles + fcall hints.
   ${CMAKE_CURRENT_SOURCE_DIR}/modexp_zisk.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/precompile_stubs.cpp
+  # EIP-2537 BLS12-381 precompiles (0x0b–0x11) via the bls12_381/ port.
+  ${CMAKE_CURRENT_SOURCE_DIR}/bls12_381_eip2537.cpp
 )
 
 add_executable(zisk_eth_guest.elf
@@ -205,4 +206,28 @@ add_custom_command(TARGET modexp_selftest.elf POST_BUILD
     --remove-section '.gcc_except_table*' --remove-section .comment
     --remove-section .riscv.attributes
     $<TARGET_FILE:modexp_selftest.elf> $<TARGET_FILE:modexp_selftest.elf>
+  COMMENT "Stripping ZisK-incompatible sections")
+
+# --- bls2537_selftest.elf: on-emulator self-test of the EIP-2537 layers ---
+# Exercises mul/msm, pairing_check and map-to-curve (SWU + isogeny + cofactor)
+# on the precompile/fcall backend. See bls12_381/test/selftest_eip2537_zisk.cpp.
+add_executable(bls2537_selftest.elf
+  ${CMAKE_CURRENT_SOURCE_DIR}/bls12_381/test/selftest_eip2537_zisk.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
+  ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
+target_compile_definitions(bls2537_selftest.elf PRIVATE ZEG_ZISK)
+target_compile_options(bls2537_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
+target_include_directories(bls2537_selftest.elf PRIVATE ${GUEST_ROOT}/include)
+target_link_options(bls2537_selftest.elf PRIVATE
+  -T ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld -nostdlib -nostartfiles -Wl,--gc-sections)
+set_target_properties(bls2537_selftest.elf PROPERTIES LINK_DEPENDS
+  ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld)
+add_custom_command(TARGET bls2537_selftest.elf POST_BUILD
+  COMMAND ${CMAKE_OBJCOPY}
+    --remove-section .eh_frame --remove-section .eh_frame_hdr
+    --remove-section '.gcc_except_table*' --remove-section .comment
+    --remove-section .riscv.attributes
+    $<TARGET_FILE:bls2537_selftest.elf> $<TARGET_FILE:bls2537_selftest.elf>
   COMMENT "Stripping ZisK-incompatible sections")
