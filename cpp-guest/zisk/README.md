@@ -55,11 +55,14 @@ The output must match the native guest:
 - **Heavy precompiles** BLS12-381 (EIP-2537), KZG point-eval (EIP-4844), and
   MODEXP (0x05) → failure stubs (`precompile_stubs.cpp`). Blocks that use them
   will mismatch; everything else runs.
-- **secp256k1 is software** (`crypto_sw.cpp`), so signature verification still
-  dominates step counts; the ZisK secp256k1 accelerator will replace it next.
+- **secp256k1 uses the ZisK accelerators** (`crypto_zisk.cpp`): field/scalar
+  arithmetic and EC add/double via the precompiles (CSR 0x802/0x803/0x804) plus
+  fcall hints (FN_INV, MSB_POS_256), a faithful port of ziskos's `zisklib`.
+  `crypto_sw.cpp` remains as the software baseline/reference.
 - **Keccak uses the ZisK accelerator** (`keccak_zisk.cpp`, CSR 0x800) — a
   drop-in for evmone's `keccak.c`, so all callers (state/MPT hashing, tx/header
   hashes, CREATE addresses, code hashes, the EVM `KECCAK256` opcode, …) hit it.
+- No crypto remains in software on the ZisK build.
 
 ## Layout
 
@@ -71,6 +74,8 @@ The output must match the native guest:
 | `runtime.cpp`     | bump allocator, `mem*`, no-op libc stdio stubs, C++ ABI |
 | `compiler_rt.cpp` | libgcc builtins, soft-float, 128-bit div/shift, `_Prime_rehash_policy` |
 | `stdcxx_stubs.cpp`| `halt()` stubs for dead iostream/pmr paths (tracer, etc.) |
-| `crypto_sw.cpp`   | software secp256k1 `ecdsa_verify` (ABI from `zeg/zisk_crypto.hpp`) |
+| `crypto_zisk.cpp` | secp256k1 `ecdsa_verify` via ZisK precompiles + fcall hints (linked) |
+| `crypto_sw.cpp`   | software secp256k1 `ecdsa_verify` baseline/reference (not linked) |
+| `keccak_zisk.cpp` | Keccak-256 via the ZisK keccakf precompile (CSR 0x800) |
 | `precompile_stubs.cpp` | bls/kzg/modexp failure stubs |
 | `include/zeg/zisk_io.hpp` | memory-mapped input/output (`ZEG_ZISK`) |

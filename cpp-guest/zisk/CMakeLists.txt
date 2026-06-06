@@ -87,7 +87,9 @@ set(ZISK_SUPPORT
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/crypto_sw.cpp
+  # secp256k1 via the ZisK precompiles + fcall hints (crypto_zisk.cpp).
+  # crypto_sw.cpp is the software baseline, kept in the tree as reference.
+  ${CMAKE_CURRENT_SOURCE_DIR}/crypto_zisk.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/precompile_stubs.cpp
 )
 
