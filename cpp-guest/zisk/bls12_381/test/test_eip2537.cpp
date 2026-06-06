@@ -14,6 +14,7 @@ extern "C" {
 }
 #include "../eip2537.hpp"
 #include "../g2_subgroup.hpp"
+#include "../map_to_curve.hpp"
 
 using namespace zeg::bls;
 static int g_fail = 0;
@@ -188,6 +189,72 @@ int main() {
         if (std::memcmp(out,ref,256)!=0) ms2=false;
     }
     check(ms2, "g2_msm vs blst (30× n=4)");
+
+    // ---- B4: pairing_check ----
+    // our pairing_check body (same as TU): parse, subgroup, skip inf, batch ML, final_exp
+    auto my_pc = [](const uint8_t* pairs, size_t k)->int {
+        Fp12 acc = FP12_ONE;
+        for (size_t i = 0; i < k; ++i) {
+            const uint8_t* e = pairs + i*384;
+            G1 p; G2 q; g1_parse(e,e+64,&p); g2_parse(e+128,e+256,&q);
+            if (g1_is_identity(p) || g2_is_identity(q)) continue;
+            acc = fp12_mul(acc, miller_loop(p,q));
+        }
+        return fp12_is_one(final_exp(acc)) ? 1 : 0;
+    };
+    auto blst_pc = [](const blst_p1_affine* P, const blst_p2_affine* Q, size_t k)->int {
+        blst_fp12 acc = *blst_fp12_one();
+        for (size_t i = 0; i < k; ++i) {
+            if (blst_p1_affine_is_inf(&P[i]) || blst_p2_affine_is_inf(&Q[i])) continue;
+            blst_fp12 ml; blst_miller_loop(&ml, &Q[i], &P[i]); blst_fp12_mul(&acc,&acc,&ml);
+        }
+        blst_final_exp(&acc,&acc); return blst_fp12_is_one(&acc) ? 1 : 0;
+    };
+    // guaranteed identity: e(P,Q)·e(-P,Q) == 1
+    bool p1 = true;
+    for (int t = 0; t < 5 && p1; ++t) {
+        blst_p1_affine A; rand_g1(&A); blst_p2_affine Q; rand_g2(&Q);
+        blst_p1 pa; blst_p1_from_affine(&pa,&A); blst_p1_affine An; blst_p1_cneg(&pa,1); blst_p1_to_affine(&An,&pa);
+        uint8_t pairs[384*2];
+        enc_g1(&A, pairs);    enc_g2(&Q, pairs+128);
+        enc_g1(&An, pairs+384); enc_g2(&Q, pairs+384+128);
+        if (my_pc(pairs, 2) != 1) p1 = false;
+    }
+    check(p1, "pairing_check: e(P,Q)·e(-P,Q)==1");
+    // random vs blst (mostly non-1)
+    bool p2 = true;
+    for (int t = 0; t < 8 && p2; ++t) {
+        const size_t k = 2; blst_p1_affine P[2]; blst_p2_affine Q[2]; uint8_t pairs[384*2];
+        for (size_t i = 0; i < k; ++i) { rand_g1(&P[i]); rand_g2(&Q[i]); enc_g1(&P[i],pairs+i*384); enc_g2(&Q[i],pairs+i*384+128); }
+        if (my_pc(pairs,k) != blst_pc(P,Q,k)) p2 = false;
+    }
+    check(p2, "pairing_check vs blst (8× k=2 random)");
+
+    // ---- B5: map_fp_to_g1 vs blst ----
+    bool mp1 = true;
+    for (int i = 0; i < 40 && mp1; ++i) {
+        Fp u; rfp(&u);
+        uint8_t out[128]; g1_store(map_to_curve_g1(u), out, out+64);
+        uint8_t t[48]; fp_to_bytes_be(u, t); blst_fp bu; blst_fp_from_bendian(&bu, t);
+        blst_p1 o; blst_map_to_g1(&o, &bu, nullptr); blst_p1_affine ra; blst_p1_to_affine(&ra, &o);
+        uint8_t ref[128]; enc_g1(&ra, ref);
+        if (std::memcmp(out, ref, 128) != 0) mp1 = false;
+    }
+    check(mp1, "map_fp_to_g1 vs blst (40 random)");
+
+    // ---- B6: map_fp2_to_g2 vs blst ----
+    bool mp2 = true;
+    for (int i = 0; i < 20 && mp2; ++i) {
+        Fp2 u; rfp(&u.c0); rfp(&u.c1);
+        uint8_t out[256]; g2_store(map_to_curve_g2(u), out, out+128);
+        uint8_t t[48]; blst_fp2 bu;
+        fp_to_bytes_be(u.c0, t); blst_fp_from_bendian(&bu.fp[0], t);
+        fp_to_bytes_be(u.c1, t); blst_fp_from_bendian(&bu.fp[1], t);
+        blst_p2 o; blst_map_to_g2(&o, &bu, nullptr); blst_p2_affine ra; blst_p2_to_affine(&ra, &o);
+        uint8_t ref[256]; enc_g2(&ra, ref);
+        if (std::memcmp(out, ref, 256) != 0) mp2 = false;
+    }
+    check(mp2, "map_fp2_to_g2 vs blst (20 random)");
 
     std::printf(g_fail ? "\n%d FAILED\n" : "\nALL PASS\n", g_fail);
     return g_fail ? 1 : 0;

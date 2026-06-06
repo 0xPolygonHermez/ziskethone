@@ -12,6 +12,7 @@
 #include <evmone_precompiles/bls.hpp>   // declarations
 #include "bls12_381/eip2537.hpp"
 #include "bls12_381/g2_subgroup.hpp"
+#include "bls12_381/map_to_curve.hpp"
 
 namespace evmone::crypto::bls {
 
@@ -97,9 +98,42 @@ bool g2_msm(uint8_t rx[128], uint8_t ry[128], const uint8_t* xycs, size_t size) 
     return true;
 }
 
-// ---- placeholders (filled by later layers) -----------------------------------
-bool map_fp_to_g1(uint8_t[64], uint8_t[64], const uint8_t[64]) noexcept { return false; }
-bool map_fp2_to_g2(uint8_t[128], uint8_t[128], const uint8_t[128]) noexcept { return false; }
-bool pairing_check(uint8_t[32], const uint8_t*, size_t) noexcept { return false; }
+// ---- map-to-curve (SWU + isogeny + cofactor clear) --------------------------
+bool map_fp_to_g1(uint8_t rx[64], uint8_t ry[64], const uint8_t fp[64]) noexcept {
+    Fp u;
+    if (!fp_parse(fp, &u)) return false;  // validates top-16-zero + < p
+    g1_store(map_to_curve_g1(u), rx, ry);
+    return true;
+}
+bool map_fp2_to_g2(uint8_t rx[128], uint8_t ry[128], const uint8_t fp[128]) noexcept {
+    Fp2 u;
+    if (!fp2_parse(fp, &u)) return false;
+    g2_store(map_to_curve_g2(u), rx, ry);
+    return true;
+}
+
+// ---- pairing check: Π e(Pᵢ,Qᵢ) == 1 ----------------------------------------
+// Per-pair validate (in-field, on-curve, subgroup), skip ∞ pairs, batch the
+// Miller loops, then one final_exp. Mirrors evmone bls.cpp pairing_check.
+bool pairing_check(uint8_t r[32], const uint8_t* pairs, size_t size) noexcept {
+    constexpr int PAIR = 384;  // G1 (128) + G2 (256)
+    if (size % PAIR != 0) return false;
+    size_t n = size / PAIR;
+    Fp12 acc = FP12_ONE;
+    for (size_t i = 0; i < n; ++i) {
+        const uint8_t* e = pairs + i * PAIR;
+        G1 p; G2 q;
+        if (!g1_parse(e, e + 64, &p)) return false;
+        if (!g2_parse(e + 128, e + 256, &q)) return false;
+        if (!g1_is_identity(p) && !g1_is_on_subgroup(p)) return false;
+        if (!g2_is_identity(q) && !g2_is_on_subgroup(q)) return false;
+        if (g1_is_identity(p) || g2_is_identity(q)) continue;  // pair contributes 1
+        acc = fp12_mul(acc, miller_loop(p, q));
+    }
+    bool one = fp12_is_one(final_exp(acc));
+    for (int i = 0; i < 32; ++i) r[i] = 0;
+    r[31] = one ? 1 : 0;
+    return true;
+}
 
 }  // namespace evmone::crypto::bls
