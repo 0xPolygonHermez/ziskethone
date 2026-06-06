@@ -42,9 +42,5 @@ bool pairing_check(uint8_t[32], const uint8_t*, size_t) noexcept { return false;
 
 }  // namespace evmone::crypto::bls
 
-namespace evmone::crypto {
-
-bool kzg_verify_proof(const std::byte[32], const std::byte[32], const std::byte[32],
-                      const std::byte[48], const std::byte[48]) noexcept { return false; }
-
-}  // namespace evmone::crypto
+// KZG point-evaluation (0x0a) is implemented for real in bls12_381_kzg.cpp
+// (BLS12-381 pairing on the ZisK precompiles + fcalls); no stub here anymore.

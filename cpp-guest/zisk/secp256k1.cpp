@@ -1,20 +1,26 @@
-// crypto_sw.cpp — portable software secp256k1 for the ZisK self-contained
-// build. Provides the guest's one external crypto symbol:
+// secp256k1.cpp — secp256k1 ECDSA for the ZisK self-contained guest.
 //
+// One source, two interchangeable backends for the low-level field/scalar/EC
+// primitives; the high-level ECDSA logic is shared:
+//
+//   default                : ZisK precompiles (arith256_mod 0x802,
+//                            secp256k1_add 0x803, secp256k1_dbl 0x804) plus
+//                            fcall hints (FN_INV, MSB_POS_256), verified
+//                            in-circuit — a faithful port of ziskos's `zisklib`
+//                            (mirrors ../../hello-zisk-c/src/secp256k1.cpp).
+//   -DZEG_SECP256K1_SW     : portable software baseline (no accelerators), for
+//                            benchmarking / as a reference. Same results.
+//
+// Public ABI (unchanged, see zeg/zisk_crypto.hpp):
 //   int secp256k1_ecdsa_verify(pk, z, r, s, result)
 //       result <- (u1·G + u2·PK).(x,y),  u1 = z·s⁻¹ mod n, u2 = r·s⁻¹ mod n
-//
 // The caller (zeg::verify_and_recover_sender / verify_signature_and_get_signer)
-// then checks result.x mod n == r. This mirrors the ZisK lib-c ABI documented in
-// include/zeg/zisk_crypto.hpp; the EC math is a direct port of the portable
-// (software) path in ../../hello-zisk-c/src/secp256k1.cpp.
+// does the final `result.x mod n == r` ECDSA check; on a degenerate (∞) result
+// we leave result = 0 so that check fails closed. Always returns 0.
 //
 // Limb convention everywhere: uint64_t[4] little-endian (limb[0] = low 64 bits);
-// points are uint64_t[8] = x[4] || y[4]. This is exactly the format the guest
-// passes in/expects back, so no endianness conversion is needed here.
-//
-// NOTE: this is the un-accelerated baseline for benchmarking. The proving build
-// will swap this object for the ZisK secp256k1 accelerator.
+// points are uint64_t[8] = x[4] || y[4]. Matches the format the guest passes in
+// and expects back, so no endianness conversion is needed.
 
 #include <cstdint>
 
@@ -23,8 +29,6 @@ namespace {
 typedef uint64_t u64;
 
 // ---- curve constants (little-endian limbs) --------------------------------
-const u64 P[4]  = {0xFFFFFFFEFFFFFC2FULL, 0xFFFFFFFFFFFFFFFFULL,
-                   0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL};
 const u64 N[4]  = {0xBFD25E8CD0364141ULL, 0xBAAEDCE6AF48A03BULL,
                    0xFFFFFFFFFFFFFFFEULL, 0xFFFFFFFFFFFFFFFFULL};
 const u64 GX[4] = {0x59F2815B16F81798ULL, 0x029BFCDB2DCE28D9ULL,
@@ -46,6 +50,19 @@ inline bool lt4(const u64 a[4], const u64 b[4]) {  // a < b
     for (int i=3;i>=0;--i) { if (a[i]<b[i]) return true; if (a[i]>b[i]) return false; }
     return false;
 }
+
+} // namespace
+
+// ===========================================================================
+// Backend: low-level primitives — arith256_mod, ec_add, ec_dbl, fn_inv_hint,
+// msb_pos256. Either ZisK precompiles/fcalls (default) or portable software.
+// ===========================================================================
+#if defined(ZEG_SECP256K1_SW)
+namespace {
+
+// secp256k1 field prime (software EC math only).
+const u64 P[4]  = {0xFFFFFFFEFFFFFC2FULL, 0xFFFFFFFFFFFFFFFFULL,
+                   0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL};
 
 // ---- portable 256-bit modular arithmetic ----------------------------------
 inline void mul256(const u64 a[4], const u64 b[4], u64 out[8]) {
@@ -111,7 +128,7 @@ inline void modsub_p(const u64 a[4], const u64 b[4], u64 o[4]) { // (a-b) mod P
     arith256_mod(a,ONE,negb,P,o);
 }
 
-// ---- EC point ops (affine) -------------------------------------------------
+// ---- EC point ops (affine, software) --------------------------------------
 void ec_add(u64 p1[8], const u64 p2[8]) {
     const u64 *x1=p1, *y1=p1+4, *x2=p2, *y2=p2+4;
     if (eq4(x1,x2)) {
@@ -133,34 +150,112 @@ void ec_add(u64 p1[8], const u64 p2[8]) {
 }
 void ec_dbl(u64 p[8]) { u64 q[8]; cp8(q,p); ec_add(p,q); }
 
-inline void reduce_fn(const u64 x[4], u64 o[4]) {  // x mod N
+// 1/x mod N (software).
+void fn_inv_hint(const u64 x[4], u64 o[4]) { inv_mod(x,N,o); }
+
+// MSB position of x: limb index (0..3) and bit within limb (0..63).
+void msb_pos256(const u64 x[4], u64 *limb, u64 *bit) {
+    for (int i=3;i>=0;--i) if (x[i]) {
+        u64 w=x[i], pos=0;
+        if (w>=(1ULL<<32)){w>>=32;pos+=32;} if (w>=(1ULL<<16)){w>>=16;pos+=16;}
+        if (w>=(1ULL<<8)){w>>=8;pos+=8;} if (w>=(1ULL<<4)){w>>=4;pos+=4;}
+        if (w>=(1ULL<<2)){w>>=2;pos+=2;} if (w>=(1ULL<<1)){pos+=1;}
+        *limb=(u64)i; *bit=pos; return;
+    }
+    *limb=0; *bit=0;
+}
+
+} // namespace
+
+#else  // ===================== ZisK precompiles / fcalls =====================
+namespace {
+
+// d = (a*b + c) mod m
+inline void arith256_mod(const u64 a[4], const u64 b[4], const u64 c[4],
+                         const u64 m[4], u64 d[4]) {
+    struct { const u64 *a, *b, *c, *module; u64 *d; } p{a, b, c, m, d};
+    asm volatile("csrs 0x802, %0" : : "r"(&p) : "memory");
+}
+inline void ec_add(u64 p1[8], const u64 p2[8]) {  // p1 += p2 (affine, in place)
+    struct { u64 *p1; const u64 *p2; } pp{p1, p2};
+    asm volatile("csrs 0x803, %0" : : "r"(&pp) : "memory");
+}
+inline void ec_dbl(u64 p[8]) {  // p = 2·p (affine, in place)
+    asm volatile("csrs 0x804, %0" : : "r"(p) : "memory");
+}
+
+// ---- fcalls (free-input hints, verified by the shared helpers below) -------
+inline u64 fcall_get() {
+    u64 v; asm volatile("csrr %0, 0xFFE" : "=r"(v)); return v;
+}
+inline void fn_inv_hint(const u64 x[4], u64 o[4]) {     // fcall id 2: 1/x mod N
+    asm volatile("csrs 0x8F2, %0" : : "r"(x) : "memory");   // param: x, 4 words
+    asm volatile("csrwi 0x8C0, 2" : : : "memory");          // trigger FN_INV
+    o[0]=fcall_get(); o[1]=fcall_get(); o[2]=fcall_get(); o[3]=fcall_get();
+}
+inline void msb_pos256(const u64 x[4], u64 *limb, u64 *bit) {  // fcall id 17
+    u64 one = 1;
+    asm volatile("csrs 0x8F0, %0" : : "r"(one) : "memory");  // param: n=1 (direct value)
+    asm volatile("csrs 0x8F2, %0" : : "r"(x)   : "memory");  // param: x, 4 words
+    asm volatile("csrwi 0x8C0, 17" : : : "memory");          // trigger MSB_POS_256
+    *limb=fcall_get(); *bit=fcall_get();
+}
+
+} // namespace
+#endif
+
+// ===========================================================================
+// Shared high-level logic (built on the backend primitives above).
+// ===========================================================================
+namespace {
+
+inline void mul_fn(const u64 a[4], const u64 b[4], u64 o[4]) { arith256_mod(a,b,ZERO,N,o); }
+
+inline void reduce_fn(const u64 x[4], u64 o[4]) {  // x mod N (x < 2^256)
     if (lt4(x,N)) { cp4(o,x); return; }
     arith256_mod(x,ONE,ZERO,N,o);
 }
-inline void mul_fn(const u64 a[4], const u64 b[4], u64 o[4]) { arith256_mod(a,b,ZERO,N,o); }
-inline void inv_fn(const u64 x[4], u64 o[4]) { inv_mod(x,N,o); }  // 1/x mod N
 
-// k·P, k in [1,N-1], P not infinity. Result in res. Returns false if O (k==0).
+// 1/x mod N (x != 0): take the hint, then verify x·inv == 1 (mod N).
+inline void inv_fn(const u64 x[4], u64 o[4]) {
+    fn_inv_hint(x,o);
+    u64 chk[4]; mul_fn(x,o,chk);
+    if (!eq4(chk,ONE)) { for(;;){} }  // hint was wrong: must never happen
+}
+
+// p1 (+) p2 for non-infinity affine points. Returns false if the sum is 𝒪.
+inline bool point_add(const u64 p1[8], const u64 p2[8], u64 r[8]) {
+    if (!eq4(p1,p2)) { cp8(r,p1); ec_add(r,p2); return true; }   // x differ -> add
+    if (eq4(p1+4,p2+4)) { cp8(r,p1); ec_dbl(r); return true; }   // equal -> double
+    return false;                                                // p + (-p) = 𝒪
+}
+
+// k·P for non-infinity P, k in [0, N-1]. Returns false if result is 𝒪 (k==0).
+// Faithful port of zisklib's scalar_mul_secp256k1: the MSB position is taken
+// from a hint and the scalar is recomposed bit-by-bit to verify it.
 bool scalar_mul(const u64 k[4], const u64 P_in[8], u64 res[8]) {
     if (is_zero4(k)) return false;
     if (eq4(k,ONE)) { cp8(res,P_in); return true; }
-    cp8(res, P_in);
-    // double-and-add over the bits below the top set bit
-    int top = -1;
-    for (int i=3;i>=0 && top<0;--i) if (k[i]) {
-        for (int b=63;b>=0;--b) if ((k[i]>>b)&1ULL) { top = i*64+b; break; }
+    if (eq4(k,TWO)) { cp8(res,P_in); ec_dbl(res); return true; }
+
+    u64 limb, bit; msb_pos256(k,&limb,&bit);
+    if (((k[limb]>>bit)&1) != 1) { for(;;){} }   // first hinted bit must be set
+
+    cp8(res,P_in);
+    u64 k_rec[4]={0,0,0,0}; k_rec[limb] = 1ULL<<bit;
+
+    int li=(int)limb, curbit;
+    if (bit==0) { li-=1; curbit=63; } else curbit=(int)bit-1;
+
+    for (int i=li;i>=0;--i) {
+        for (int j=curbit;j>=0;--j) {
+            ec_dbl(res);
+            if ((k[i]>>j)&1ULL) { ec_add(res,P_in); k_rec[i] |= 1ULL<<j; }
+        }
+        curbit=63;
     }
-    for (int pos=top-1; pos>=0; --pos) {
-        ec_dbl(res);
-        if ((k[pos>>6]>>(pos&63))&1ULL) ec_add(res, P_in);
-    }
+    if (!eq4(k_rec,k)) { for(;;){} }             // recomposed scalar must match
     return true;
-}
-// p1 (+) p2 for affine points, result in r. false if r == O.
-bool point_add(const u64 p1[8], const u64 p2[8], u64 r[8]) {
-    if (!eq4(p1,p2)) { cp8(r,p1); ec_add(r,p2); return !(is_zero4(r)&&is_zero4(r+4)); }
-    if (eq4(p1+4,p2+4)) { cp8(r,p1); ec_dbl(r); return true; }
-    return false;  // p + (-p) = O
 }
 
 } // namespace

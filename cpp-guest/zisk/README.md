@@ -52,14 +52,20 @@ The output must match the native guest:
 
 ## What's stubbed (first milestone)
 
-- **Heavy precompiles** BLS12-381 (EIP-2537), KZG point-eval (EIP-4844), and
-  MODEXP (0x05) → failure stubs (`precompile_stubs.cpp`). Blocks that use them
-  will mismatch; everything else runs.
-- **secp256k1 is software** (`crypto_sw.cpp`), so signature verification still
-  dominates step counts; the ZisK secp256k1 accelerator will replace it next.
+- **KZG point-eval (EIP-4844, 0x0a) uses the ZisK accelerators**
+  (`bls12_381_kzg.cpp` + the self-contained BLS12-381 pairing port in
+  `bls12_381/`): field/curve precompiles (CSR 0x80B–0x810) + fcall hints. See
+  `bls12_381/PORTING.md`; `bls_selftest.elf` validates the backend.
+- **Still stubbed** (`precompile_stubs.cpp`): EIP-2537 BLS12-381 (g1/g2
+  add·mul·msm·map, pairing) and MODEXP (0x05). Blocks using them mismatch.
+- **secp256k1 uses the ZisK accelerators** (`secp256k1.cpp`): field/scalar
+  arithmetic and EC add/double via the precompiles (CSR 0x802/0x803/0x804) plus
+  fcall hints (FN_INV, MSB_POS_256), a faithful port of ziskos's `zisklib`. The
+  same file builds a portable software baseline with `-DZEG_SECP256K1_SW=ON`.
 - **Keccak uses the ZisK accelerator** (`keccak_zisk.cpp`, CSR 0x800) — a
   drop-in for evmone's `keccak.c`, so all callers (state/MPT hashing, tx/header
   hashes, CREATE addresses, code hashes, the EVM `KECCAK256` opcode, …) hit it.
+- No crypto remains in software on the ZisK build.
 
 ## Layout
 
@@ -71,6 +77,7 @@ The output must match the native guest:
 | `runtime.cpp`     | bump allocator, `mem*`, no-op libc stdio stubs, C++ ABI |
 | `compiler_rt.cpp` | libgcc builtins, soft-float, 128-bit div/shift, `_Prime_rehash_policy` |
 | `stdcxx_stubs.cpp`| `halt()` stubs for dead iostream/pmr paths (tracer, etc.) |
-| `crypto_sw.cpp`   | software secp256k1 `ecdsa_verify` (ABI from `zeg/zisk_crypto.hpp`) |
+| `secp256k1.cpp`   | secp256k1 `ecdsa_verify`: ZisK precompiles+fcalls, or software with `-DZEG_SECP256K1_SW` |
+| `keccak_zisk.cpp` | Keccak-256 via the ZisK keccakf precompile (CSR 0x800) |
 | `precompile_stubs.cpp` | bls/kzg/modexp failure stubs |
 | `include/zeg/zisk_io.hpp` | memory-mapped input/output (`ZEG_ZISK`) |
