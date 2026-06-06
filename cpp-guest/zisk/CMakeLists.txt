@@ -90,6 +90,9 @@ set(ZISK_SUPPORT
   # secp256k1 ECDSA. Default: ZisK precompiles + fcall hints. With
   # -DZEG_SECP256K1_SW=ON: portable software baseline (same source, same result).
   ${CMAKE_CURRENT_SOURCE_DIR}/secp256k1.cpp
+  # KZG point-eval (EIP-4844) via the self-contained BLS12-381 pairing port
+  # (bls12_381/*.hpp) on the ZisK precompiles + fcall hints.
+  ${CMAKE_CURRENT_SOURCE_DIR}/bls12_381_kzg.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/precompile_stubs.cpp
 )
 
@@ -130,4 +133,28 @@ add_custom_command(TARGET zisk_eth_guest.elf POST_BUILD
     --remove-section '.gcc_except_table*' --remove-section .comment
     --remove-section .riscv.attributes
     $<TARGET_FILE:zisk_eth_guest.elf> $<TARGET_FILE:zisk_eth_guest.elf>
+  COMMENT "Stripping ZisK-incompatible sections")
+
+# --- bls_selftest.elf: on-emulator self-test of the BLS12-381 ZisK backend ---
+# Lean ELF (no evmone) that exercises the precompile/fcall paths; run under
+# ziskemu to validate/debug the accelerated BLS layers. See bls12_381/test/.
+add_executable(bls_selftest.elf
+  ${CMAKE_CURRENT_SOURCE_DIR}/bls12_381/test/selftest_zisk.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
+  ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
+target_compile_definitions(bls_selftest.elf PRIVATE ZEG_ZISK)
+target_compile_options(bls_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
+target_include_directories(bls_selftest.elf PRIVATE ${GUEST_ROOT}/include)
+target_link_options(bls_selftest.elf PRIVATE
+  -T ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld -nostdlib -nostartfiles -Wl,--gc-sections)
+set_target_properties(bls_selftest.elf PROPERTIES LINK_DEPENDS
+  ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld)
+add_custom_command(TARGET bls_selftest.elf POST_BUILD
+  COMMAND ${CMAKE_OBJCOPY}
+    --remove-section .eh_frame --remove-section .eh_frame_hdr
+    --remove-section '.gcc_except_table*' --remove-section .comment
+    --remove-section .riscv.attributes
+    $<TARGET_FILE:bls_selftest.elf> $<TARGET_FILE:bls_selftest.elf>
   COMMENT "Stripping ZisK-incompatible sections")

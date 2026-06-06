@@ -39,8 +39,24 @@ each layer verified before the next. See the plan in `~/.claude/plans/`.
    trusted-setup [τ]₂, scalar canonicity, pairing equation; constant-poly valid +
    invalid + full-pairing-path cases). The valid non-trivial path is covered by
    the Layer-8 real-block test (can't construct a true vector without secret τ). ✅
-8. integrate: evmone::crypto::kzg_verify_proof wrapper (sha256 versioned-hash +
-   kzg_verify_core), CMake, end-to-end block 25231946 — todo
+8. **integrate** — done. `../bls12_381_kzg.cpp` provides
+   `evmone::crypto::kzg_verify_proof` (sha256 versioned-hash + kzg_verify_core);
+   the kzg stub is removed from `precompile_stubs.cpp`; CMake compiles the TU and
+   a `bls_selftest.elf` target (`test/selftest_zisk.cpp`). ✅
+
+## ZisK-backend verification (the accelerated precompile/fcall paths)
+
+`bls_selftest.elf` runs the precompile/fcall backend under ziskemu: all 14
+checks pass (fp/fp2 inv·sqrt, g1/g2 on-curve·subgroup·scalar-mul, **pairing
+non-degeneracy + bilinearity**, kzg constant-poly). On real block 25231946 both
+KZG calls return the correct result (versioned-hash ok + valid). The block hash
+does NOT fully match native yet — but ONLY because the block also uses **MODEXP
+(×18) and EIP-2537 BLS precompiles (g1/g2 add·mul·msm, ×28)**, which remain
+stubs (separate tasks). Non-KZG blocks (e.g. 25232006) still match native.
+
+Run the self-test:
+  ziskemu -e cpp-guest/zisk/build/bls_selftest.elf -i <8-byte len=0> -o out
+  (slot0 = result bitmask, expect 0x3fff; slot1 = 14)
 
 ## Host tests
 

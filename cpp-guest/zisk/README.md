@@ -52,9 +52,12 @@ The output must match the native guest:
 
 ## What's stubbed (first milestone)
 
-- **Heavy precompiles** BLS12-381 (EIP-2537), KZG point-eval (EIP-4844), and
-  MODEXP (0x05) → failure stubs (`precompile_stubs.cpp`). Blocks that use them
-  will mismatch; everything else runs.
+- **KZG point-eval (EIP-4844, 0x0a) uses the ZisK accelerators**
+  (`bls12_381_kzg.cpp` + the self-contained BLS12-381 pairing port in
+  `bls12_381/`): field/curve precompiles (CSR 0x80B–0x810) + fcall hints. See
+  `bls12_381/PORTING.md`; `bls_selftest.elf` validates the backend.
+- **Still stubbed** (`precompile_stubs.cpp`): EIP-2537 BLS12-381 (g1/g2
+  add·mul·msm·map, pairing) and MODEXP (0x05). Blocks using them mismatch.
 - **secp256k1 uses the ZisK accelerators** (`secp256k1.cpp`): field/scalar
   arithmetic and EC add/double via the precompiles (CSR 0x802/0x803/0x804) plus
   fcall hints (FN_INV, MSB_POS_256), a faithful port of ziskos's `zisklib`. The

@@ -63,7 +63,11 @@ inline Fp2 fcall_fp2_inv(const Fp2& x) {
     return r;
 }
 inline Fp2 fcall_fp2_sqrt(const Fp2& x, bool* is_qr) {
-    fcall_param_fp2(x);
+    // zisklib pushes the fp2_sqrt input via bucket 16 (CSR 0x8F5), not 12.
+    uint64_t buf[16] = {x.c0.c[0],x.c0.c[1],x.c0.c[2],x.c0.c[3],x.c0.c[4],x.c0.c[5],
+                        x.c1.c[0],x.c1.c[1],x.c1.c[2],x.c1.c[3],x.c1.c[4],x.c1.c[5],0,0,0,0};
+    const uint64_t* p = buf;
+    asm volatile("csrs 0x8F5, %0" : : "r"(p) : "memory");
     asm volatile("csrwi 0x8C0, 13" : : : "memory");  // FCALL_BLS12_381_FP2_SQRT_ID
     *is_qr = (fcall_get() == 1);
     Fp2 r; uint64_t* o = reinterpret_cast<uint64_t*>(&r);
