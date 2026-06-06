@@ -10,7 +10,9 @@
 #include <test/state/precompiles.hpp>  // evmone::state::call_precompile
 #include <lib/evmone/vm.hpp>        // evmone::VM for tracer attachment
 #include <lib/evmone/tracing.hpp>   // create_instruction_tracer
+#if !defined(ZEG_ZISK)
 #include <fstream>
+#endif
 
 #include "zeg/bloom.hpp"
 #include "zeg/config.hpp"
@@ -1004,7 +1006,10 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         // COLD (2600 for accounts, 2100 for slots).
         pre_warm_for_tx(tx);
 
+#if !defined(ZEG_ZISK)
         // DEBUG: attach an evmone instruction tracer for the target tx.
+        // Host build only — std::ofstream pulls in iostream, which the
+        // freestanding ZisK build does not provide.
         static std::ofstream trace_out;
         auto* vm_ev = static_cast<evmone::VM*>(vm_raw_);
         const char* trace_env = std::getenv("ZEG_TRACE_TX");
@@ -1012,6 +1017,7 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
             if (!trace_out.is_open()) trace_out.open("/tmp/cpp_tx_trace.jsonl");
             vm_ev->add_tracer(evmone::create_instruction_tracer(trace_out));
         }
+#endif
 
         // Push the receipt for this tx up front. emit_log appends to
         // tx_receipts_.back().logs during execution; finalize_receipt
@@ -1056,12 +1062,14 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         // See pending_destruct_ in the header for the rationale.
         apply_pending_destructs();
 
+#if !defined(ZEG_ZISK)
         // Detach tracer after the traced tx so later txs don't trace.
         if (trace_env != nullptr && i == static_cast<size_t>(std::atoi(trace_env))) {
             vm_ev->remove_tracers();
             trace_out.flush();
             trace_out.close();
         }
+#endif
     }
 }
 
