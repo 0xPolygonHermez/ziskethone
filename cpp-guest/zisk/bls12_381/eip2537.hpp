@@ -29,6 +29,11 @@ inline bool fp2_parse(const uint8_t b[128], Fp2* out) {
 }
 inline void fp2_store(const Fp2& x, uint8_t out[128]) { fp_store(x.c0, out); fp_store(x.c1, out + 64); }
 
+// 32-byte big-endian scalar → little-endian u64[4].
+inline void scalar_be32(const uint8_t s[32], uint64_t k[4]) {
+    for (int i = 0; i < 4; ++i) { uint64_t v = 0; for (int j = 0; j < 8; ++j) v = (v << 8) | s[i*8 + j]; k[3-i] = v; }
+}
+
 // G1 point: x‖y (128 B). All-zero ⇒ infinity. Validates in-field + on-curve.
 inline bool g1_parse(const uint8_t x[64], const uint8_t y[64], G1* out) {
     Fp px, py;

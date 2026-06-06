@@ -1,5 +1,8 @@
 // test_eip2537.cpp — host test of the EIP-2537 ops vs blst (authoritative oracle).
 //   c++ -std=c++20 -O2 -I.. -I<blst/bindings> test_eip2537.cpp <libblst.a> -o /tmp/t && /tmp/t
+// On Apple Silicon force a native arm64 toolchain + arm64 libblst (the x86 blst
+// uses ADX ops Rosetta traps on): arch -arm64 c++ -arch arm64 ...; build blst as
+// `cc -arch arm64 -D__BLST_PORTABLE__ -c src/server.c build/assembly.S; ar rcs`.
 // Uses the software backend (no ZEG_ZISK). Generates random G1/G2 points with
 // blst, encodes EIP-2537, and compares our results against blst's.
 
@@ -45,6 +48,7 @@ static bool my_g2_add(uint8_t out[256], const uint8_t a[256], const uint8_t b[25
 }
 
 int main() {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     // ---- g1_add vs blst ----
     bool allg1 = true;
     for (int i = 0; i < 500; ++i) {
@@ -102,6 +106,88 @@ int main() {
         if (g2_is_on_subgroup(p) != (bool)blst_p2_affine_in_g2(&ba)) { nsg=false; break; }
     }
     check(nsg && tested > 0, "g2 subgroup: on-curve non-subgroup rejected (vs blst)");
+
+    // ---- B3: g1_mul / g2_mul vs blst ----
+    auto le32 = [](const uint8_t be[32], uint8_t le[32]){ for(int j=0;j<32;++j) le[j]=be[31-j]; };
+    bool m1 = true;
+    for (int i = 0; i < 200; ++i) {
+        blst_p1_affine a; rand_g1(&a); uint8_t e[128]; enc_g1(&a, e);
+        uint8_t sc[32]; rscalar(sc);
+        uint8_t out[128];
+        { G1 p; if(!g1_parse(e,e+64,&p)){m1=false;break;} if(!g1_is_on_subgroup(p)){m1=false;break;}
+          uint64_t k[4]; scalar_be32(sc,k); g1_store(g1_scalar_mul(p,k),out,out+64); }
+        uint8_t scle[32]; le32(sc,scle);
+        blst_p1 pp,pr; blst_p1_from_affine(&pp,&a); blst_p1_mult(&pr,&pp,scle,256);
+        blst_p1_affine ra; blst_p1_to_affine(&ra,&pr); uint8_t ref[128]; enc_g1(&ra,ref);
+        if (std::memcmp(out,ref,128)!=0){m1=false;break;}
+    }
+    check(m1, "g1_mul vs blst (200 random)");
+
+    bool m2 = true;
+    for (int i = 0; i < 120; ++i) {
+        blst_p2_affine a; rand_g2(&a); uint8_t e[256]; enc_g2(&a, e);
+        uint8_t sc[32]; rscalar(sc);
+        uint8_t out[256];
+        { G2 p; if(!g2_parse(e,e+128,&p)){m2=false;break;} if(!g2_is_on_subgroup(p)){m2=false;break;}
+          uint64_t k[4]; scalar_be32(sc,k); g2_store(g2_scalar_mul(p,k),out,out+128); }
+        uint8_t scle[32]; le32(sc,scle);
+        blst_p2 pp,pr; blst_p2_from_affine(&pp,&a); blst_p2_mult(&pr,&pp,scle,256);
+        blst_p2_affine ra; blst_p2_to_affine(&ra,&pr); uint8_t ref[256]; enc_g2(&ra,ref);
+        if (std::memcmp(out,ref,256)!=0){m2=false;break;}
+    }
+    check(m2, "g2_mul vs blst (120 random)");
+
+    // ---- B3: g1_msm / g2_msm vs blst (Σ[kᵢ]Pᵢ, n=4) ----
+    bool ms1 = true;
+    for (int t = 0; t < 50 && ms1; ++t) {
+        const int n = 4; uint8_t in[160*4]; blst_p1 sum; bool first = true; blst_p1_affine zero{};
+        for (int i = 0; i < n; ++i) {
+            blst_p1_affine a; rand_g1(&a); uint8_t e[128]; enc_g1(&a,e);
+            uint8_t sc[32]; rscalar(sc);
+            std::memcpy(in+i*160, e, 128); std::memcpy(in+i*160+128, sc, 32);
+            uint8_t scle[32]; le32(sc,scle);
+            blst_p1 pp,pr; blst_p1_from_affine(&pp,&a); blst_p1_mult(&pr,&pp,scle,256);
+            if (first){ sum=pr; first=false; } else blst_p1_add_or_double(&sum,&sum,&pr);
+        }
+        // mine (same loop as TU g1_msm)
+        G1 acc = G1_IDENTITY;
+        for (int i = 0; i < n; ++i) {
+            const uint8_t* ee = in+i*160; G1 p; g1_parse(ee,ee+64,&p);
+            if (g1_is_identity(p)) continue;
+            uint64_t k[4]; scalar_be32(ee+128,k); G1 prod=g1_scalar_mul(p,k);
+            if (g1_is_identity(prod)) continue;
+            acc = g1_is_identity(acc)?prod:g1_add_complete(acc,prod);
+        }
+        uint8_t out[128]; g1_store(acc,out,out+64);
+        blst_p1_affine ra; blst_p1_to_affine(&ra,&sum); uint8_t ref[128]; enc_g1(&ra,ref);
+        if (std::memcmp(out,ref,128)!=0) ms1=false;
+    }
+    check(ms1, "g1_msm vs blst (50× n=4)");
+
+    bool ms2 = true;
+    for (int t = 0; t < 30 && ms2; ++t) {
+        const int n = 4; uint8_t in[288*4]; blst_p2 sum; bool first = true;
+        for (int i = 0; i < n; ++i) {
+            blst_p2_affine a; rand_g2(&a); uint8_t e[256]; enc_g2(&a,e);
+            uint8_t sc[32]; rscalar(sc);
+            std::memcpy(in+i*288, e, 256); std::memcpy(in+i*288+256, sc, 32);
+            uint8_t scle[32]; le32(sc,scle);
+            blst_p2 pp,pr; blst_p2_from_affine(&pp,&a); blst_p2_mult(&pr,&pp,scle,256);
+            if (first){ sum=pr; first=false; } else blst_p2_add_or_double(&sum,&sum,&pr);
+        }
+        G2 acc = G2_IDENTITY;
+        for (int i = 0; i < n; ++i) {
+            const uint8_t* ee = in+i*288; G2 p; g2_parse(ee,ee+128,&p);
+            if (g2_is_identity(p)) continue;
+            uint64_t k[4]; scalar_be32(ee+256,k); G2 prod=g2_scalar_mul(p,k);
+            if (g2_is_identity(prod)) continue;
+            acc = g2_is_identity(acc)?prod:g2_add_complete(acc,prod);
+        }
+        uint8_t out[256]; g2_store(acc,out,out+128);
+        blst_p2_affine ra; blst_p2_to_affine(&ra,&sum); uint8_t ref[256]; enc_g2(&ra,ref);
+        if (std::memcmp(out,ref,256)!=0) ms2=false;
+    }
+    check(ms2, "g2_msm vs blst (30× n=4)");
 
     std::printf(g_fail ? "\n%d FAILED\n" : "\nALL PASS\n", g_fail);
     return g_fail ? 1 : 0;
