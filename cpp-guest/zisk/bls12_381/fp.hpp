@@ -35,6 +35,10 @@ inline bool fp_eq(const Fp& a, const Fp& b) {
 }
 inline bool fp_is_zero(const Fp& a) { return fp_eq(a, FP_ZERO); }
 inline uint64_t fp_sgn0(const Fp& a) { return a.c[0] & 1; }  // sign function
+inline bool fp_lt(const Fp& a, const Fp& b) {  // a < b as 384-bit integers
+    for (int i = 5; i >= 0; --i) { if (a.c[i] < b.c[i]) return true; if (a.c[i] > b.c[i]) return false; }
+    return false;
+}
 
 // ===========================================================================
 // Backend: arith384_mod (d = a*b + c mod p) and the inverse/sqrt fcall hints.

@@ -28,7 +28,8 @@ each layer verified before the next. See the plan in `~/.claude/plans/`.
 3. **Fp6 / Fp12** — done (`fp6.hpp`, `fp12.hpp`, `test/test_fp12.cpp`; algebraic
    identities incl. Frobenius order-12/multiplicativity, sparse==full). ✅
    (cyclotomic squaring/exp deferred to Layer 6 final-exp, where it's used.)
-4. G1 (decompress/add/scalar-mul/subgroup) — todo
+4. **G1** — done (`g1.hpp`, `test/test_g1.cpp`; decompress(gen), on-curve,
+   GLV subgroup, r·G==O). ✅
 5. G2 twist — todo
 6. Miller loop + final exp + pairing — todo
 7. kzg_verify_proof glue + constants — todo
