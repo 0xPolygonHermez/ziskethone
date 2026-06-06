@@ -96,7 +96,8 @@ set(ZISK_SUPPORT
   # MODEXP (EIP-198) via the self-contained arbitrary-precision bigint port
   # (bigint/*.hpp) on the ZisK arith256/add256 precompiles + fcall hints.
   ${CMAKE_CURRENT_SOURCE_DIR}/modexp_zisk.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/precompile_stubs.cpp
+  # EIP-2537 BLS12-381 precompiles (0x0b–0x11) via the bls12_381/ port.
+  ${CMAKE_CURRENT_SOURCE_DIR}/bls12_381_eip2537.cpp
 )
 
 add_executable(zisk_eth_guest.elf
