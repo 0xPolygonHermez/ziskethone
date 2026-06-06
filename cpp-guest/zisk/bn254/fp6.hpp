@@ -51,22 +51,22 @@ inline Fp6 fp6_inv(const Fp6& a) {
     return { fp2_mul(t0,fi), fp2_mul(t1,fi), fp2_mul(t2,fi) };
 }
 
-// a · (b2·v)
+// a · (b2·v)   [bn254 sparse_mula]
 inline Fp6 fp6_sparse_mula(const Fp6& a, const Fp2& b2) {
     return { nr(fp2_mul(a.c2,b2)), fp2_mul(a.c0,b2), fp2_mul(a.c1,b2) };
 }
-// a · (b2·v + b3·v²)
-inline Fp6 fp6_sparse_mulb(const Fp6& a, const Fp2& b2, const Fp2& b3) {
+// a · (b1 + b2·v)   [bn254 sparse_mulb]
+inline Fp6 fp6_mul_b01(const Fp6& a, const Fp2& b1, const Fp2& b2) {
+    Fp2 c0 = fp2_add(fp2_mul(a.c0,b1), nr(fp2_mul(a.c2,b2)));
+    Fp2 c1 = fp2_add(fp2_mul(a.c0,b2), fp2_mul(a.c1,b1));
+    Fp2 c2 = fp2_add(fp2_mul(a.c1,b2), fp2_mul(a.c2,b1));
+    return { c0, c1, c2 };
+}
+// a · (b2·v + b3·v²)   [bn254 sparse_mulc]
+inline Fp6 fp6_mul_b12(const Fp6& a, const Fp2& b2, const Fp2& b3) {
     Fp2 c0 = nr(fp2_add(fp2_mul(a.c1,b3), fp2_mul(a.c2,b2)));
     Fp2 c1 = fp2_add(fp2_mul(a.c0,b2), nr(fp2_mul(a.c2,b3)));
     Fp2 c2 = fp2_add(fp2_mul(a.c0,b3), fp2_mul(a.c1,b2));
-    return { c0, c1, c2 };
-}
-// a · (b1 + b3·v²)
-inline Fp6 fp6_sparse_mulc(const Fp6& a, const Fp2& b1, const Fp2& b3) {
-    Fp2 c0 = fp2_add(fp2_mul(a.c0,b1), nr(fp2_mul(a.c1,b3)));
-    Fp2 c1 = fp2_add(fp2_mul(a.c1,b1), nr(fp2_mul(a.c2,b3)));
-    Fp2 c2 = fp2_add(fp2_mul(a.c0,b3), fp2_mul(a.c2,b1));
     return { c0, c1, c2 };
 }
 // a · v

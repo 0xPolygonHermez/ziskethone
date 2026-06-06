@@ -13,8 +13,8 @@
 
 #include <evmone_precompiles/bn254.hpp>
 #include "bn254/g1.hpp"
+#include "bn254/pairing.hpp"
 #include "bn254/add_affine_spec.hpp"
-// pairing_check (ecPairing) is added in N4.
 
 namespace {
 using namespace zeg::bn;
@@ -50,6 +50,24 @@ AffinePoint mul(const AffinePoint& pt, const uint256& c) noexcept {
     uint64_t k[4] = { (uint64_t)c, (uint64_t)(c >> 64), (uint64_t)(c >> 128), (uint64_t)(c >> 192) };
     uint64_t kr[4]; fr_reduce(k, kr);
     return to_ap(g1_scalar_mul(p, kr));
+}
+
+// ecPairing: ∏ e(Pᵢ,Qᵢ) == 1. Per-pair validate (field, on-curve, G2 subgroup),
+// skip ∞ pairs, batch the Miller loops, then one final_exp. Point/ExtPoint coords
+// are plain uint256 (not Montgomery). Mirrors evmone pairing/bn254/pairing.cpp.
+std::optional<bool> pairing_check(std::span<const std::pair<Point, ExtPoint>> pairs) noexcept {
+    if (pairs.empty()) return true;
+    Fp12 acc = FP12_ONE;
+    for (const auto& [P, Q] : pairs) {
+        G1 g1{ to_fp(P.x), to_fp(P.y) };
+        G2 g2{ { to_fp(Q.x.first), to_fp(Q.x.second) }, { to_fp(Q.y.first), to_fp(Q.y.second) } };
+        if (!g1_in_field(g1) || !g2_in_field(g2)) return std::nullopt;
+        bool g1inf = g1_is_identity(g1), g2inf = g2_is_identity(g2);
+        if (!g1inf && !g1_is_on_curve(g1)) return std::nullopt;
+        if (!g2inf && (!g2_is_on_curve(g2) || !g2_is_on_subgroup(g2))) return std::nullopt;
+        if (!g1inf && !g2inf) acc = fp12_mul(acc, miller_loop(g1, g2));
+    }
+    return fp12_is_one(final_exp(acc));
 }
 
 }  // namespace evmmax::bn254

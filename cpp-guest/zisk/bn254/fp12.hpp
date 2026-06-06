@@ -82,8 +82,8 @@ inline Fp12 fp12_frobenius3(const Fp12& a) {
 // sparse Fp12 mul by (1 + (b21 + b22·v)·w) — line value from the Miller loop.
 // c0 = a0 + a1·(b21·v + b22·v²) ; c1 = a1 + a0·(b21 + b22·v).
 inline Fp12 fp12_sparse_mul(const Fp12& a, const Fp2& b21, const Fp2& b22) {
-    Fp6 c0 = fp6_add(fp6_sparse_mulc(a.c1, b21, b22), a.c0);
-    Fp6 c1 = fp6_add(fp6_sparse_mulb(a.c0, b21, b22), a.c1);
+    Fp6 c0 = fp6_add(fp6_mul_b12(a.c1, b21, b22), a.c0);
+    Fp6 c1 = fp6_add(fp6_mul_b01(a.c0, b21, b22), a.c1);
     return { c0, c1 };
 }
 
