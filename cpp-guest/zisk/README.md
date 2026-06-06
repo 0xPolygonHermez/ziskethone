@@ -3,7 +3,8 @@
 Builds the C++ block guest as a freestanding **RISC-V `rv64ima_zicsr`** ELF that
 runs in the ZisK emulator (`ziskemu`) for benchmarking, and eventually proving.
 This is the *self-contained baseline*: own `_start` + `mem*` + **software**
-keccak/secp256k1, no `libziskos`, no accelerators yet. It exists alongside the
+secp256k1, no `libziskos`. Keccak is wired to the ZisK accelerator (CSR 0x800,
+see `keccak_zisk.cpp`); secp256k1 is next. It exists alongside the
 native host build (`cpp-guest/CMakeLists.txt`) — that is unchanged; the ZisK
 path is selected by the `ZEG_ZISK` compile macro.
 
@@ -54,9 +55,11 @@ The output must match the native guest:
 - **Heavy precompiles** BLS12-381 (EIP-2537), KZG point-eval (EIP-4844), and
   MODEXP (0x05) → failure stubs (`precompile_stubs.cpp`). Blocks that use them
   will mismatch; everything else runs.
-- **Crypto/keccak are software** (`crypto_sw.cpp`, the guest's `keccak.hpp`),
-  so step counts are dominated by them — that's expected for the baseline and
-  is what the ZisK accelerators will later replace.
+- **secp256k1 is software** (`crypto_sw.cpp`), so signature verification still
+  dominates step counts; the ZisK secp256k1 accelerator will replace it next.
+- **Keccak uses the ZisK accelerator** (`keccak_zisk.cpp`, CSR 0x800) — a
+  drop-in for evmone's `keccak.c`, so all callers (state/MPT hashing, tx/header
+  hashes, CREATE addresses, code hashes, the EVM `KECCAK256` opcode, …) hit it.
 
 ## Layout
 

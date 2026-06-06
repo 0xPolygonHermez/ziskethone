@@ -74,7 +74,10 @@ file(GLOB PRECOMP_SRC   ${EVMONE_SRC}/lib/evmone_precompiles/*.cpp)
 list(FILTER PRECOMP_SRC EXCLUDE REGEX "/bls\\.cpp$|/kzg\\.cpp$|/modexp\\.cpp$")
 # bn254 pairing lives in a subdirectory (ECPAIRING precompile).
 file(GLOB PAIRING_SRC   ${EVMONE_SRC}/lib/evmone_precompiles/pairing/*/*.cpp)
-set(PRECOMP_C  ${EVMONE_SRC}/lib/evmone_precompiles/keccak.c)
+# Keccak: instead of evmone's software keccak.c, compile our drop-in that
+# routes the Keccak-f[1600] permutation through the ZisK precompile (CSR 0x800).
+# Same public symbol (ethash_keccak256), so every Keccak call site is accelerated.
+set(PRECOMP_C  ${CMAKE_CURRENT_SOURCE_DIR}/keccak_zisk.cpp)
 # Only the precompile dispatch from test/state (not the json/state machinery).
 set(STATE_SRC  ${EVMONE_SRC}/test/state/precompiles.cpp)
 
