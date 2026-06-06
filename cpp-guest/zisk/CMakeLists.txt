@@ -72,7 +72,7 @@ file(GLOB PRECOMP_SRC   ${EVMONE_SRC}/lib/evmone_precompiles/*.cpp)
 # bls/kzg pull blst+c-kzg (asm); modexp pulls std::pmr. bn254 (ecadd/ecmul) is
 # replaced by our ZisK-accelerated bn254_eip196.cpp. All are excluded here and
 # provided by the ZISK_SUPPORT wrapper TUs below.
-list(FILTER PRECOMP_SRC EXCLUDE REGEX "/bls\\.cpp$|/kzg\\.cpp$|/modexp\\.cpp$|/bn254\\.cpp$|/secp256r1\\.cpp$|/sha256\\.cpp$")
+list(FILTER PRECOMP_SRC EXCLUDE REGEX "/bls\\.cpp$|/kzg\\.cpp$|/modexp\\.cpp$|/bn254\\.cpp$|/secp256r1\\.cpp$|/sha256\\.cpp$|/blake2b\\.cpp$")
 # bn254 pairing lives in a subdirectory (ECPAIRING precompile); we provide our own
 # evmmax::bn254::pairing_check, so exclude evmone's software pairing too.
 file(GLOB PAIRING_SRC   ${EVMONE_SRC}/lib/evmone_precompiles/pairing/*/*.cpp)
@@ -110,6 +110,10 @@ set(ZISK_SUPPORT
   # SHA-256 precompile (0x02) + KZG/EIP-7685 hashing: drop-in evmone::crypto::sha256
   # routing the compression through the ZisK sha256f precompile (CSR 0x805).
   ${CMAKE_CURRENT_SOURCE_DIR}/sha256_zisk.cpp
+  # BLAKE2 precompile (0x09, EIP-152 F compression): drop-in
+  # evmone::crypto::blake2b_compress routing each round through the ZisK
+  # blake2b_round precompile (CSR 0x819).
+  ${CMAKE_CURRENT_SOURCE_DIR}/blake2b_zisk.cpp
 )
 
 add_executable(zisk_eth_guest.elf
@@ -320,4 +324,28 @@ add_custom_command(TARGET sha256_selftest.elf POST_BUILD
     --remove-section '.gcc_except_table*' --remove-section .comment
     --remove-section .riscv.attributes
     $<TARGET_FILE:sha256_selftest.elf> $<TARGET_FILE:sha256_selftest.elf>
+  COMMENT "Stripping ZisK-incompatible sections")
+
+# --- blake2_selftest.elf: on-emulator self-test of the BLAKE2b layer ---
+# Runs the EIP-152 F compression (rounds 0/1/12, "abc" vector) via the
+# blake2b_round precompile (0x819) and checks the working-state outputs.
+add_executable(blake2_selftest.elf
+  ${CMAKE_CURRENT_SOURCE_DIR}/blake2b/test/selftest_blake2_zisk.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
+  ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
+target_compile_definitions(blake2_selftest.elf PRIVATE ZEG_ZISK)
+target_compile_options(blake2_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
+target_include_directories(blake2_selftest.elf PRIVATE ${GUEST_ROOT}/include)
+target_link_options(blake2_selftest.elf PRIVATE
+  -T ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld -nostdlib -nostartfiles -Wl,--gc-sections)
+set_target_properties(blake2_selftest.elf PROPERTIES LINK_DEPENDS
+  ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld)
+add_custom_command(TARGET blake2_selftest.elf POST_BUILD
+  COMMAND ${CMAKE_OBJCOPY}
+    --remove-section .eh_frame --remove-section .eh_frame_hdr
+    --remove-section '.gcc_except_table*' --remove-section .comment
+    --remove-section .riscv.attributes
+    $<TARGET_FILE:blake2_selftest.elf> $<TARGET_FILE:blake2_selftest.elf>
   COMMENT "Stripping ZisK-incompatible sections")
