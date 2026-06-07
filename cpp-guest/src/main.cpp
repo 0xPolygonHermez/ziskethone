@@ -13,8 +13,12 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <vector>
+#if defined(ZEG_ZISK)
+#include "zeg/zisk_io.hpp"
+#else
+#include <fstream>
+#endif
 
 #include <evmc/evmc.hpp>
 
@@ -62,6 +66,13 @@ constexpr std::array<uint8_t, 8> kPostMergeNonce{};
 
 } // namespace
 
+#if defined(ZEG_ZISK)
+int main() {
+    // 1. Read the input from the ZisK memory-mapped input region.
+    //    `read_input_stream` checks the magic and returns a cursor
+    //    positioned past the 8-byte magic prefix.
+    const uint8_t* cursor = read_input_stream(nullptr);
+#else
 int main(int argc, char** argv) {
     // 1. Read the entire input stream from the file path passed on
     //    the command line. `read_input_stream` checks the magic and
@@ -70,6 +81,7 @@ int main(int argc, char** argv) {
         zeg::fatal("usage: zisk_eth_guest <input-file>");
     }
     const uint8_t* cursor = read_input_stream(argv[1]);
+#endif
     const uint8_t* file_base = cursor - 8;  // back up past the magic+pad
 
     // 2. Parse the input-stream collections at main level. Stream order
@@ -308,6 +320,29 @@ namespace {
 
 // ----- Stubs (to be implemented as the guest is fleshed out) -----
 
+#if defined(ZEG_ZISK)
+const uint8_t* read_input_stream(const char* /*path*/) {
+    // ZisK: the input lives in the memory-mapped input region, already
+    // 8-byte aligned (it follows a u64 length word). No file, no copy.
+    const zeg::zisk::Input in = zeg::zisk::read_input();
+    if (in.len < 8) {
+        zeg::fatal("read_input_stream: input too small for magic");
+    }
+    const uint8_t* base = in.ptr;
+
+    uint32_t magic;
+    std::memcpy(&magic, base, sizeof(magic));
+    if (magic != zeg::kMagic) {
+        zeg::fatal("read_input_stream: bad magic (expected ZEG0)");
+    }
+    uint32_t version;
+    std::memcpy(&version, base + 4, sizeof(version));
+    if (version != zeg::kVersion) {
+        zeg::fatal("read_input_stream: unsupported format version");
+    }
+    return base + 8;
+}
+#else
 const uint8_t* read_input_stream(const char* path) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f) {
@@ -349,8 +384,14 @@ const uint8_t* read_input_stream(const char* path) {
     // aligned.
     return base + 8;
 }
+#endif  // ZEG_ZISK
 
 void emit_public_output(const evmc::bytes32& value) {
+#if defined(ZEG_ZISK)
+    // ZisK: write the 32-byte block hash to the public-output region as
+    // 8 u32 slots (the value attested by the proof).
+    zeg::zisk::set_output_bytes32(value.bytes);
+#else
     // Host-build placeholder for the ZisK public-output API: print
     // the 32-byte value as lowercase hex with a 0x prefix, one line.
     std::printf("0x");
@@ -358,6 +399,7 @@ void emit_public_output(const evmc::bytes32& value) {
         std::printf("%02x", b);
     }
     std::printf("\n");
+#endif
 }
 
 } // namespace
