@@ -257,6 +257,11 @@ pub fn manifests_for_fixture(
             diff,
             witness,
             system_contract_slots,
+            // Resolve Osaka from the fixture's chain spec at this block's
+            // timestamp so the guest dispatches at EVMC_OSAKA (CLZ, MODEXP
+            // gas, P256VERIFY). Transition fixtures activate Osaka mid-chain,
+            // so this is evaluated per block.
+            is_osaka: chain_spec.is_osaka_active_at_timestamp(exec.block.header().timestamp()),
         });
 
         // (h) Apply post-state to running_prestate for the next iter.

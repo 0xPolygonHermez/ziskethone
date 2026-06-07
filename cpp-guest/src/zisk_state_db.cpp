@@ -409,6 +409,23 @@ evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
     // (which is empty), per EVM semantics.
     if ((msg.flags & EVMC_DELEGATED) == 0 &&
         evmone::state::is_precompile(active_revision(), msg.code_address)) {
+        // A plain CALL with value to a precompile still transfers the value
+        // to the precompile address (then the precompile runs). STATICCALL
+        // (value forced to 0 by EIP-214) and CALLCODE/DELEGATECALL (no
+        // transfer) are naturally excluded by the kind/value guards. Snapshot
+        // so a failing precompile (e.g. OOG) rolls the transfer back. Fixture
+        // test_precompile_will_return_success_with_tx_value (P256VERIFY, 0x100)
+        // exercises this — the precompile address must end credited.
+        if (msg.kind == EVMC_CALL &&
+            intx::be::load<intx::uint256>(msg.value) != 0) {
+            const auto pcp = checkpoint();
+            transfer_value(msg.sender, msg.recipient, msg.value);
+            auto result = evmone::state::call_precompile(active_revision(), msg);
+            if (result.status_code != EVMC_SUCCESS) {
+                rollback(pcp);
+            }
+            return result;
+        }
         return evmone::state::call_precompile(active_revision(), msg);
     }
 
@@ -1857,6 +1874,15 @@ void ZiskStateDB::collect_withdrawal_requests() noexcept {
     // test_modified_withdrawal_contract fixtures) that returns a
     // different size is still hashed verbatim and the block stays
     // valid as long as requests_hash matches the header.
+    //
+    // EIP-7002 validity: once the fork is active the request predeploy MUST
+    // be present. If it has no code at end-of-block the block is invalid
+    // (BlockException.SYSTEM_CONTRACT_EMPTY). Calling empty code would
+    // otherwise "succeed" as a no-op and silently accept the block. EEST
+    // test_system_contract_deployment (deploy_after_fork) exercises this.
+    if (get_code_size(kWithdrawalRequestsAddress) == 0) {
+        fatal("EIP-7002: withdrawal system contract empty (invalid block)");
+    }
     auto result = system_call(kWithdrawalRequestsAddress, {});
     if (result.status_code != EVMC_SUCCESS || result.output_size == 0) {
         return;
@@ -1875,6 +1901,13 @@ void ZiskStateDB::collect_consolidation_requests() noexcept {
     // sees opaque bytes. See collect_withdrawal_requests() for the
     // rationale on accepting any size (test_modified_consolidation_
     // contract / test_extra_consolidations).
+    //
+    // EIP-7251 validity: empty consolidation system contract at end-of-block
+    // ⇒ invalid block (BlockException.SYSTEM_CONTRACT_EMPTY); see
+    // collect_withdrawal_requests() for the rationale.
+    if (get_code_size(kConsolidationRequestsAddress) == 0) {
+        fatal("EIP-7251: consolidation system contract empty (invalid block)");
+    }
     auto result = system_call(kConsolidationRequestsAddress, {});
     if (result.status_code != EVMC_SUCCESS || result.output_size == 0) {
         return;

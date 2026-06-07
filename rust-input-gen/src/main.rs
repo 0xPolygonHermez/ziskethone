@@ -9,12 +9,13 @@
 
 use std::path::PathBuf;
 
-use alloy::primitives::B256;
+use alloy::primitives::{Address, B256};
 use anyhow::{Context, Result};
 use clap::Parser;
 use tracing::info;
 
 use rust_input_gen::enrich;
+use rust_input_gen::mpt;
 use rust_input_gen::errors::ReorgDetected;
 use rust_input_gen::offline::{build_binary, OfflineSources};
 use rust_input_gen::rpc;
@@ -155,7 +156,7 @@ async fn fetch_offline_sources_online(
     //      node still has the data; otherwise it comes back missing
     //      intermediate nodes and the cpp-guest's strict state-root
     //      reconstruction rejects the block.
-    let witness = client.execution_witness_by_hash(block_hash).await?;
+    let mut witness = client.execution_witness_by_hash(block_hash).await?;
     info!(
         state_nodes = witness.state.len(),
         codes = witness.codes.len(),
@@ -306,6 +307,22 @@ async fn fetch_offline_sources_online(
         &mut prestate,
     ).await?;
 
+    // Backfill accounts that reth's `debug_executionWitness` omits. Notably
+    // a pre-funded CREATE2 target that is created and SELFDESTRUCT'd in the
+    // same tx (EIP-6780): reth's witness recorder leaves its leaf + address
+    // preimage out of the witness, so the guest can't read the pre-balance
+    // and loses it on deploy (block 25265020/25265306: 0.11/0.36 ETH). For
+    // each prestate account whose state-trie path is incomplete in the
+    // witness, fetch its eth_getProof at the parent and splice the leaf path
+    // + preimage back in.
+    backfill_witness_gaps(
+        client,
+        parent.header.state_root,
+        parent_hash,
+        &prestate,
+        &mut witness,
+    ).await?;
+
     // Walk the parent state trie and append every account leaf the
     // witness exposes (notably: off-target sibling leaves that the
     // tracer misses). After this step every state-trie leaf reachable
@@ -365,6 +382,101 @@ async fn fetch_offline_sources_online(
         system_contract_slots,
         is_osaka,
     })
+}
+
+/// Splice in account leaves that reth's `debug_executionWitness` omitted.
+///
+/// reth records witness state only for accounts its execution "sees" through
+/// the normal access path. A pre-funded CREATE2 target that is deployed and
+/// SELFDESTRUCT'd in the same transaction (EIP-6780) slips through: its
+/// pre-existing balance moves to the SELFDESTRUCT beneficiary, but neither its
+/// trie leaf nor its address preimage end up in the witness. Account balances
+/// reach the guest only via the witness MPT (`state_root::write`), so the guest
+/// deploys to an empty (balance-0) account and the claimed ETH vanishes — wrong
+/// logs + wrong state root.
+///
+/// For every prestate account whose `keccak(addr)` path is not fully provable
+/// from the witness, fetch its `eth_getProof` at the parent block and add the
+/// returned trie nodes (root → leaf) plus the address preimage to the witness.
+async fn backfill_witness_gaps(
+    client: &rpc::Client,
+    parent_state_root: B256,
+    parent_hash: B256,
+    prestate: &rpc::Prestate,
+    witness: &mut rpc::ExecutionWitness,
+) -> Result<()> {
+    use std::collections::{HashMap, HashSet};
+
+    let mut nodes: HashMap<[u8; 32], Vec<u8>> = HashMap::with_capacity(witness.state.len());
+    for raw in &witness.state {
+        if raw.len() >= 32 {
+            nodes.insert(mpt::keccak256(raw), raw.to_vec());
+        }
+    }
+    let root: [u8; 32] = parent_state_root.0;
+    // Address preimages already in the witness (the 20-byte entries).
+    let mut have_key: HashSet<Vec<u8>> = witness.keys.iter().map(|k| k.to_vec()).collect();
+
+    // An account is "covered" iff its address preimage is in the witness — the
+    // guest needs keccak(addr) -> addr to attach the trie leaf to the address.
+    // reth can leave the leaf node reachable in `state` (so `lookup` is Found)
+    // yet still omit the preimage for a created+destroyed pre-funded account,
+    // which makes the guest treat the leaf as anonymous and the account as
+    // empty. So gate on the preimage, then confirm existence via `lookup`.
+    // (addr, leaf_already_in_witness). When the leaf node is already reachable
+    // we only need to add the preimage; otherwise we must also fetch the leaf
+    // path via eth_getProof.
+    let mut missing: Vec<(Address, bool)> = Vec::new();
+    for (addr, acct) in prestate.iter() {
+        if have_key.contains(addr.as_slice()) {
+            continue;
+        }
+        let non_empty = acct.balance.map(|b| !b.is_zero()).unwrap_or(false)
+            || acct.nonce.map(|n| n != 0).unwrap_or(false)
+            || acct.code.as_ref().map(|c| !c.is_empty()).unwrap_or(false);
+        match mpt::lookup(&nodes, root, addr.as_slice())? {
+            // Leaf reachable, preimage missing — the common omitted-account
+            // case (pre-funded CREATE2 target). Only the preimage is needed.
+            mpt::Lookup::Found(_) => missing.push((*addr, true)),
+            // Witness can't prove the path → leaf nodes also missing.
+            mpt::Lookup::NotInWitness => missing.push((*addr, false)),
+            // Provably absent: a genuinely new account (skip) unless the tracer
+            // says it carries pre-state (then the witness is inconsistent).
+            mpt::Lookup::Absent => {
+                if non_empty {
+                    missing.push((*addr, false));
+                }
+            }
+        }
+    }
+    if missing.is_empty() {
+        return Ok(());
+    }
+    info!(count = missing.len(), "backfilling witness gaps");
+
+    let mut have_node: HashSet<[u8; 32]> = nodes.keys().copied().collect();
+    for (addr, leaf_present) in missing {
+        if !leaf_present {
+            // Leaf nodes are missing too — pull the account path from the node
+            // (only possible near head; reth's witness usually already has the
+            // leaf, so this branch is rare).
+            let proof = client
+                .account_proof_at_hash(addr, Vec::new(), parent_hash)
+                .await?;
+            for node in proof.account_proof {
+                let h = mpt::keccak256(&node);
+                if have_node.insert(h) {
+                    witness.state.push(node);
+                }
+            }
+        }
+        // The preimage is just the address; the guest hashes it itself.
+        let kb = addr.as_slice().to_vec();
+        if have_key.insert(kb.clone()) {
+            witness.keys.push(kb.into());
+        }
+    }
+    Ok(())
 }
 
 /// Pectra system contracts the cpp-guest's `pre_execute_block` /

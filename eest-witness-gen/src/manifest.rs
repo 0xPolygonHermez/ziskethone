@@ -38,6 +38,16 @@ pub struct ManifestSources {
     pub diff: PrestateDiff,
     pub witness: ExecutionWitness,
     pub system_contract_slots: BTreeSet<(Address, B256)>,
+    /// True when this block runs under Osaka (Fusaka). Osaka is
+    /// timestamp-activated and adds no header field over Prague, so it
+    /// can't be inferred from the block structure — the bridge resolves
+    /// it from the fixture's chain spec and surfaces it to the guest
+    /// (via `OfflineSources.is_osaka` → ConsensusInfo `fork_id`) so the
+    /// guest dispatches at `EVMC_OSAKA` (EIP-7939 CLZ, MODEXP gas, the
+    /// P256VERIFY precompile, …). `serde(default)` keeps older manifests
+    /// (which omit the field) decoding as Prague.
+    #[serde(default)]
+    pub is_osaka: bool,
 }
 
 /// Mirror of `rust_input_gen::rpc::Prestate`.
