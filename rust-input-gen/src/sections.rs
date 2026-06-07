@@ -18,6 +18,8 @@ use crate::writer::Writer;
 
 /// On-wire format version, written in the 4 bytes after the magic.
 /// Must match the guest's `kVersion` in `cpp-guest/include/zeg/binary_format.hpp`.
+/// v5: ConsensusInfo prefix +8 B — adds blob_base_fee_update_fraction (u64-le at
+/// offset 344) so the guest uses the block's actual blob schedule fraction.
 /// v4: witness-only StateRoot — the encoder transcribes the pre-state MPT
 /// straight from the execution witness and no longer pre-emits leaves for
 /// keys created during the block (the guest inserts them). Byte layout is
@@ -30,7 +32,7 @@ use crate::writer::Writer;
 /// derives read-only-ness dynamically (original == current).
 /// v1: StateRoot `Op::Leaf` carries no index (keccak-sorted tables +
 /// counter-derived index in the guest).
-pub const FORMAT_VERSION: u32 = 4;
+pub const FORMAT_VERSION: u32 = 5;
 
 /// File magic prefix (8 bytes): 4 B ASCII `"ZEG0"` + 4 B little-endian
 /// format version, which also keeps the cursor 8-byte aligned for the
@@ -64,7 +66,17 @@ const FORK_OSAKA: u64 = 7;
 /// `is_osaka` distinguishes Osaka from Prague — they share an identical
 /// header structure, so it can't be inferred from `current` and is
 /// resolved upstream from the node's `eth_config`.
-pub fn write_consensus_info(w: &mut Writer, current: &Block, parent: &Block, is_osaka: bool) {
+///
+/// `blob_base_fee_update_fraction` is this block's BLOB_BASE_FEE_UPDATE_FRACTION
+/// (per the active blob schedule); also resolved upstream because it varies per
+/// fork / BPO and can't be inferred from the header.
+pub fn write_consensus_info(
+    w: &mut Writer,
+    current: &Block,
+    parent: &Block,
+    is_osaka: bool,
+    blob_base_fee_update_fraction: u64,
+) {
     let h = &current.header;
 
     // 0..32  parent_hash ← parent.state_root (this guest's convention)
@@ -132,6 +144,9 @@ pub fn write_consensus_info(w: &mut Writer, current: &Block, parent: &Block, is_
         FORK_BERLIN
     };
     w.u64_le(fork_id);
+    // 344..352 blob_base_fee_update_fraction (u64-le). 0 ⇒ guest falls back to
+    // the current-mainnet default. End of fixed prefix: 352.
+    w.u64_le(blob_base_fee_update_fraction);
     w.assert_aligned();
 
     // Withdrawal records × 48 B each (EIP-4895).

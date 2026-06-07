@@ -48,6 +48,13 @@ pub struct ManifestSources {
     /// (which omit the field) decoding as Prague.
     #[serde(default)]
     pub is_osaka: bool,
+    /// BLOB_BASE_FEE_UPDATE_FRACTION for this block's blob schedule. Resolved
+    /// from the fixture's chain spec (its `config.blobSchedule`) so blob base
+    /// fees match the fork — EEST base-Osaka (5,007,716) differs from the
+    /// guest's mainnet default. Deserializes into `OfflineSources` of the same
+    /// name; `serde(default)` (0) keeps older manifests on the guest fallback.
+    #[serde(default)]
+    pub blob_base_fee_update_fraction: u64,
 }
 
 /// Mirror of `rust_input_gen::rpc::Prestate`.

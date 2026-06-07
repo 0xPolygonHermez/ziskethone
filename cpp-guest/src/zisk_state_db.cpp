@@ -933,11 +933,14 @@ void ZiskStateDB::pre_execute_block() noexcept {
                                     intx::uint256{kChainId});
         ctx.block_base_fee    = consensus_.base_fee_per_gas();
         // EIP-4844: blob_base_fee = fake_exponential(1, excess_blob_gas,
-        //                                            3338477).
+        //   BLOB_BASE_FEE_UPDATE_FRACTION). The fraction is per-block (carried
+        //   in ConsensusInfo) since it differs per blob schedule — Cancun
+        //   3338477, Prague/Osaka 5007716, mainnet BPO forks higher — and
+        //   mainnet-Osaka vs EEST-Osaka share fork_id but not the schedule.
         ctx.blob_base_fee     = intx::be::store<evmc::uint256be>(
             fake_exponential(kMinBaseFeePerBlobGas,
                              consensus_.excess_blob_gas(),
-                             kBlobBaseFeeUpdateFraction));
+                             consensus_.blob_base_fee_update_fraction()));
         set_tx_context(ctx);
     }
 

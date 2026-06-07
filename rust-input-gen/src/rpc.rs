@@ -457,6 +457,46 @@ impl Client {
         Ok(parse_u64(current.get("activationTime")))
     }
 
+    /// Resolve BLOB_BASE_FEE_UPDATE_FRACTION for a block at `timestamp` from
+    /// EIP-7910 `eth_config`. The config exposes `last`/`current`/`next` fork
+    /// entries, each with an `activationTime` and a `blobSchedule`; we pick the
+    /// schedule with the greatest `activationTime <= timestamp` (falling back to
+    /// `current` if none qualifies). Best-effort: any RPC/shape error returns
+    /// `Ok(None)`, and the guest then uses its current-mainnet default.
+    pub async fn blob_base_fee_update_fraction_at(&self, timestamp: u64) -> Result<Option<u64>> {
+        let v: Value = match self.provider.raw_request("eth_config".into(), ()).await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(err = %e, "eth_config unavailable; blob fraction unresolved");
+                return Ok(None);
+            }
+        };
+        let fraction_of = |entry: &Value| -> Option<u64> {
+            parse_u64(
+                entry
+                    .get("blobSchedule")
+                    .and_then(|b| b.get("baseFeeUpdateFraction")),
+            )
+        };
+        // Pick the entry with the largest activationTime <= timestamp.
+        let mut best: Option<(u64, u64)> = None; // (activationTime, fraction)
+        for key in ["last", "current", "next"] {
+            let Some(entry) = v.get(key) else { continue };
+            let (Some(act), Some(frac)) = (parse_u64(entry.get("activationTime")), fraction_of(entry))
+            else {
+                continue;
+            };
+            if act <= timestamp && best.map(|(a, _)| act >= a).unwrap_or(true) {
+                best = Some((act, frac));
+            }
+        }
+        if let Some((_, frac)) = best {
+            return Ok(Some(frac));
+        }
+        // None active yet at this timestamp — fall back to `current`'s schedule.
+        Ok(v.get("current").and_then(fraction_of))
+    }
+
     // ---- private ----------------------------------------------------------
 
     async fn debug_trace_prestate_by_hash(
