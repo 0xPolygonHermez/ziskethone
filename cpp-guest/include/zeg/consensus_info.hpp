@@ -29,7 +29,7 @@ namespace zeg {
 
 class ConsensusInfo {
 public:
-    static constexpr uint64_t kFixedPrefixSize      = 344;
+    static constexpr uint64_t kFixedPrefixSize      = 352;
     static constexpr uint64_t kWithdrawalRecordSize = 48;
 
     // Fixed offsets within the 344-byte header prefix. All 8-byte
@@ -64,7 +64,13 @@ public:
     // same header field count. 0 (= zero-filled / pre-fork_id inputs)
     // decodes to ForkId::Unknown ⇒ Prague (mainnet default).
     static constexpr size_t kForkIdOffset                = 336;  // u64-le
-    // End of fixed prefix: 344.
+    // EIP-4844/7691/7892 blob base-fee update fraction (BLOB_BASE_FEE_
+    // UPDATE_FRACTION), per the block's blob schedule. Carried per-block
+    // because mainnet-Osaka and EEST-Osaka share fork_id yet use different
+    // schedules (mainnet evolves it at each BPO fork). 0 = pre-field input
+    // ⇒ guest falls back to the current-mainnet default.
+    static constexpr size_t kBlobBaseFeeUpdateFractionOffset = 344;  // u64-le
+    // End of fixed prefix: 352.
 
     // Zero-copy view over one 48-byte withdrawal record (EIP-4895).
     //
@@ -102,6 +108,10 @@ public:
     const evmc::bytes32&     parent_beacon_block_root() const noexcept;
     const evmc::uint256be&   base_fee_per_gas        () const noexcept;
     uint64_t                 excess_blob_gas         () const noexcept;
+    // BLOB_BASE_FEE_UPDATE_FRACTION for this block's blob schedule. Falls
+    // back to the current-mainnet value when the wire field is 0 (older
+    // inputs that predate it).
+    uint64_t                 blob_base_fee_update_fraction() const noexcept;
     const evmc::bytes32&     requests_hash           () const noexcept;
     const evmc::uint256be&   difficulty              () const noexcept;
     std::span<const uint8_t, 8> nonce                () const noexcept;

@@ -24,7 +24,7 @@ use crate::manifest::{
     AccountPrestate, ExecutionWitness as ManifestExecutionWitness, ManifestSources, Prestate,
     PrestateDiff,
 };
-use reth_chainspec::{ChainSpec, EthereumHardforks};
+use reth_chainspec::{ChainSpec, EthChainSpec, EthereumHardforks};
 use std::sync::Arc;
 
 // ===== top-level entry =================================================
@@ -262,6 +262,13 @@ pub fn manifests_for_fixture(
             // gas, P256VERIFY). Transition fixtures activate Osaka mid-chain,
             // so this is evaluated per block.
             is_osaka: chain_spec.is_osaka_active_at_timestamp(exec.block.header().timestamp()),
+            // Blob base-fee update fraction from the fixture's chain spec (its
+            // config.blobSchedule) at this block's timestamp. 0 if the fork has
+            // no blob schedule (pre-Cancun) → guest uses its mainnet fallback.
+            blob_base_fee_update_fraction: chain_spec
+                .blob_params_at_timestamp(exec.block.header().timestamp())
+                .map(|p| p.update_fraction as u64)
+                .unwrap_or(0),
         });
 
         // (h) Apply post-state to running_prestate for the next iter.

@@ -178,6 +178,16 @@ async fn fetch_offline_sources_online(
         );
     }
 
+    // Resolve this block's BLOB_BASE_FEE_UPDATE_FRACTION from the node's blob
+    // schedule (eth_config). 0 ⇒ unresolved/pre-Cancun → the guest applies its
+    // current-mainnet default. Threaded into ConsensusInfo so blob base fees
+    // match the active schedule (mainnet BPO forks; EEST base-Osaka differs).
+    let blob_base_fee_update_fraction = client
+        .blob_base_fee_update_fraction_at(current.header.timestamp)
+        .await?
+        .unwrap_or(0);
+    info!(blob_base_fee_update_fraction, "resolved blob base-fee update fraction");
+
     {
         use alloy::rpc::types::BlockTransactions;
         if let BlockTransactions::Full(v) = &current.transactions {
@@ -381,6 +391,7 @@ async fn fetch_offline_sources_online(
         witness,
         system_contract_slots,
         is_osaka,
+        blob_base_fee_update_fraction,
     })
 }
 

@@ -5,6 +5,7 @@
 
 #include "zeg/fatal.hpp"
 #include "zeg/stream.hpp"
+#include "zeg/system_addresses.hpp"  // kBlobBaseFeeUpdateFraction (mainnet default)
 
 namespace zeg {
 
@@ -72,6 +73,12 @@ const evmc::uint256be& ConsensusInfo::base_fee_per_gas() const noexcept {
 }
 uint64_t ConsensusInfo::excess_blob_gas() const noexcept {
     return u64_at(header_ + kExcessBlobGasOffset);
+}
+uint64_t ConsensusInfo::blob_base_fee_update_fraction() const noexcept {
+    const uint64_t v = u64_at(header_ + kBlobBaseFeeUpdateFractionOffset);
+    // 0 ⇒ input predates this field; default to the current-mainnet value
+    // (Fusaka BPO2) so existing mainnet inputs keep decoding correctly.
+    return v != 0 ? v : kBlobBaseFeeUpdateFraction;
 }
 const evmc::bytes32& ConsensusInfo::requests_hash() const noexcept {
     return *reinterpret_cast<const evmc::bytes32*>(header_ + kRequestsHashOffset);

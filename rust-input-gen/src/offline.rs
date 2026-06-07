@@ -71,6 +71,13 @@ pub struct OfflineSources {
     /// to false for manifests that pre-date the field.
     #[serde(default)]
     pub is_osaka: bool,
+    /// BLOB_BASE_FEE_UPDATE_FRACTION for this block's blob schedule (EIP-4844/
+    /// 7691/7892). Carried per-block because mainnet-Osaka and EEST-Osaka share
+    /// `fork_id` yet use different schedules, and mainnet evolves it at each BPO
+    /// fork. Surfaced to the guest via ConsensusInfo. `serde(default)` (0) keeps
+    /// older manifests decoding to the guest's current-mainnet fallback.
+    #[serde(default)]
+    pub blob_base_fee_update_fraction: u64,
 }
 
 /// Encode an `OfflineSources` bundle to the cpp-guest's binary
@@ -120,7 +127,13 @@ pub fn build_binary(sources: &OfflineSources, output: &Path) -> Result<()> {
 
     let mut w = Writer::new();
     sections::write_magic(&mut w);
-    sections::write_consensus_info(&mut w, &sources.current, &sources.parent, sources.is_osaka);
+    sections::write_consensus_info(
+        &mut w,
+        &sources.current,
+        &sources.parent,
+        sources.is_osaka,
+        sources.blob_base_fee_update_fraction,
+    );
     sections::write_transactions(&mut w, &sources.current)?;
     sections::write_contracts(&mut w, &prestate, &sources.diff, &sources.current)?;
     sections::write_previous_blocks(&mut w, &sources.ancestors);
