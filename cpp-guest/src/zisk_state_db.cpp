@@ -409,6 +409,23 @@ evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
     // (which is empty), per EVM semantics.
     if ((msg.flags & EVMC_DELEGATED) == 0 &&
         evmone::state::is_precompile(active_revision(), msg.code_address)) {
+        // A plain CALL with value to a precompile still transfers the value
+        // to the precompile address (then the precompile runs). STATICCALL
+        // (value forced to 0 by EIP-214) and CALLCODE/DELEGATECALL (no
+        // transfer) are naturally excluded by the kind/value guards. Snapshot
+        // so a failing precompile (e.g. OOG) rolls the transfer back. Fixture
+        // test_precompile_will_return_success_with_tx_value (P256VERIFY, 0x100)
+        // exercises this — the precompile address must end credited.
+        if (msg.kind == EVMC_CALL &&
+            intx::be::load<intx::uint256>(msg.value) != 0) {
+            const auto pcp = checkpoint();
+            transfer_value(msg.sender, msg.recipient, msg.value);
+            auto result = evmone::state::call_precompile(active_revision(), msg);
+            if (result.status_code != EVMC_SUCCESS) {
+                rollback(pcp);
+            }
+            return result;
+        }
         return evmone::state::call_precompile(active_revision(), msg);
     }
 
