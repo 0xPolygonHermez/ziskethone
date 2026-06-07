@@ -90,10 +90,23 @@ set(PRECOMP_C  ${CMAKE_CURRENT_SOURCE_DIR}/keccak_zisk.cpp)
 # Only the precompile dispatch from test/state (not the json/state machinery).
 set(STATE_SRC  ${EVMONE_SRC}/test/state/precompiles.cpp)
 
+# DMA mem* thunks: memcpy/memmove/memcmp/memset routed through the ZisK DMA
+# precompiles (CSR 0x813/0x814/0x816). These replace runtime.cpp's software mem*,
+# so EVERY target that compiles runtime.cpp must also link DMA_SRC (otherwise any
+# memcpy/memset reference — incl. ones the compiler synthesizes from STL/intx —
+# is undefined). The transpiler lowers the csrs+add/addi pattern to a single
+# accelerated op; see dma/*.s.
+set(DMA_SRC
+  ${CMAKE_CURRENT_SOURCE_DIR}/dma/memcpy.s
+  ${CMAKE_CURRENT_SOURCE_DIR}/dma/memmove.s
+  ${CMAKE_CURRENT_SOURCE_DIR}/dma/memcmp.s
+  ${CMAKE_CURRENT_SOURCE_DIR}/dma/memset.s)
+
 # ZisK runtime / freestanding support.
 set(ZISK_SUPPORT
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
+  ${DMA_SRC}
   ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp
   # secp256k1 ECDSA. Default: ZisK precompiles + fcall hints. With
@@ -138,9 +151,11 @@ target_compile_definitions(zisk_eth_guest.elf PRIVATE
   PROJECT_VERSION="0.21.0")          # normally injected by evmone's CMake
 target_compile_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
 target_link_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
-# At -O2/-O3 GCC's loop-distribute-patterns rewrites the byte loops inside our
-# freestanding memset/memcpy (runtime.cpp) into calls to themselves → infinite
-# recursion. Disable that idiom recognition for this TU.
+# runtime.cpp no longer defines mem* (those moved to dma/*.s), but it still has the
+# bump-allocator zero-fill/copy loops (calloc/realloc). Keep loop-distribute-patterns
+# + builtin idiom recognition disabled so those stay explicit loops — unchanged from
+# prior behavior. (Dropping these would let calloc/realloc lower to the DMA mem* too;
+# left out of scope here.)
 set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   TARGET_DIRECTORY zisk_eth_guest.elf PROPERTIES
   COMPILE_OPTIONS "-fno-tree-loop-distribute-patterns;-fno-builtin")
@@ -184,6 +199,7 @@ add_executable(bls_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/bls12_381/test/selftest_zisk.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
+  ${DMA_SRC}
   ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(bls_selftest.elf PRIVATE ZEG_ZISK)
@@ -207,6 +223,7 @@ add_executable(bigint_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/bigint/test/selftest_backend_zisk.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
+  ${DMA_SRC}
   ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(bigint_selftest.elf PRIVATE ZEG_ZISK)
@@ -229,6 +246,7 @@ add_executable(modexp_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/bigint/test/selftest_modexp_zisk.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
+  ${DMA_SRC}
   ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(modexp_selftest.elf PRIVATE ZEG_ZISK)
@@ -253,6 +271,7 @@ add_executable(bls2537_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/bls12_381/test/selftest_eip2537_zisk.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
+  ${DMA_SRC}
   ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(bls2537_selftest.elf PRIVATE ZEG_ZISK)
@@ -277,6 +296,7 @@ add_executable(bn254_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/bn254/test/selftest_eip196_zisk.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
+  ${DMA_SRC}
   ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(bn254_selftest.elf PRIVATE ZEG_ZISK)
@@ -301,6 +321,7 @@ add_executable(p256_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/secp256r1/test/selftest_p256_zisk.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
+  ${DMA_SRC}
   ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(p256_selftest.elf PRIVATE ZEG_ZISK)
@@ -325,6 +346,7 @@ add_executable(sha256_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/sha256/test/selftest_sha256_zisk.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
+  ${DMA_SRC}
   ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(sha256_selftest.elf PRIVATE ZEG_ZISK)
@@ -349,6 +371,7 @@ add_executable(blake2_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/blake2b/test/selftest_blake2_zisk.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
+  ${DMA_SRC}
   ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(blake2_selftest.elf PRIVATE ZEG_ZISK)
