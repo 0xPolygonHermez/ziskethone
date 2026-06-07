@@ -8,11 +8,6 @@
 #include <evmone/evmone.h>  // evmc_create_evmone for the owned VM instance
 #include <intx/intx.hpp>    // 256-bit add for selfdestruct balance transfer
 #include <test/state/precompiles.hpp>  // evmone::state::call_precompile
-#include <lib/evmone/vm.hpp>        // evmone::VM for tracer attachment
-#include <lib/evmone/tracing.hpp>   // create_instruction_tracer
-#if !defined(ZEG_ZISK)
-#include <fstream>
-#endif
 
 #include "zeg/bloom.hpp"
 #include "zeg/config.hpp"
@@ -92,8 +87,7 @@ ZiskStateDB::ZiskStateDB(Accounts&             accounts,
       contracts_(contracts),
       previous_blocks_(previous_blocks),
       storages_(storages),
-      vm_raw_(evmc_create_evmone()),
-      vm_(vm_raw_) {}
+      vm_raw_(evmc_create_evmone()) {}
 
 // ===== evmc::Host overrides =====
 //
@@ -451,7 +445,7 @@ evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
             return call_create(msg, cp);
     }
 
-    auto result = vm_.execute(*this, active_revision(), msg,
+    auto result = exec(active_revision(),msg,
                               code.data(), code.size());
     if (result.status_code != EVMC_SUCCESS) {
         rollback(cp);
@@ -792,7 +786,7 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     // 4. Execute the init code with the new address as the recipient.
     evmc_message create_msg = msg;
     create_msg.recipient    = new_addr;
-    auto result = vm_.execute(*this, active_revision(), create_msg,
+    auto result = exec(active_revision(),create_msg,
                               init_code, init_size);
     if (result.status_code != EVMC_SUCCESS) {
         rollback(cp_after_bump);
@@ -1006,26 +1000,13 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         // COLD (2600 for accounts, 2100 for slots).
         pre_warm_for_tx(tx);
 
-#if !defined(ZEG_ZISK)
-        // DEBUG: attach an evmone instruction tracer for the target tx.
-        // Host build only — std::ofstream pulls in iostream, which the
-        // freestanding ZisK build does not provide.
-        static std::ofstream trace_out;
-        auto* vm_ev = static_cast<evmone::VM*>(vm_raw_);
-        const char* trace_env = std::getenv("ZEG_TRACE_TX");
-        if (trace_env != nullptr && i == static_cast<size_t>(std::atoi(trace_env))) {
-            if (!trace_out.is_open()) trace_out.open("/tmp/cpp_tx_trace.jsonl");
-            vm_ev->add_tracer(evmone::create_instruction_tracer(trace_out));
-        }
-#endif
-
         // Push the receipt for this tx up front. emit_log appends to
         // tx_receipts_.back().logs during execution; finalize_receipt
         // fills status / bloom / cumGas at the end of the iteration.
         tx_receipts_.emplace_back().tx_type = tx.type();
 
         // Backing storage for the blob-hashes and initcodes arrays
-        // pointed to by the per-tx tx_context. Must outlive vm_.execute
+        // pointed to by the per-tx tx_context. Must outlive exec()
         // below — the ctx fields are raw pointers into these vectors.
         std::vector<evmc::bytes32>    blob_hashes;
         std::vector<evmc_tx_initcode> initcodes_vec;
@@ -1061,15 +1042,6 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         // end of the TRANSACTION, not at the SELFDESTRUCT opcode.
         // See pending_destruct_ in the header for the rationale.
         apply_pending_destructs();
-
-#if !defined(ZEG_ZISK)
-        // Detach tracer after the traced tx so later txs don't trace.
-        if (trace_env != nullptr && i == static_cast<size_t>(std::atoi(trace_env))) {
-            vm_ev->remove_tracers();
-            trace_out.flush();
-            trace_out.close();
-        }
-#endif
     }
 }
 
@@ -1575,7 +1547,7 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
         accounts_.mark_touched_at(new_idx, tx_counter_);
         created_this_tx_idx_.insert(new_idx);
 
-        auto result = vm_.execute(*this, active_revision(), msg,
+        auto result = exec(active_revision(),msg,
                                   entry_code.data(), entry_code.size());
 
         if (result.status_code == EVMC_SUCCESS) {
@@ -1682,7 +1654,7 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
         transfer_value(msg.sender, msg.recipient, msg.value);
     }
 
-    return vm_.execute(*this, active_revision(), msg,
+    return exec(active_revision(),msg,
                        entry_code.data(), entry_code.size());
 }
 
@@ -1946,7 +1918,7 @@ evmc::Result ZiskStateDB::system_call(const evmc::address&     target,
     // for EIP-7002 / EIP-7251 request dequeue).
     const auto cp = checkpoint();
     const auto entry_code = code(target);
-    auto result = vm_.execute(*this, active_revision(), msg,
+    auto result = exec(active_revision(),msg,
                               entry_code.data(), entry_code.size());
     if (result.status_code != EVMC_SUCCESS) {
         rollback(cp);

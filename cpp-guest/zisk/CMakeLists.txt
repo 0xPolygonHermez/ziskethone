@@ -24,6 +24,11 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Guest optimization flags (Release). Proving cost ∝ executed instructions, so this
+# targets speed/step-count. Overridable, e.g. -DZEG_GUEST_OPT="-O3".
+set(ZEG_GUEST_OPT "-O3" CACHE STRING "Guest Release optimization flags")
+separate_arguments(ZEG_GUEST_OPT_LIST UNIX_COMMAND "${ZEG_GUEST_OPT}")
+
 set(GUEST_ROOT  ${CMAKE_CURRENT_SOURCE_DIR}/..)        # cpp-guest/
 
 # --- locate the evmone source already downloaded by the host build ----------
@@ -63,10 +68,11 @@ list(FILTER GUEST_SRC EXCLUDE REGEX "zisk_crypto_host_stub|zisk_crypto_libsecp25
 
 # evmone interpreter + modular-arith + precompiles (minus the heavy bls/kzg TUs).
 file(GLOB EVMONE_CORE   ${EVMONE_SRC}/lib/evmone/*.cpp)
-# cpu_check.cpp is x86-only (__builtin_cpu_supports). tracing.cpp stays in (the
-# guest never enables tracing, but vm.cpp references its factories); its
-# std::ostream dependencies are satisfied by stdcxx_stubs.cpp.
-list(FILTER EVMONE_CORE EXCLUDE REGEX "/cpu_check\\.cpp$")
+# cpu_check.cpp is x86-only (__builtin_cpu_supports). tracing.cpp is excluded — the
+# guest never enables tracing; vm.cpp's set_option only references the three
+# create_*_tracer factories, which we stub (tracer_stubs.cpp) to drop the whole
+# evmone tracer + its iostream dependency from the link.
+list(FILTER EVMONE_CORE EXCLUDE REGEX "/cpu_check\\.cpp$|/tracing\\.cpp$")
 file(GLOB EVMMAX_SRC    ${EVMONE_SRC}/lib/evmmax/*.cpp)
 file(GLOB PRECOMP_SRC   ${EVMONE_SRC}/lib/evmone_precompiles/*.cpp)
 # bls/kzg pull blst+c-kzg (asm); modexp pulls std::pmr. bn254 (ecadd/ecmul) is
@@ -114,6 +120,9 @@ set(ZISK_SUPPORT
   # evmone::crypto::blake2b_compress routing each round through the ZisK
   # blake2b_round precompile (CSR 0x819).
   ${CMAKE_CURRENT_SOURCE_DIR}/blake2b_zisk.cpp
+  # Stubs for evmone's create_*_tracer factories so tracing.cpp (and its iostream
+  # deps) can be dropped from the build — the guest never enables a tracer.
+  ${CMAKE_CURRENT_SOURCE_DIR}/tracer_stubs.cpp
 )
 
 add_executable(zisk_eth_guest.elf
@@ -127,7 +136,14 @@ target_compile_definitions(zisk_eth_guest.elf PRIVATE
   ZEG_ZISK
   $<$<BOOL:${ZEG_SECP256K1_SW}>:ZEG_SECP256K1_SW>
   PROJECT_VERSION="0.21.0")          # normally injected by evmone's CMake
-target_compile_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
+target_compile_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
+target_link_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
+# At -O2/-O3 GCC's loop-distribute-patterns rewrites the byte loops inside our
+# freestanding memset/memcpy (runtime.cpp) into calls to themselves → infinite
+# recursion. Disable that idiom recognition for this TU.
+set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
+  TARGET_DIRECTORY zisk_eth_guest.elf PROPERTIES
+  COMPILE_OPTIONS "-fno-tree-loop-distribute-patterns;-fno-builtin")
 
 # ECADD (0x06) reaches the generic evmmax::ecc::add_affine template inside
 # precompiles.cpp; force-include our explicit BN254 specialization so the dispatch

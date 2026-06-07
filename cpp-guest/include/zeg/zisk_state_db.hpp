@@ -115,10 +115,15 @@ public:
     // interface (callers below the top level use copy_code instead).
     std::span<const uint8_t> code(const evmc::address& addr) const noexcept;
 
-    // The evmone VM instance ZiskStateDB owns and re-uses for both
-    // top-level execution (from main()) and nested calls (from the
-    // `call()` override above).
-    evmc::VM& vm() noexcept { return vm_; }
+    // Execute `code` against the owned EVM via the raw evmc C ABI (the
+    // replaceable boundary). `*this` is the evmc::Host, so the host interface and
+    // context come straight from it; the evmc::Result wraps/owns the C result.
+    // Used for both top-level execution (from main()) and nested calls.
+    evmc::Result exec(evmc_revision rev, const evmc_message& msg,
+                      const uint8_t* code, size_t code_size) noexcept {
+        return evmc::Result{vm_raw_->execute(
+            vm_raw_, &evmc::Host::get_interface(), to_context(), rev, &msg, code, code_size)};
+    }
 
     // ----- tx_context plumbing -----
     //
@@ -278,7 +283,7 @@ private:
     }
 
     // Map ConsensusInfo.fork_id to an `evmc_revision` so the EVM
-    // dispatch (vm_.execute, is_precompile, call_precompile) runs at the
+    // dispatch (exec(), is_precompile, call_precompile) runs at the
     // correct fork. cpp-guest historically hard-coded EVMC_OSAKA
     // everywhere, which silently enabled Prague/Osaka precompiles in
     // Cancun blocks (e.g. BLS_G1ADD at 0x0d returned 128-byte data
@@ -337,7 +342,7 @@ private:
     // fields filled by pre_execute_block) + per-tx fields from `tx`.
     // `blob_hashes` and `initcodes_vec` are scratch buffers the caller
     // owns; pointers into them are written into the returned ctx so
-    // they must outlive any subsequent vm_.execute call.
+    // they must outlive any subsequent exec() call.
     evmc_tx_context build_per_tx_context(
         const Transactions::View&        tx,
         std::vector<evmc::bytes32>&      blob_hashes,
@@ -412,12 +417,9 @@ private:
 
     evmc_tx_context       tx_context_{};
     Journal               journal_{};
-    // `vm_raw_` holds the underlying evmc_vm pointer so we can cast it
-    // to `evmone::VM*` for tracer attachment (the evmc::VM C++ wrapper
-    // keeps `m_instance` private and offers no accessor). `vm_` is
-    // initialised from this pointer in the constructor's init list.
+    // The owned EVM, held as the raw evmc_vm* so execution goes through the pure
+    // evmc C ABI (see exec() above) — keeping the boundary VM-agnostic.
     evmc_vm*              vm_raw_;
-    evmc::VM              vm_;
     // EIP-1153 transient storage. Reset at the start of every EVM
     // frame (each tx + each system call) by the call sites that bump
     // tx_counter_. TSTORE writes are journaled so revert restores
