@@ -68,10 +68,11 @@ list(FILTER GUEST_SRC EXCLUDE REGEX "zisk_crypto_host_stub|zisk_crypto_libsecp25
 
 # evmone interpreter + modular-arith + precompiles (minus the heavy bls/kzg TUs).
 file(GLOB EVMONE_CORE   ${EVMONE_SRC}/lib/evmone/*.cpp)
-# cpu_check.cpp is x86-only (__builtin_cpu_supports). tracing.cpp stays in (the
-# guest never enables tracing, but vm.cpp references its factories); its
-# std::ostream dependencies are satisfied by stdcxx_stubs.cpp.
-list(FILTER EVMONE_CORE EXCLUDE REGEX "/cpu_check\\.cpp$")
+# cpu_check.cpp is x86-only (__builtin_cpu_supports). tracing.cpp is excluded — the
+# guest never enables tracing; vm.cpp's set_option only references the three
+# create_*_tracer factories, which we stub (tracer_stubs.cpp) to drop the whole
+# evmone tracer + its iostream dependency from the link.
+list(FILTER EVMONE_CORE EXCLUDE REGEX "/cpu_check\\.cpp$|/tracing\\.cpp$")
 file(GLOB EVMMAX_SRC    ${EVMONE_SRC}/lib/evmmax/*.cpp)
 file(GLOB PRECOMP_SRC   ${EVMONE_SRC}/lib/evmone_precompiles/*.cpp)
 # bls/kzg pull blst+c-kzg (asm); modexp pulls std::pmr. bn254 (ecadd/ecmul) is
@@ -119,6 +120,9 @@ set(ZISK_SUPPORT
   # evmone::crypto::blake2b_compress routing each round through the ZisK
   # blake2b_round precompile (CSR 0x819).
   ${CMAKE_CURRENT_SOURCE_DIR}/blake2b_zisk.cpp
+  # Stubs for evmone's create_*_tracer factories so tracing.cpp (and its iostream
+  # deps) can be dropped from the build — the guest never enables a tracer.
+  ${CMAKE_CURRENT_SOURCE_DIR}/tracer_stubs.cpp
 )
 
 add_executable(zisk_eth_guest.elf
@@ -140,10 +144,6 @@ target_link_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_O
 set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   TARGET_DIRECTORY zisk_eth_guest.elf PROPERTIES
   COMPILE_OPTIONS "-fno-tree-loop-distribute-patterns;-fno-builtin")
-# evmone tracing.cpp only links freestanding when its unused iostream code is DCE'd
-# (at -Os, not -O2/-O3) — force just this TU to -Os.
-set_source_files_properties(${EVMONE_SRC}/lib/evmone/tracing.cpp
-  TARGET_DIRECTORY zisk_eth_guest.elf PROPERTIES COMPILE_OPTIONS "-Os")
 
 # ECADD (0x06) reaches the generic evmmax::ecc::add_affine template inside
 # precompiles.cpp; force-include our explicit BN254 specialization so the dispatch
