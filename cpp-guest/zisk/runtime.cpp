@@ -6,7 +6,8 @@
 // + evmone actually reference:
 //
 //   * the bump allocator backing malloc/calloc/realloc/free and operator new,
-//   * the freestanding mem* family (memcpy/memmove/memset/memcmp/strlen…),
+//   * strlen (the mem* family — memcpy/memmove/memset/memcmp — now lives in
+//     dma/*.s, which routes each through the ZisK DMA precompiles),
 //   * loud `halt()` + abort() that stop the emulator,
 //   * no-op libc stdio/env stubs (printf/fprintf/getenv/… + _impure_ptr) so the
 //     guest's ~70 debug-logging sites link without being individually #ifdef'd,
@@ -91,32 +92,11 @@ void *aligned_alloc(size_t alignment, size_t size) {
 }
 
 // ===========================================================================
-// Freestanding mem* / str* (no libc). Simple, correct, byte-at-a-time.
+// Freestanding str* (no libc). The mem* family (memcpy/memmove/memset/memcmp)
+// is provided by dma/*.s, which routes each call through the ZisK DMA precompiles
+// (CSR 0x813/0x814/0x816) instead of a byte loop. Only strlen stays here — there
+// is no DMA strlen precompile.
 // ===========================================================================
-void *memcpy(void *dst, const void *src, size_t n) {
-    auto *d = static_cast<unsigned char *>(dst);
-    auto *s = static_cast<const unsigned char *>(src);
-    for (size_t i = 0; i < n; ++i) d[i] = s[i];
-    return dst;
-}
-void *memmove(void *dst, const void *src, size_t n) {
-    auto *d = static_cast<unsigned char *>(dst);
-    auto *s = static_cast<const unsigned char *>(src);
-    if (d < s) { for (size_t i = 0; i < n; ++i) d[i] = s[i]; }
-    else       { for (size_t i = n; i-- > 0;) d[i] = s[i]; }
-    return dst;
-}
-void *memset(void *dst, int c, size_t n) {
-    auto *d = static_cast<unsigned char *>(dst);
-    for (size_t i = 0; i < n; ++i) d[i] = static_cast<unsigned char>(c);
-    return dst;
-}
-int memcmp(const void *a, const void *b, size_t n) {
-    auto *x = static_cast<const unsigned char *>(a);
-    auto *y = static_cast<const unsigned char *>(b);
-    for (size_t i = 0; i < n; ++i) { if (x[i] != y[i]) return x[i] < y[i] ? -1 : 1; }
-    return 0;
-}
 size_t strlen(const char *s) { size_t n = 0; while (s[n]) ++n; return n; }
 
 // ===========================================================================
