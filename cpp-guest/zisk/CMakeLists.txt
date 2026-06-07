@@ -24,6 +24,11 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Guest optimization flags (Release). Proving cost ∝ executed instructions, so this
+# targets speed/step-count. Overridable, e.g. -DZEG_GUEST_OPT="-O3".
+set(ZEG_GUEST_OPT "-O3" CACHE STRING "Guest Release optimization flags")
+separate_arguments(ZEG_GUEST_OPT_LIST UNIX_COMMAND "${ZEG_GUEST_OPT}")
+
 set(GUEST_ROOT  ${CMAKE_CURRENT_SOURCE_DIR}/..)        # cpp-guest/
 
 # --- locate the evmone source already downloaded by the host build ----------
@@ -127,7 +132,18 @@ target_compile_definitions(zisk_eth_guest.elf PRIVATE
   ZEG_ZISK
   $<$<BOOL:${ZEG_SECP256K1_SW}>:ZEG_SECP256K1_SW>
   PROJECT_VERSION="0.21.0")          # normally injected by evmone's CMake
-target_compile_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
+target_compile_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
+target_link_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
+# At -O2/-O3 GCC's loop-distribute-patterns rewrites the byte loops inside our
+# freestanding memset/memcpy (runtime.cpp) into calls to themselves → infinite
+# recursion. Disable that idiom recognition for this TU.
+set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
+  TARGET_DIRECTORY zisk_eth_guest.elf PROPERTIES
+  COMPILE_OPTIONS "-fno-tree-loop-distribute-patterns;-fno-builtin")
+# evmone tracing.cpp only links freestanding when its unused iostream code is DCE'd
+# (at -Os, not -O2/-O3) — force just this TU to -Os.
+set_source_files_properties(${EVMONE_SRC}/lib/evmone/tracing.cpp
+  TARGET_DIRECTORY zisk_eth_guest.elf PROPERTIES COMPILE_OPTIONS "-Os")
 
 # ECADD (0x06) reaches the generic evmmax::ecc::add_affine template inside
 # precompiles.cpp; force-include our explicit BN254 specialization so the dispatch
