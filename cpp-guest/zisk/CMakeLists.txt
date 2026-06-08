@@ -24,9 +24,21 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-# Guest optimization flags (Release). Proving cost ∝ executed instructions, so this
-# targets speed/step-count. Overridable, e.g. -DZEG_GUEST_OPT="-O3".
-set(ZEG_GUEST_OPT "-O3" CACHE STRING "Guest Release optimization flags")
+# Guest optimization flags (Release). ZisK proving cost is ∝ the number of
+# *executed* instructions, where every instruction costs the same — so unlike a
+# real CPU, the goal is to minimize instruction count, not pipeline throughput.
+# `-mtune=size` tunes GCC's codegen toward exactly that and is the dominant win
+# here (measured -13% block cost on its own); `-funroll-loops` + the inlining
+# `--param`s add a few more % by cutting call/loop overhead on hot paths
+# (evmone dispatch, keccak, MPT). Measured on block 25271907: 20.996B -> 17.64B
+# (-16%, steps -21.6%), identical output, verified across a dozen blocks.
+#
+# NOT used: -flto (only +1.8% over this set but its LTO codegen overran the RAM
+# ceiling 0xc0000000 on some flag combos -> emulator OOB; too fragile for a
+# prover) and -fipa-pta (measurably worse here, and slow to compile).
+#
+# Overridable, e.g. -DZEG_GUEST_OPT="-O3".
+set(ZEG_GUEST_OPT "-O3 -mtune=size -funroll-loops --param=max-inline-insns-single=1600 --param=max-inline-insns-auto=533 --param=inline-unit-growth=266 --param=max-inline-recursive-depth=6 --param=max-completely-peeled-insns=400 --param=large-function-growth=280 --param=large-unit-insns=30000" CACHE STRING "Guest Release optimization flags")
 separate_arguments(ZEG_GUEST_OPT_LIST UNIX_COMMAND "${ZEG_GUEST_OPT}")
 
 set(GUEST_ROOT  ${CMAKE_CURRENT_SOURCE_DIR}/..)        # cpp-guest/
