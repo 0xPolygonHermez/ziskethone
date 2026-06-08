@@ -190,6 +190,9 @@ endif()
 add_executable(zisk_eth_guest ${GUEST_SOURCES})
 
 target_include_directories(zisk_eth_guest PUBLIC include)
+# evmone's baseline.hpp / vm.hpp (CodeAnalysis + the pre-analyzed execute()
+# overload used by the analysis cache) live under lib/, not the public include/.
+target_include_directories(zisk_eth_guest PRIVATE ${evmone_SOURCE_DIR}/lib)
 target_compile_options(zisk_eth_guest PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(zisk_eth_guest PRIVATE evmone evmone::precompiles evmone::state)
 

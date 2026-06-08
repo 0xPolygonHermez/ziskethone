@@ -434,6 +434,7 @@ evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
     const auto cp = checkpoint();
 
     std::span<const uint8_t> code;
+    evmc::bytes32            code_hash{};
 
     switch (msg.kind) {
         case EVMC_CALL: {
@@ -446,14 +447,14 @@ evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
             if (v_u != 0) {
                 transfer_value(msg.sender, msg.recipient, msg.value);
             }
-            code = this->code(msg.code_address);
+            code = this->code_and_hash(msg.code_address, code_hash);
             break;
         }
         case EVMC_CALLCODE:
         case EVMC_DELEGATECALL:
             // No value transfer (DELEGATECALL's `value` is apparent
             // only; CALLCODE keeps the value in the caller's storage).
-            code = this->code(msg.code_address);
+            code = this->code_and_hash(msg.code_address, code_hash);
             break;
 
         case EVMC_CREATE:
@@ -463,7 +464,7 @@ evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
     }
 
     auto result = exec(active_revision(),msg,
-                              code.data(), code.size());
+                              code.data(), code.size(), code_hash);
     if (result.status_code != EVMC_SUCCESS) {
         rollback(cp);
     }
@@ -594,6 +595,13 @@ evmc_access_status ZiskStateDB::access_storage(const evmc::address& addr,
 // ===== Public methods =====
 
 std::span<const uint8_t> ZiskStateDB::code(const evmc::address& addr) const noexcept {
+    evmc::bytes32 ignored;
+    return code_and_hash(addr, ignored);
+}
+
+std::span<const uint8_t> ZiskStateDB::code_and_hash(
+        const evmc::address& addr, evmc::bytes32& out_hash) const noexcept {
+    out_hash = EMPTY_CODE_HASH;
     if (!accounts_.contains(addr)) {
         return {};  // non-existent account has no code
     }
@@ -601,6 +609,7 @@ std::span<const uint8_t> ZiskStateDB::code(const evmc::address& addr) const noex
     if (hash == EMPTY_CODE_HASH) {
         return {};
     }
+    out_hash = hash;
     const auto& c = contracts_.by_hash(hash);
     return std::span<const uint8_t>{c.code, static_cast<size_t>(c.code_size)};
 }
@@ -1654,7 +1663,8 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
         return evmone::state::call_precompile(active_revision(), msg);
     }
 
-    auto entry_code = this->code(msg.recipient);
+    evmc::bytes32 entry_code_hash{};
+    auto entry_code = this->code_and_hash(msg.recipient, entry_code_hash);
 
     // EIP-7702 top-level delegation: if the recipient is a delegated
     // EOA (code starts with 0xef0100 || delegate), execute the
@@ -1667,7 +1677,7 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
         evmc::address delegate;
         std::memcpy(delegate.bytes, entry_code.data() + 3, 20);
         msg.code_address = delegate;
-        entry_code = this->code(delegate);
+        entry_code = this->code_and_hash(delegate, entry_code_hash);
     }
 
     if (intx::be::load<intx::uint256>(msg.value) != 0) {
@@ -1675,7 +1685,7 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
     }
 
     return exec(active_revision(),msg,
-                       entry_code.data(), entry_code.size());
+                       entry_code.data(), entry_code.size(), entry_code_hash);
 }
 
 uint64_t ZiskStateDB::settle_tx_gas(const Transactions::View& tx,
@@ -1953,9 +1963,10 @@ evmc::Result ZiskStateDB::system_call(const evmc::address&     target,
     // pay); the caller may consume the result's output_data (e.g.
     // for EIP-7002 / EIP-7251 request dequeue).
     const auto cp = checkpoint();
-    const auto entry_code = code(target);
+    evmc::bytes32 entry_code_hash{};
+    const auto entry_code = code_and_hash(target, entry_code_hash);
     auto result = exec(active_revision(),msg,
-                              entry_code.data(), entry_code.size());
+                              entry_code.data(), entry_code.size(), entry_code_hash);
     if (result.status_code != EVMC_SUCCESS) {
         rollback(cp);
     }
