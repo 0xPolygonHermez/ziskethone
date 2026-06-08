@@ -1,8 +1,9 @@
 # zevm — hand-written EVM, drop-in replacement for evmone at the evmc C ABI.
 #
-# Depends only on evmc's header-only types (evmc/evmc.h, evmc/utils.h), not on
-# evmone's interpreter. The evmc headers come from the FetchContent'd evmone
-# source tree; the parent CMakeLists exposes evmone_SOURCE_DIR.
+# Depends on evmc's header-only types (evmc/evmc.h, evmc/utils.h), not on
+# evmone's interpreter, plus the header-only ZisK 256-bit backend (zeg::bi) for
+# arithmetic opcodes. The evmc headers come from the FetchContent'd evmone source
+# tree; the parent CMakeLists exposes evmone_SOURCE_DIR.
 
 add_library(zevm STATIC
     zevm.cpp
@@ -15,6 +16,8 @@ target_include_directories(zevm
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${evmone_SOURCE_DIR}/evmc/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../zisk   # zeg::bi 256-bit backend (bigint/backend.hpp)
 )
 
 target_compile_features(zevm PUBLIC cxx_std_20)
