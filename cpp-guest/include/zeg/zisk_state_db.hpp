@@ -266,6 +266,18 @@ private:
     evmc::Result call_create(const evmc_message& msg,
                              Checkpoint cp) noexcept;
 
+    // Precompile dispatch: routes the ECRECOVER address (0x01) to the
+    // ZisK-accelerated recover path (ecrecover_precompile); every other
+    // precompile goes to evmone::state::call_precompile. Used by every
+    // precompile call site so the routing is uniform.
+    evmc::Result call_precompile_dispatch(const evmc_message& msg) noexcept;
+
+    // ECRECOVER (0x01): flat 3000 gas, 128-byte (zero-padded) input
+    // hash|v|r|s, v must be 27/28, output is the 32-byte left-padded signer
+    // address (empty on a non-recoverable signature). Mirrors evmone's
+    // ecrecover_analyze/execute but uses zeg::ecrecover_address (accelerated).
+    evmc::Result ecrecover_precompile(const evmc_message& msg) noexcept;
+
     // ----- CREATE-family sub-helpers (used by call_create) -----
 
     // Derive the new contract address per the kind on `msg`. CREATE

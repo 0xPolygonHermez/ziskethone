@@ -178,11 +178,16 @@ set(GUEST_SOURCES
 # line win over archive-member resolution).
 if(SECP_BACKEND STREQUAL "stub")
     list(APPEND GUEST_SOURCES src/zisk_crypto_host_stub.cpp)
+    # Stub also lacks ECRECOVER recover -> add the recover-only abort stub.
+    list(APPEND GUEST_SOURCES src/zisk_crypto_recover_stub.cpp)
 elseif(SECP_BACKEND STREQUAL "libsecp256k1")
+    # Provides both secp256k1_ecdsa_verify and _recover (via recover_compact).
     list(APPEND GUEST_SOURCES src/zisk_crypto_libsecp256k1.cpp)
 elseif(SECP_BACKEND STREQUAL "zisk-libc")
-    # No extra source — secp256k1_ecdsa_verify comes from libziskc.a
-    # linked below.
+    # secp256k1_ecdsa_verify comes from libziskc.a (linked below); lib-c has no
+    # recover, so add the recover-only abort stub (verify-free, so it doesn't
+    # shadow libziskc's archive verify symbol).
+    list(APPEND GUEST_SOURCES src/zisk_crypto_recover_stub.cpp)
 else()
     message(FATAL_ERROR "SECP_BACKEND must be zisk-libc | libsecp256k1 | stub (got ${SECP_BACKEND})")
 endif()

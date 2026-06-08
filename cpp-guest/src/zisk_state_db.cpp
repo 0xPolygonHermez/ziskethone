@@ -420,13 +420,13 @@ evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
             intx::be::load<intx::uint256>(msg.value) != 0) {
             const auto pcp = checkpoint();
             transfer_value(msg.sender, msg.recipient, msg.value);
-            auto result = evmone::state::call_precompile(active_revision(), msg);
+            auto result = call_precompile_dispatch(msg);
             if (result.status_code != EVMC_SUCCESS) {
                 rollback(pcp);
             }
             return result;
         }
-        return evmone::state::call_precompile(active_revision(), msg);
+        return call_precompile_dispatch(msg);
     }
 
     // Snapshot state up front. Any non-success status from the nested
@@ -469,6 +469,54 @@ evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
         rollback(cp);
     }
     return result;
+}
+
+evmc::Result ZiskStateDB::call_precompile_dispatch(const evmc_message& msg) noexcept {
+    // ECRECOVER lives at address 0x00..01. Route it to the accelerated recover;
+    // all other precompiles keep going through evmone.
+    const auto& a = msg.code_address;
+    bool is_ecrecover = (a.bytes[19] == 0x01);
+    for (int i = 0; i < 19 && is_ecrecover; ++i)
+        if (a.bytes[i] != 0) is_ecrecover = false;
+    if (is_ecrecover)
+        return ecrecover_precompile(msg);
+    return evmone::state::call_precompile(active_revision(), msg);
+}
+
+evmc::Result ZiskStateDB::ecrecover_precompile(const evmc_message& msg) noexcept {
+    // Flat 3000 gas; insufficient gas fails the call outright (no output).
+    constexpr int64_t kEcrecoverGas = 3000;
+    if (msg.gas < kEcrecoverGas) {
+        return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0};
+    }
+    const int64_t gas_left = msg.gas - kEcrecoverGas;
+
+    // Input is zero-padded to 128 bytes: hash[32] | v[32] | r[32] | s[32].
+    uint8_t in[128] = {};
+    const size_t n = msg.input_size < 128 ? msg.input_size : 128;
+    if (msg.input_data != nullptr && n > 0)
+        std::memcpy(in, msg.input_data, n);
+
+    // v is a 256-bit BE integer that must equal 27 or 28; recid = v - 27.
+    bool v_ok = (in[63] == 27 || in[63] == 28);
+    for (size_t i = 32; i < 63 && v_ok; ++i)
+        if (in[i] != 0) v_ok = false;
+    if (!v_ok)
+        return evmc::Result{EVMC_SUCCESS, gas_left, 0, nullptr, 0};  // empty output
+    const unsigned recid = static_cast<unsigned>(in[63] - 27);
+
+    evmc::bytes32   hash;  std::memcpy(hash.bytes, in,      32);
+    evmc::uint256be r;     std::memcpy(r.bytes,    in + 64, 32);
+    evmc::uint256be s;     std::memcpy(s.bytes,    in + 96, 32);
+
+    evmc::address signer{};
+    if (!ecrecover_address(hash, r, s, recid, signer))
+        return evmc::Result{EVMC_SUCCESS, gas_left, 0, nullptr, 0};  // not recoverable
+
+    // Output: 20-byte address, left-padded to 32 bytes. evmc::Result copies it.
+    uint8_t out[32] = {};
+    std::memcpy(out + 12, signer.bytes, 20);
+    return evmc::Result{EVMC_SUCCESS, gas_left, 0, out, sizeof(out)};
 }
 
 evmc_tx_context ZiskStateDB::get_tx_context() const noexcept {
@@ -1660,7 +1708,7 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
         if (intx::be::load<intx::uint256>(msg.value) != 0) {
             transfer_value(msg.sender, msg.recipient, msg.value);
         }
-        return evmone::state::call_precompile(active_revision(), msg);
+        return call_precompile_dispatch(msg);
     }
 
     evmc::bytes32 entry_code_hash{};

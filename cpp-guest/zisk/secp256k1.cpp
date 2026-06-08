@@ -40,6 +40,17 @@ const u64 ZERO[4] = {0, 0, 0, 0};
 const u64 ONE[4]  = {1, 0, 0, 0};
 const u64 TWO[4]  = {2, 0, 0, 0};
 
+// Field prime P = 2^256 - 2^32 - 977, the curve constant b = 7, and the modular
+// square-root exponent (P+1)/4 (valid because P ≡ 3 mod 4). Used by ecrecover to
+// reconstruct R.y from R.x. (verify needs none of these — it works mod N and
+// lets the EC precompiles handle the field internally — so P used to live only
+// in the software block; ecrecover needs it in both backends.)
+const u64 P[4]    = {0xFFFFFFFEFFFFFC2FULL, 0xFFFFFFFFFFFFFFFFULL,
+                     0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL};
+const u64 SEVEN[4] = {7, 0, 0, 0};
+const u64 P_PLUS_1_DIV_4[4] = {0xFFFFFFFFBFFFFF0CULL, 0xFFFFFFFFFFFFFFFFULL,
+                               0xFFFFFFFFFFFFFFFFULL, 0x3FFFFFFFFFFFFFFFULL};
+
 inline void cp4(u64 d[4], const u64 s[4]) { d[0]=s[0]; d[1]=s[1]; d[2]=s[2]; d[3]=s[3]; }
 inline void cp8(u64 d[8], const u64 s[8]) { for (int i=0;i<8;++i) d[i]=s[i]; }
 inline bool eq4(const u64 a[4], const u64 b[4]) {
@@ -60,9 +71,6 @@ inline bool lt4(const u64 a[4], const u64 b[4]) {  // a < b
 #if defined(ZEG_SECP256K1_SW)
 namespace {
 
-// secp256k1 field prime (software EC math only).
-const u64 P[4]  = {0xFFFFFFFEFFFFFC2FULL, 0xFFFFFFFFFFFFFFFFULL,
-                   0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL};
 
 // ---- portable 256-bit modular arithmetic ----------------------------------
 inline void mul256(const u64 a[4], const u64 b[4], u64 out[8]) {
@@ -258,6 +266,28 @@ bool scalar_mul(const u64 k[4], const u64 P_in[8], u64 res[8]) {
     return true;
 }
 
+// o = a - b (assumes a >= b; no borrow out). Used for field/scalar negation.
+inline void sub4(const u64 a[4], const u64 b[4], u64 o[4]) {
+    unsigned __int128 borrow = 0;
+    for (int i = 0; i < 4; ++i) {
+        unsigned __int128 d = (unsigned __int128)a[i] - b[i] - borrow;
+        o[i] = (u64)d;
+        borrow = (d >> 64) & 1;
+    }
+}
+
+// o = base^e mod P, square-and-multiply (LSB first). Uses temporaries so the
+// arith256_mod precompile never aliases input and output.
+inline void modpow_p(const u64 base[4], const u64 e[4], u64 o[4]) {
+    u64 r[4] = {1, 0, 0, 0}, b[4], t[4];
+    cp4(b, base);
+    for (int i = 0; i < 256; ++i) {
+        if ((e[i >> 6] >> (i & 63)) & 1ULL) { arith256_mod(r, b, ZERO, P, t); cp4(r, t); }
+        arith256_mod(b, b, ZERO, P, t); cp4(b, t);
+    }
+    cp4(o, r);
+}
+
 } // namespace
 
 // ===========================================================================
@@ -284,5 +314,67 @@ extern "C" int secp256k1_ecdsa_verify(
 
     if (!hasR) { for (int i=0;i<8;++i) result[i] = 0; return 0; }
     cp8(result, R);
+    return 0;
+}
+
+// ===========================================================================
+// Public ABI: EVM ECRECOVER. Given message hash z, signature (r, s) and the
+// recovery id recid (0 or 1 — i.e. EVM v of 27 or 28), recover the signing
+// public key into pubkey_out (x[4] || y[4], little-endian limbs). Returns 0 on
+// success, non-zero when the signature is not recoverable (caller emits the
+// empty ECRECOVER output). Mirrors evmmax::secp256k1::ecrecover semantics.
+//
+//   R = (r, y) with y ≡ recid (mod 2), y = sqrt(r^3 + 7) mod P
+//   Q = r^{-1} (s·R − z·G) = (-z·r^{-1})·G + (s·r^{-1})·R
+//
+// The scalar multiplications reuse the same accelerated scalar_mul used by
+// verify; the only extra field work is the modular square root for R.y.
+// ===========================================================================
+extern "C" int secp256k1_ecdsa_recover(
+        const uint64_t *z, const uint64_t *r, const uint64_t *s,
+        unsigned recid, uint64_t *pubkey_out) {
+    if (recid > 1) return 1;
+    if (is_zero4(r) || !lt4(r, N)) return 1;   // r in [1, N-1]
+    if (is_zero4(s) || !lt4(s, N)) return 1;   // s in [1, N-1]
+
+    // R.x = r (r < N < P, so no x = r + N case for recid 0/1).
+    // alpha = r^3 + 7 (mod P).
+    u64 r2[4], r3[4], alpha[4];
+    arith256_mod(r,  r,   ZERO,  P, r2);
+    arith256_mod(r2, r,   ZERO,  P, r3);
+    arith256_mod(r3, ONE, SEVEN, P, alpha);
+
+    // y = alpha^((P+1)/4) mod P, then confirm it is a true square root —
+    // otherwise alpha is a quadratic non-residue and no R exists.
+    u64 y[4]; modpow_p(alpha, P_PLUS_1_DIV_4, y);
+    u64 y2[4]; arith256_mod(y, y, ZERO, P, y2);
+    if (!eq4(y2, alpha)) return 1;
+
+    // Pick the root whose parity matches recid.
+    if (static_cast<unsigned>(y[0] & 1ULL) != recid) {
+        u64 ny[4]; sub4(P, y, ny); cp4(y, ny);
+    }
+
+    u64 R[8]; cp4(R, r); cp4(R + 4, y);
+
+    // u1 = (-z)·r^{-1} mod N ; u2 = s·r^{-1} mod N.
+    u64 zn[4];   reduce_fn(z, zn);
+    u64 rinv[4]; inv_fn(r, rinv);
+    u64 negz[4]; if (is_zero4(zn)) cp4(negz, zn); else sub4(N, zn, negz);
+    u64 u1[4]; mul_fn(negz, rinv, u1);
+    u64 u2[4]; mul_fn(s,    rinv, u2);
+
+    // Q = u1·G + u2·R.
+    u64 A[8], B[8], Q[8];
+    bool hasA = scalar_mul(u1, G, A);
+    bool hasB = scalar_mul(u2, R, B);
+    bool hasQ;
+    if (hasA && hasB)      hasQ = point_add(A, B, Q);
+    else if (hasA)       { cp8(Q, A); hasQ = true; }
+    else if (hasB)       { cp8(Q, B); hasQ = true; }
+    else                   hasQ = false;
+    if (!hasQ) return 1;   // point at infinity → not recoverable
+
+    cp8(pubkey_out, Q);
     return 0;
 }
