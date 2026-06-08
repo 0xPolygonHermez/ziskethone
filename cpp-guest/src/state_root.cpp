@@ -610,6 +610,7 @@ StateRoot::StateRoot(const uint8_t*& cursor,
         std::min<uint64_t>(gas_limit / 2500 + 64, kMaxCreatedSlack);
     accounts_.reserve(num_accounts + slack);
     storages_.reserve(num_storages + slack);
+    aux_.reserve(num_nodes);  // aux nodes are only Hash/ExtensionHash/PhantomLeaf
 
     BuildCtx ctx{accounts_, storages_, branch_nodes_, aux_,
                  /*next_state_idx=*/0, /*next_storage_idx=*/0,

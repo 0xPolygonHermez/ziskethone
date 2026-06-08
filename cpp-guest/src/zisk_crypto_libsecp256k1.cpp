@@ -48,6 +48,17 @@ void limbs_to_be32(const uint64_t limbs[4], uint8_t be32[32]) {
     }
 }
 
+// Inverse: 32 BE bytes -> 4 LE-ordered native limbs.
+void be32_to_limbs(const uint8_t be32[32], uint64_t limbs[4]) {
+    for (int word = 0; word < 4; ++word) {
+        uint64_t v = 0;
+        const uint8_t* p = be32 + (3 - word) * 8;  // limb[0] is the lowest 8 bytes
+        for (int byte = 0; byte < 8; ++byte)
+            v = (v << 8) | p[byte];
+        limbs[word] = v;
+    }
+}
+
 bool try_recover(const uint8_t msg32[32], const uint8_t sig64[64],
                  int recid, uint8_t expected_pk65[65]) {
     uint8_t recovered[65];
@@ -102,5 +113,34 @@ extern "C" int secp256k1_ecdsa_verify(
 
     // Matches lib-c's "always returns 0" convention; the real signal
     // is in result.x.
+    return 0;
+}
+
+// EVM ECRECOVER on libsecp256k1: recover the uncompressed pubkey for the given
+// recovery id and hand back its (x, y) as limbs. Returns 0 on success, non-zero
+// when the signature is not recoverable (bad r/s range, no point, etc.).
+extern "C" int secp256k1_ecdsa_recover(
+        const uint64_t* z,
+        const uint64_t* r,
+        const uint64_t* s,
+        unsigned        recid,
+        uint64_t*       pubkey) {
+    uint8_t msg32[32];
+    limbs_to_be32(z, msg32);
+    uint8_t sig64[64];
+    limbs_to_be32(r, sig64);
+    limbs_to_be32(s, sig64 + 32);
+
+    uint8_t recovered[65];
+    int     reclen = sizeof(recovered);
+    if (secp256k1_ecdsa_recover_compact(ctx(), msg32, sig64, recovered, &reclen,
+                                        /*compressed=*/0, static_cast<int>(recid)) != 1) {
+        return 1;  // not recoverable
+    }
+    if (reclen != 65 || recovered[0] != 0x04) {
+        return 1;
+    }
+    be32_to_limbs(recovered + 1,  pubkey);      // x
+    be32_to_limbs(recovered + 33, pubkey + 4);  // y
     return 0;
 }

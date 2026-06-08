@@ -31,6 +31,20 @@ int secp256k1_ecdsa_verify(
     uint64_t*       result  // 8 limbs: x[4] || y[4]
 );
 
+// Recover the signing public key for the EVM ECRECOVER precompile. Given the
+// message hash `z`, signature (`r`, `s`) and recovery id `recid` (0 or 1, i.e.
+// EVM v of 27 or 28), writes the recovered pubkey (x[4] || y[4]) into `pubkey`
+// and returns 0. Returns non-zero when the signature is not recoverable. The
+// accelerated zkVM implementation lives in `zisk/secp256k1.cpp`; host builds
+// provide it from the chosen SECP backend.
+int secp256k1_ecdsa_recover(
+    const uint64_t* z,      // 4 limbs: message hash
+    const uint64_t* r,      // 4 limbs
+    const uint64_t* s,      // 4 limbs
+    unsigned        recid,  // 0 or 1
+    uint64_t*       pubkey  // 8 limbs: x[4] || y[4]
+);
+
 } // extern "C"
 
 namespace zeg {
@@ -47,5 +61,18 @@ evmc::address verify_signature_and_get_signer(
     const evmc::bytes32&   signing_hash,
     const evmc::uint256be& r,
     const evmc::uint256be& s);
+
+// EVM ECRECOVER (precompile 0x01): recover the signer address from the message
+// `hash`, signature (`r`, `s`) and recovery id `recid` (0 or 1). On success
+// writes signer = keccak256(pubkey)[12:] into `out` and returns true; returns
+// false when the signature is not recoverable (caller emits empty output).
+// Caller is responsible for the r/s range and v validity per EVM rules — this
+// forwards to secp256k1_ecdsa_recover, which also rejects out-of-range inputs.
+bool ecrecover_address(
+    const evmc::bytes32&   hash,
+    const evmc::uint256be& r,
+    const evmc::uint256be& s,
+    unsigned               recid,
+    evmc::address&         out);
 
 } // namespace zeg

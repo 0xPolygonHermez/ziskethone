@@ -26,6 +26,16 @@ void be32_to_limbs(const uint8_t* be32, uint64_t limbs[4]) {
     limbs[3] = be_load64(be32 +  0);
 }
 
+// Inverse of be32_to_limbs: write 4 LE-ordered limbs as a 32-byte BE integer.
+void limbs_to_be32(const uint64_t limbs[4], uint8_t* be32) {
+    for (int i = 0; i < 4; ++i) {
+        const uint64_t w = limbs[3 - i];   // most significant limb first
+        uint8_t* q = be32 + i * 8;
+        for (int j = 0; j < 8; ++j)
+            q[j] = static_cast<uint8_t>(w >> (8 * (7 - j)));
+    }
+}
+
 constexpr uint64_t kSecp256k1N[4] = {
     0xBFD25E8CD0364141ULL,
     0xBAAEDCE6AF48A03BULL,
@@ -83,6 +93,31 @@ evmc::address verify_signature_and_get_signer(
     evmc::address signer{};
     std::memcpy(signer.bytes, ph.bytes + 12, 20);
     return signer;
+}
+
+bool ecrecover_address(
+        const evmc::bytes32&   hash,
+        const evmc::uint256be& r,
+        const evmc::uint256be& s,
+        unsigned               recid,
+        evmc::address&         out) {
+    uint64_t z_limbs[4], r_limbs[4], s_limbs[4];
+    be32_to_limbs(hash.bytes, z_limbs);
+    be32_to_limbs(r.bytes,    r_limbs);
+    be32_to_limbs(s.bytes,    s_limbs);
+
+    uint64_t pk[8];
+    if (secp256k1_ecdsa_recover(z_limbs, r_limbs, s_limbs, recid, pk) != 0) {
+        return false;  // not recoverable
+    }
+
+    // pubkey limbs (x[4] || y[4]) -> 64-byte BE, then signer = keccak[12:].
+    uint8_t pubkey[64];
+    limbs_to_be32(pk,     pubkey);
+    limbs_to_be32(pk + 4, pubkey + 32);
+    const evmc::bytes32 ph = keccak256_bytes32(pubkey, 64);
+    std::memcpy(out.bytes, ph.bytes + 12, 20);
+    return true;
 }
 
 } // namespace zeg
