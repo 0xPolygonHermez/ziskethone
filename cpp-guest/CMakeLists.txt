@@ -193,6 +193,16 @@ else()
     message(FATAL_ERROR "SECP_BACKEND must be zisk-libc | libsecp256k1 | stub (got ${SECP_BACKEND})")
 endif()
 
+# ----- EVM backend selection -------------------------------------------------
+#
+# The guest drives an EVM through the raw evmc C ABI (see ZiskStateDB::exec),
+# so the interpreter is swappable. `evmone` (default) uses the upstream
+# interpreter; `zevm` uses our hand-written one (cpp-guest/src/zevm), built as
+# a drop-in evmc replacement. Both paths still link evmone::precompiles +
+# evmone::state because precompile dispatch lives in the host/state layer.
+set(EVM_BACKEND "evmone" CACHE STRING "EVM implementation: evmone | zevm")
+set_property(CACHE EVM_BACKEND PROPERTY STRINGS evmone zevm)
+
 add_executable(zisk_eth_guest ${GUEST_SOURCES})
 
 target_include_directories(zisk_eth_guest PUBLIC include)
@@ -200,7 +210,27 @@ target_include_directories(zisk_eth_guest PUBLIC include)
 # overload used by the analysis cache) live under lib/, not the public include/.
 target_include_directories(zisk_eth_guest PRIVATE ${evmone_SOURCE_DIR}/lib)
 target_compile_options(zisk_eth_guest PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(zisk_eth_guest PRIVATE evmone evmone::precompiles evmone::state)
+# intx::intx is used directly by the guest sources (e.g. fake_exponential,
+# zisk_state_db), independent of which EVM backend is linked. It used to come
+# in transitively via the `evmone` target's PUBLIC deps; the precompiles/state
+# targets only link it PRIVATEly, so when the zevm backend drops the `evmone`
+# link we lose the <intx/intx.hpp> include path. evmone's Hunter setup leaves
+# intx_DIR in the cache, so re-import the (subdirectory-scoped) target here to
+# get it visible at this scope, then link it explicitly.
+find_package(intx CONFIG QUIET)
+target_link_libraries(zisk_eth_guest PRIVATE evmone::precompiles evmone::state intx::intx)
+
+if(EVM_BACKEND STREQUAL "zevm")
+    add_subdirectory(src/zevm)
+    target_link_libraries(zisk_eth_guest PRIVATE zevm)
+    # Selects evmc_create_zevm() over evmc_create_evmone() at the VM-creation
+    # site in zisk_state_db.cpp.
+    target_compile_definitions(zisk_eth_guest PRIVATE USE_ZEVM)
+elseif(EVM_BACKEND STREQUAL "evmone")
+    target_link_libraries(zisk_eth_guest PRIVATE evmone)
+else()
+    message(FATAL_ERROR "EVM_BACKEND must be evmone | zevm (got ${EVM_BACKEND})")
+endif()
 
 if(SECP_BACKEND STREQUAL "libsecp256k1")
     find_path(SECP256K1_INCLUDE_DIR secp256k1.h
