@@ -1,5 +1,5 @@
-// bitwise.cpp — comparison & bitwise-logic opcodes (0x10..0x1f: LT, GT, SLT,
-// SGT, EQ, ISZERO, AND, OR, XOR, NOT, BYTE, SHL, SHR, SAR).
+// bitwise.cpp — comparison & bitwise-logic opcodes (0x10..0x1e: LT, GT, SLT,
+// SGT, EQ, ISZERO, AND, OR, XOR, NOT, BYTE, SHL, SHR, SAR, CLZ).
 //
 // Endianness (see EvmState::stackBE):
 //   * LT/GT/SLT/SGT, SHL/SHR/SAR, BYTE — magnitude/positional, so operands are
@@ -201,6 +201,26 @@ bool op_not(EvmState& s) {
     return true;
 }
 
+// 0x1e CLZ — count leading zero bits of the 256-bit word (EIP-7939, Osaka).
+// clz(0) == 256. Positional, so the operand is forced to LE; result LE.
+bool op_clz(EvmState& s) {
+    if (s.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    s.gas -= GAS_LOW;
+    if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    to_le(s, s.stackPointer);
+    const U256& a = s.stack[s.stackPointer];
+    uint64_t n;  // limb[3] is most significant; higher all-zero limbs add 64 each
+    if (a.limbs[3] != 0)      n =       static_cast<uint64_t>(__builtin_clzll(a.limbs[3]));
+    else if (a.limbs[2] != 0) n =  64 + static_cast<uint64_t>(__builtin_clzll(a.limbs[2]));
+    else if (a.limbs[1] != 0) n = 128 + static_cast<uint64_t>(__builtin_clzll(a.limbs[1]));
+    else if (a.limbs[0] != 0) n = 192 + static_cast<uint64_t>(__builtin_clzll(a.limbs[0]));
+    else                      n = 256;
+    s.stack[s.stackPointer] = U256{{n, 0, 0, 0}};
+    s.stackBE[s.stackPointer] = kLE;
+    ++s.pc;
+    return true;
+}
+
 // 0x1a BYTE — the i-th byte of x, counting from the most significant (i = 0).
 // i >= 32 yields 0. Stack: i = top, x = second.
 bool op_byte(EvmState& s) {
@@ -289,6 +309,7 @@ void register_bitwise(InstrTable& t) {
     t[0x1b] = &op_shl;
     t[0x1c] = &op_shr;
     t[0x1d] = &op_sar;
+    t[0x1e] = &op_clz;
 }
 
 }  // namespace zevm
