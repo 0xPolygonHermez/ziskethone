@@ -91,10 +91,11 @@ ZiskStateDB::ZiskStateDB(Accounts&             accounts,
       vm2_(evmc2_create_evmone()) {}
 
 ZiskStateDB::~ZiskStateDB() {
-    // Release every cached pre-analysis handle, then destroy the owned VM.
-    for (auto& [hash, pre] : analysis_cache_) {
+    // Release every prepared analysis handle (cached on the Contracts, owned by
+    // the VM) before destroying the VM.
+    contracts_.release_analyses([this](evmc2_pre_execution* pre) {
         vm2_->release_pre_execution(&vm2_->base, pre);
-    }
+    });
     vm2_->base.destroy(&vm2_->base);
 }
 
@@ -472,8 +473,10 @@ evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
             return call_create(msg, cp);
     }
 
-    auto result = exec(active_revision(),msg,
-                              code.data(), code.size(), code_hash);
+    auto result = evmc::Result{vm2_->execute2(
+        &vm2_->base, &evmc::Host::get_interface(), to_context(),
+        active_revision(), &msg, code.data(), code.size(),
+        analysis_for(code_hash))};
     if (result.status_code != EVMC_SUCCESS) {
         rollback(cp);
     }
@@ -669,6 +672,18 @@ std::span<const uint8_t> ZiskStateDB::code_and_hash(
     out_hash = hash;
     const auto& c = contracts_.by_hash(hash);
     return std::span<const uint8_t>{c.code, static_cast<size_t>(c.code_size)};
+}
+
+evmc2_pre_execution* ZiskStateDB::analysis_for(const evmc::bytes32& code_hash) noexcept {
+    if (code_hash == EMPTY_CODE_HASH) {
+        return nullptr;  // no code → nothing to pre-analyze
+    }
+    const auto& c = contracts_.by_hash(code_hash);
+    if (c.analysis == nullptr) {  // prepare once per distinct bytecode per block
+        c.analysis = vm2_->prepare(&vm2_->base, c.code,
+                                   static_cast<size_t>(c.code_size));
+    }
+    return c.analysis;
 }
 
 void ZiskStateDB::set_tx_context(const evmc_tx_context& ctx) noexcept {
@@ -869,8 +884,11 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     // 4. Execute the init code with the new address as the recipient.
     evmc_message create_msg = msg;
     create_msg.recipient    = new_addr;
-    auto result = exec(active_revision(),create_msg,
-                              init_code, init_size);
+    // CREATE initcode runs once and its transient bytes aren't a stable cache
+    // key, so no pre-analysis (pre == nullptr ⇒ plain execute).
+    auto result = evmc::Result{vm2_->execute2(
+        &vm2_->base, &evmc::Host::get_interface(), to_context(),
+        active_revision(), &create_msg, init_code, init_size, nullptr)};
     if (result.status_code != EVMC_SUCCESS) {
         rollback(cp_after_bump);
         return result;
@@ -1092,8 +1110,8 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         tx_receipts_.emplace_back().tx_type = tx.type();
 
         // Backing storage for the blob-hashes and initcodes arrays
-        // pointed to by the per-tx tx_context. Must outlive exec()
-        // below — the ctx fields are raw pointers into these vectors.
+        // pointed to by the per-tx tx_context. Must outlive the execute2
+        // call below — the ctx fields are raw pointers into these vectors.
         std::vector<evmc::bytes32>    blob_hashes;
         std::vector<evmc_tx_initcode> initcodes_vec;
         set_tx_context(build_per_tx_context(tx, blob_hashes, initcodes_vec));
@@ -1633,8 +1651,10 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
         accounts_.mark_touched_at(new_idx, tx_counter_);
         created_this_tx_idx_.insert(new_idx);
 
-        auto result = exec(active_revision(),msg,
-                                  entry_code.data(), entry_code.size());
+        auto result = evmc::Result{vm2_->execute2(
+            &vm2_->base, &evmc::Host::get_interface(), to_context(),
+            active_revision(), &msg, entry_code.data(), entry_code.size(),
+            nullptr)};
 
         if (result.status_code == EVMC_SUCCESS) {
             // EIP-3541 (London): reject deployed code starting with
@@ -1741,8 +1761,10 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
         transfer_value(msg.sender, msg.recipient, msg.value);
     }
 
-    return exec(active_revision(),msg,
-                       entry_code.data(), entry_code.size(), entry_code_hash);
+    return evmc::Result{vm2_->execute2(
+        &vm2_->base, &evmc::Host::get_interface(), to_context(),
+        active_revision(), &msg, entry_code.data(), entry_code.size(),
+        analysis_for(entry_code_hash))};
 }
 
 uint64_t ZiskStateDB::settle_tx_gas(const Transactions::View& tx,
@@ -2022,8 +2044,10 @@ evmc::Result ZiskStateDB::system_call(const evmc::address&     target,
     const auto cp = checkpoint();
     evmc::bytes32 entry_code_hash{};
     const auto entry_code = code_and_hash(target, entry_code_hash);
-    auto result = exec(active_revision(),msg,
-                              entry_code.data(), entry_code.size(), entry_code_hash);
+    auto result = evmc::Result{vm2_->execute2(
+        &vm2_->base, &evmc::Host::get_interface(), to_context(),
+        active_revision(), &msg, entry_code.data(), entry_code.size(),
+        analysis_for(entry_code_hash))};
     if (result.status_code != EVMC_SUCCESS) {
         rollback(cp);
     }
