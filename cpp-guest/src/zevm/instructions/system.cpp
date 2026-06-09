@@ -1,16 +1,18 @@
-// system.cpp — the call subsystem: CALL (0xf1), CALLCODE (0xf2),
-// DELEGATECALL (0xf4), STATICCALL (0xfa); the halting/output opcodes RETURN
-// (0xf3) and REVERT (0xfd); the return-data opcodes RETURNDATASIZE (0x3d) and
-// RETURNDATACOPY (0x3e); and INVALID (0xfe).
+// system.cpp — the call/create subsystem: CALL (0xf1), CALLCODE (0xf2),
+// DELEGATECALL (0xf4), STATICCALL (0xfa), CREATE (0xf0), CREATE2 (0xf5); the
+// halting/output opcodes RETURN (0xf3) and REVERT (0xfd); the return-data
+// opcodes RETURNDATASIZE (0x3d) and RETURNDATACOPY (0x3e); and INVALID (0xfe).
 //
-// zevm is the interpreter: it pops/caps the gas, charges every call cost
-// (EIP-2929 account access, value, new-account, args/return memory, the
-// EIP-150 63/64 cap, the 2300 stipend), builds the child evmc_message, and
-// invokes host->call. The host (ZiskStateDB) only runs the child frame and
-// returns gas_left + output. Leftover gas and the child's refund flow back here.
+// zevm is the interpreter: it pops/caps the gas, charges every call/create cost
+// (EIP-2929 account access, value, new-account, args/return memory, EIP-3860
+// init-code cost, the EIP-150 63/64 cap, the 2300 stipend), builds the child
+// evmc_message, and invokes host->call. The host (ZiskStateDB) runs the child
+// frame — for CREATE it also derives the address, executes the init code, and
+// charges the code deposit — and returns gas_left + output (+ create_address).
+// Leftover gas and the child's refund flow back here.
 //
-// NOTE (deferred): CREATE/CREATE2 and EIP-7702 delegation-target resolution
-// (get_target_address) are not handled — code_address is the call target as-is.
+// NOTE (deferred): EIP-7702 delegation-target resolution (get_target_address) is
+// not handled — code_address is the call target as-is.
 
 #include "detail.hpp"
 
@@ -27,6 +29,11 @@ constexpr int64_t COLD_ACCOUNT_ACCESS = 2600;   // EIP-2929
 constexpr int64_t CALL_VALUE_COST     = 9000;
 constexpr int64_t ACCOUNT_CREATION    = 25000;
 constexpr int64_t CALL_STIPEND        = 2300;
+
+constexpr int64_t GAS_CREATE          = 32000;  // CREATE / CREATE2 base
+constexpr uint64_t MAX_INITCODE_SIZE  = 0xC000; // EIP-3860 (2 * 24576)
+constexpr int64_t INITCODE_WORD_COST  = 2;      // EIP-3860 per 32-byte word
+constexpr int64_t KECCAK_WORD_COST    = 6;      // CREATE2 hashes the init code
 
 // A 256-bit stack value used as a memory offset/size: its integer value, or
 // UINT64_MAX when it has high limbs set (which forces an out-of-gas in expand).
@@ -197,6 +204,108 @@ bool op_callcode(EvmState& s)     { return call_impl(s, EVMC_CALLCODE,     /*has
 bool op_delegatecall(EvmState& s) { return call_impl(s, EVMC_DELEGATECALL, /*has_value=*/false, /*static=*/false); }
 bool op_staticcall(EvmState& s)   { return call_impl(s, EVMC_CALL,         /*has_value=*/false, /*static=*/true); }
 
+// Shared implementation of CREATE / CREATE2. The host (ZiskStateDB::call_create)
+// derives the new address, runs the init code, and charges the code deposit;
+// here we charge what the interpreter owns (base, init-code memory, EIP-3860
+// size + word cost, CREATE2's keccak word cost, the 63/64 cap), build the
+// message, and push the created address (0 on failure).
+bool create_impl(EvmState& s, evmc_call_kind kind) {
+    const bool     is2   = (kind == EVMC_CREATE2);
+    const uint32_t nargs = is2 ? 4u : 3u;
+
+    if (s.gas < GAS_CREATE) { s.status = EVMC_OUT_OF_GAS; return false; }
+    s.gas -= GAS_CREATE;
+    if (stack_depth(s) < nargs) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
+
+    const uint32_t sp      = s.stackPointer;
+    const uint32_t iVal    = sp;
+    const uint32_t iOff    = sp + 1;
+    const uint32_t iSize   = sp + 2;
+    const uint32_t iSalt   = sp + 3;          // CREATE2 only
+    const uint32_t iResult = is2 ? sp + 3 : sp + 2;
+
+    const bool nonzero_value = !u256_is_zero(s.stack[iVal]);
+    to_be(s, iVal);
+    evmc_uint256be value_be;
+    std::memcpy(value_be.bytes, &s.stack[iVal], 32);
+
+    to_le(s, iOff);
+    to_le(s, iSize);
+    const uint64_t off  = mem_arg(s.stack[iOff]);
+    const uint64_t size = mem_arg(s.stack[iSize]);
+
+    evmc_bytes32 salt{};
+    if (is2) {
+        to_be(s, iSalt);
+        std::memcpy(salt.bytes, &s.stack[iSalt], 32);
+    }
+
+    // Supersede any prior return data (releasing it if it was heap-owned).
+    if (s.returnDataOwner.release) s.returnDataOwner.release(&s.returnDataOwner);
+    s.returnDataOwner = evmc_result{};
+
+    auto finish_fail = [&]() {  // "light" failure (depth / balance): push 0, continue
+        s.stack[iResult] = U256{};
+        s.stackBE[iResult] = kLE;
+        s.stackPointer = iResult;
+        ++s.pc;
+        return true;
+    };
+
+    // init-code memory expansion
+    if (EVMMem::expand(static_cast<size_t>(off), static_cast<size_t>(size), &s.gas) != MemError::Ok) {
+        s.status = EVMC_OUT_OF_GAS; return false;
+    }
+    // EIP-3860: cap init-code size, charge per word (+ CREATE2 keccak per word)
+    if (size > MAX_INITCODE_SIZE) { s.status = EVMC_OUT_OF_GAS; return false; }
+    const int64_t word_cost = INITCODE_WORD_COST + (is2 ? KECCAK_WORD_COST : 0);
+    const int64_t init_cost = static_cast<int64_t>((size + 31) / 32) * word_cost;
+    if (s.gas < init_cost) { s.status = EVMC_OUT_OF_GAS; return false; }
+    s.gas -= init_cost;
+
+    if (s.evmcMsg->depth >= 1024) return finish_fail();
+    if (nonzero_value) {
+        const evmc_uint256be bal = s.host->get_balance(s.context, &s.evmcMsg->recipient);
+        if (be_lt(bal, value_be)) return finish_fail();
+    }
+
+    // EIP-150 cap on the gas handed to the init frame.
+    evmc_message msg{};
+    msg.kind   = kind;
+    msg.gas    = s.gas - s.gas / 64;
+    msg.sender = s.evmcMsg->recipient;
+    msg.depth  = s.evmcMsg->depth + 1;
+    msg.value  = value_be;
+    if (is2) msg.create2_salt = salt;
+    if (size > 0) {
+        msg.input_data = EVMMem::data(static_cast<size_t>(off));
+        msg.input_size = static_cast<size_t>(size);
+    }
+
+    evmc_result r = s.host->call(s.context, &msg);
+    s.gas        -= (msg.gas - r.gas_left);
+    s.gas_refund += r.gas_refund;
+    s.returnDataOwner = r;  // keep revert output (empty on success) as return data
+
+    if (r.status_code == EVMC_SUCCESS) {
+        // the 20-byte address, right-aligned in the 256-bit word -> BE form
+        U256 a{};
+        std::memcpy(reinterpret_cast<uint8_t*>(&a) + 12, r.create_address.bytes, 20);
+        s.stack[iResult] = a;
+        s.stackBE[iResult] = kBE;
+    } else {
+        s.stack[iResult] = U256{};
+        s.stackBE[iResult] = kLE;
+    }
+    s.stackPointer = iResult;
+    ++s.pc;
+    return true;
+}
+
+bool op_create(EvmState& s)  { return create_impl(s, EVMC_CREATE); }
+bool op_create2(EvmState& s) { return create_impl(s, EVMC_CREATE2); }
+
 // RETURN (success) / REVERT — set the frame's output window and halt.
 bool return_impl(EvmState& s, evmc_status_code st) {
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
@@ -277,10 +386,12 @@ bool op_invalid(EvmState& s) {
 void register_system(InstrTable& t) {
     t[0x3d] = &op_returndatasize;
     t[0x3e] = &op_returndatacopy;
+    t[0xf0] = &op_create;
     t[0xf1] = &op_call;
     t[0xf2] = &op_callcode;
     t[0xf3] = &op_return;
     t[0xf4] = &op_delegatecall;
+    t[0xf5] = &op_create2;
     t[0xfa] = &op_staticcall;
     t[0xfd] = &op_revert;
     t[0xfe] = &op_invalid;
