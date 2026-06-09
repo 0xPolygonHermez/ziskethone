@@ -47,7 +47,18 @@ inline void u256_to_be(const U256& v, uint8_t out[32]) {
     std::memcpy(out + 24, &w0, 8);
 }
 
+// Reverse all 32 bytes of a 256-bit word. This converts between the two stack
+// representations (see EvmState::stackBE): LE limbs <-> the big-endian wire form
+// (the 32 memory/code bytes loaded directly as four little-endian words). It is
+// its own inverse. Four __bswapdi2 plus a limb reorder.
+inline U256 byteswap256(const U256& x) {
+    return U256{{__bswapdi2(x.limbs[3]), __bswapdi2(x.limbs[2]),
+                 __bswapdi2(x.limbs[1]), __bswapdi2(x.limbs[0])}};
+}
+
 // ----- value helpers (shared by the arithmetic / bitwise opcode handlers) -----
+// These interpret the limbs as a little-endian integer, so callers must pass LE
+// values — except u256_is_zero, which is the same in either representation.
 
 inline bool u256_is_zero(const U256& a) {
     return (a.limbs[0] | a.limbs[1] | a.limbs[2] | a.limbs[3]) == 0;

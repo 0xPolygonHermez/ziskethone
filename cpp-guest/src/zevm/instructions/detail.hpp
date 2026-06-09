@@ -39,6 +39,21 @@ inline uint64_t load_u64(const uint8_t* p) {
     return v;
 }
 
+// Stack-entry endianness flags (EvmState::stackBE values).
+enum : uint8_t { kLE = 0, kBE = 1 };
+
+// Convert stack entry `i` to little-endian (the form zeg::bi and the integer
+// helpers expect); no-op if already LE.
+inline void to_le(EvmState& s, uint32_t i) {
+    if (s.stackBE[i]) { s.stack[i] = byteswap256(s.stack[i]); s.stackBE[i] = kLE; }
+}
+
+// Convert stack entry `i` to big-endian (the form memory wants); no-op if already
+// BE.
+inline void to_be(EvmState& s, uint32_t i) {
+    if (!s.stackBE[i]) { s.stack[i] = byteswap256(s.stack[i]); s.stackBE[i] = kBE; }
+}
+
 // Per-category table registration. Each is defined in its own translation unit
 // (instructions/<category>.cpp) and slots its handlers into `t`; table.cpp calls
 // them all over the default-filled table.

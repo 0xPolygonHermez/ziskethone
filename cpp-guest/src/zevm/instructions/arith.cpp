@@ -4,9 +4,10 @@
 // The 256-bit heavy lifting routes through the ZisK-accelerated zeg::bi backend:
 // add256 (ADD/SUB), arith256 (MUL and EXP's square-and-multiply), arith256_mod
 // (ADDMOD/MULMOD), and fcall_bigint_div (DIV/MOD, and the magnitude step of the
-// signed variants). Sign handling, the divide-by-zero guards, and SIGNEXTEND are
-// plain limb work. Stack words are little-endian uint64_t[4], the layout zeg::bi
-// expects. Binary ops take a = top, b = second, push a OP b into b's slot.
+// signed variants). All of it works on little-endian limbs, so every consumed
+// operand is forced to LE (to_le) first and the result is tagged LE. Sign
+// handling, the divide-by-zero guards, and SIGNEXTEND are plain limb work.
+// Binary ops take a = top, b = second, push a OP b into b's slot.
 
 #include "detail.hpp"
 
@@ -48,9 +49,12 @@ bool op_add(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    to_le(s, s.stackPointer);
+    to_le(s, s.stackPointer + 1);
     const U256& a = s.stack[s.stackPointer];
     U256&       b = s.stack[s.stackPointer + 1];
     zeg::bi::add256(a.limbs, b.limbs, /*cin=*/0, b.limbs);  // b = a + b (mod 2^256)
+    s.stackBE[s.stackPointer + 1] = kLE;
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -61,9 +65,12 @@ bool op_mul(EvmState& s) {
     if (s.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_LOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    to_le(s, s.stackPointer);
+    to_le(s, s.stackPointer + 1);
     const U256& a = s.stack[s.stackPointer];
     U256&       b = s.stack[s.stackPointer + 1];
     b = mul_low(a, b);
+    s.stackBE[s.stackPointer + 1] = kLE;
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -74,11 +81,14 @@ bool op_sub(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    to_le(s, s.stackPointer);
+    to_le(s, s.stackPointer + 1);
     const U256& a = s.stack[s.stackPointer];
     U256&       b = s.stack[s.stackPointer + 1];
     // a - b == a + ~b + 1 (two's complement), via the accelerated adder.
     const uint64_t nb[4] = {~b.limbs[0], ~b.limbs[1], ~b.limbs[2], ~b.limbs[3]};
     zeg::bi::add256(a.limbs, nb, /*cin=*/1, b.limbs);
+    s.stackBE[s.stackPointer + 1] = kLE;
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -89,6 +99,8 @@ bool op_div(EvmState& s) {
     if (s.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_LOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    to_le(s, s.stackPointer);
+    to_le(s, s.stackPointer + 1);
     const U256& a = s.stack[s.stackPointer];
     U256&       b = s.stack[s.stackPointer + 1];
     if (u256_is_zero(b)) {
@@ -96,6 +108,7 @@ bool op_div(EvmState& s) {
     } else {
         U256 q, r; udivmod(a, b, q, r); b = q;
     }
+    s.stackBE[s.stackPointer + 1] = kLE;
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -106,6 +119,8 @@ bool op_sdiv(EvmState& s) {
     if (s.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_LOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    to_le(s, s.stackPointer);
+    to_le(s, s.stackPointer + 1);
     const U256& a = s.stack[s.stackPointer];
     U256&       b = s.stack[s.stackPointer + 1];
     if (u256_is_zero(b)) {
@@ -126,6 +141,7 @@ bool op_sdiv(EvmState& s) {
             b = (na != nb) ? u256_neg(q) : q;
         }
     }
+    s.stackBE[s.stackPointer + 1] = kLE;
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -136,6 +152,8 @@ bool op_mod(EvmState& s) {
     if (s.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_LOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    to_le(s, s.stackPointer);
+    to_le(s, s.stackPointer + 1);
     const U256& a = s.stack[s.stackPointer];
     U256&       b = s.stack[s.stackPointer + 1];
     if (u256_is_zero(b)) {
@@ -143,6 +161,7 @@ bool op_mod(EvmState& s) {
     } else {
         U256 q, r; udivmod(a, b, q, r); b = r;
     }
+    s.stackBE[s.stackPointer + 1] = kLE;
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -153,6 +172,8 @@ bool op_smod(EvmState& s) {
     if (s.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_LOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    to_le(s, s.stackPointer);
+    to_le(s, s.stackPointer + 1);
     const U256& a = s.stack[s.stackPointer];
     U256&       b = s.stack[s.stackPointer + 1];
     if (u256_is_zero(b)) {
@@ -164,6 +185,7 @@ bool op_smod(EvmState& s) {
         U256 q, r; udivmod(ua, ub, q, r);
         b = na ? u256_neg(r) : r;
     }
+    s.stackBE[s.stackPointer + 1] = kLE;
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -174,6 +196,9 @@ bool op_addmod(EvmState& s) {
     if (s.gas < GAS_MID) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_MID;
     if (stack_depth(s) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    to_le(s, s.stackPointer);
+    to_le(s, s.stackPointer + 1);
+    to_le(s, s.stackPointer + 2);
     const U256& a = s.stack[s.stackPointer];
     const U256& b = s.stack[s.stackPointer + 1];
     U256&       m = s.stack[s.stackPointer + 2];
@@ -185,6 +210,7 @@ bool op_addmod(EvmState& s) {
         zeg::bi::arith256_mod(a.limbs, ONE4, b.limbs, m.limbs, d);
         m = U256{{d[0], d[1], d[2], d[3]}};
     }
+    s.stackBE[s.stackPointer + 2] = kLE;
     s.stackPointer += 2;
     ++s.pc;
     return true;
@@ -195,6 +221,9 @@ bool op_mulmod(EvmState& s) {
     if (s.gas < GAS_MID) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_MID;
     if (stack_depth(s) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    to_le(s, s.stackPointer);
+    to_le(s, s.stackPointer + 1);
+    to_le(s, s.stackPointer + 2);
     const U256& a = s.stack[s.stackPointer];
     const U256& b = s.stack[s.stackPointer + 1];
     U256&       m = s.stack[s.stackPointer + 2];
@@ -205,6 +234,7 @@ bool op_mulmod(EvmState& s) {
         zeg::bi::arith256_mod(a.limbs, b.limbs, ZERO4, m.limbs, d);
         m = U256{{d[0], d[1], d[2], d[3]}};
     }
+    s.stackBE[s.stackPointer + 2] = kLE;
     s.stackPointer += 2;
     ++s.pc;
     return true;
@@ -213,6 +243,8 @@ bool op_mulmod(EvmState& s) {
 // 0x0a EXP — a ** b mod 2^256. Gas is dynamic: 10 + 50 per byte of exponent.
 bool op_exp(EvmState& s) {
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    to_le(s, s.stackPointer);
+    to_le(s, s.stackPointer + 1);
     const U256& base = s.stack[s.stackPointer];
     U256&       exp  = s.stack[s.stackPointer + 1];
 
@@ -231,6 +263,7 @@ bool op_exp(EvmState& s) {
         if ((exp.limbs[i >> 6] >> (i & 63)) & 1ULL) result = mul_low(result, base);
     }
     exp = result;
+    s.stackBE[s.stackPointer + 1] = kLE;
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -242,6 +275,8 @@ bool op_signextend(EvmState& s) {
     if (s.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_LOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    to_le(s, s.stackPointer);
+    to_le(s, s.stackPointer + 1);
     const U256& i = s.stack[s.stackPointer];
     U256&       x = s.stack[s.stackPointer + 1];
 
@@ -260,6 +295,7 @@ bool op_signextend(EvmState& s) {
             for (unsigned l = limb + 1; l < 4; ++l) x.limbs[l] = 0;
         }
     }
+    s.stackBE[s.stackPointer + 1] = kLE;
     ++s.stackPointer;
     ++s.pc;
     return true;

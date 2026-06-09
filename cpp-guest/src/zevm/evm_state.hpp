@@ -51,6 +51,13 @@ struct EvmState {
     U256           stack[kStackLimit];
     uint32_t       stackPointer = kStackLimit;   // kStackLimit == empty
 
+    // Per-entry endianness of stack[i] (lazy-endianness optimization): 0 == LE
+    // (standard limbs, what zeg::bi consumes), 1 == BE (byteswap256 of the value
+    // — the 32 big-endian wire bytes loaded directly, what MLOAD/PUSH produce and
+    // MSTORE writes). Conversions are deferred until an op needs a given form.
+    // Only entries below stackPointer are live; the rest are stale.
+    uint8_t        stackBE[kStackLimit];
+
     // ----- memory -----
     // Handle into the static EVMMem manager (== this frame's call depth). The
     // frame's bytes live in one of EVMMem's two zones; access goes through
