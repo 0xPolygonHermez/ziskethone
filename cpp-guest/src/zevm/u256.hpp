@@ -8,6 +8,11 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>  // std::memcpy
+
+// libgcc 64-bit byte swap: soft implementation in zisk/compiler_rt.cpp on the
+// ZisK target (rv64ima, no Zbb), compiler-rt builtin on the host.
+extern "C" uint64_t __bswapdi2(uint64_t);
 
 namespace zevm {
 
@@ -16,26 +21,30 @@ struct U256 {
 };
 
 // Load a 256-bit value from 32 big-endian bytes (bytes[0] is most significant),
-// the on-wire layout used by EVM code immediates (PUSH) and memory (MLOAD).
+// the on-wire layout used by EVM code immediates (PUSH) and memory (MLOAD). On a
+// little-endian target each 8-byte group reads as a word whose byte order is the
+// reverse of the wire, so one __bswapdi2 per limb fixes it; bytes[0..7] are the
+// most significant, hence limb[3].
 inline U256 u256_from_be(const uint8_t bytes[32]) {
-    U256 v;
-    for (int i = 0; i < 4; ++i) {
-        uint64_t w = 0;
-        for (int j = 0; j < 8; ++j)
-            w = (w << 8) | bytes[i * 8 + j];   // i == 0 -> most significant limb
-        v.limbs[3 - i] = w;
-    }
-    return v;
+    uint64_t w0, w1, w2, w3;
+    std::memcpy(&w3, bytes +  0, 8);
+    std::memcpy(&w2, bytes +  8, 8);
+    std::memcpy(&w1, bytes + 16, 8);
+    std::memcpy(&w0, bytes + 24, 8);
+    return U256{{__bswapdi2(w0), __bswapdi2(w1), __bswapdi2(w2), __bswapdi2(w3)}};
 }
 
 // Store a 256-bit value as 32 big-endian bytes (out[0] is most significant) —
 // the inverse of u256_from_be, used by MSTORE / RETURN / LOG / KECCAK input.
 inline void u256_to_be(const U256& v, uint8_t out[32]) {
-    for (int i = 0; i < 4; ++i) {
-        const uint64_t w = v.limbs[3 - i];   // most significant limb first
-        for (int j = 0; j < 8; ++j)
-            out[i * 8 + j] = static_cast<uint8_t>(w >> (56 - 8 * j));
-    }
+    const uint64_t w3 = __bswapdi2(v.limbs[3]);   // most significant limb -> out[0..7]
+    const uint64_t w2 = __bswapdi2(v.limbs[2]);
+    const uint64_t w1 = __bswapdi2(v.limbs[1]);
+    const uint64_t w0 = __bswapdi2(v.limbs[0]);
+    std::memcpy(out +  0, &w3, 8);
+    std::memcpy(out +  8, &w2, 8);
+    std::memcpy(out + 16, &w1, 8);
+    std::memcpy(out + 24, &w0, 8);
 }
 
 // ----- value helpers (shared by the arithmetic / bitwise opcode handlers) -----

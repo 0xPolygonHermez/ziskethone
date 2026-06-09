@@ -14,12 +14,7 @@
 
 #include "evm_state.hpp"     // EvmState, kStackLimit
 #include "instructions.hpp"  // InstrFn, InstrTable
-#include "u256.hpp"          // U256, u256_from_be
-
-// libgcc 64-bit byte swap. On the ZisK target (rv64ima, no Zbb) there is no
-// hardware byteswap instruction, so this resolves to the soft implementation in
-// zisk/compiler_rt.cpp; on the host it comes from the compiler-rt builtins.
-extern "C" uint64_t __bswapdi2(uint64_t);
+#include "u256.hpp"          // U256, u256_from_be/to_be, __bswapdi2
 
 namespace zevm {
 
