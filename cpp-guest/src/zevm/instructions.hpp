@@ -18,8 +18,10 @@ using InstrFn = bool (*)(EvmState&);
 
 using InstrTable = std::array<InstrFn, 256>;
 
-// One entry per possible opcode byte (0x00..0xff). Every slot is non-null;
-// opcodes with no dedicated handler point at op_unimplemented.
-extern const InstrTable instruction_table;
+// The dispatch table for revision `rev`. Every slot is non-null; opcodes with no
+// dedicated handler — and fork-introduced opcodes not yet available at `rev` —
+// point at op_unimplemented (EVMC_UNDEFINED_INSTRUCTION). One table is built per
+// revision and cached, so callers hold the reference for a whole frame.
+const InstrTable& instruction_table_for(evmc_revision rev);
 
 }  // namespace zevm

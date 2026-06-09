@@ -143,11 +143,13 @@ bool op_tstore(EvmState& s) {
 
 }  // namespace
 
-void register_storage(InstrTable& t) {
+void register_storage(InstrTable& t, evmc_revision rev) {
     t[0x54] = &op_sload;
     t[0x55] = &op_sstore;
-    t[0x5c] = &op_tload;
-    t[0x5d] = &op_tstore;
+    if (rev >= EVMC_CANCUN) {  // EIP-1153 transient storage
+        t[0x5c] = &op_tload;
+        t[0x5d] = &op_tstore;
+    }
 }
 
 }  // namespace zevm

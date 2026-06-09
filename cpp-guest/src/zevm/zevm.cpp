@@ -35,12 +35,15 @@ evmc_result run(const evmc_host_interface* host, evmc_host_context* context,
                 const uint8_t* prebuilt) noexcept {
     EvmState state(msg, code, code_size, host, context, rev, prebuilt);
 
+    // Dispatch table for this revision (fork-gated opcodes resolved at build).
+    const InstrTable& itable = instruction_table_for(rev);
+
     bool cont = true;
     do {
         // Past the end of code behaves like STOP (opcode 0x00).
         const uint8_t opcode =
             state.pc < state.codeSize ? state.code[state.pc] : 0x00;
-        cont = instruction_table[opcode](state);
+        cont = itable[opcode](state);
     } while (cont);
 
     // Report status, remaining gas, refund, and the RETURN/REVERT output. The

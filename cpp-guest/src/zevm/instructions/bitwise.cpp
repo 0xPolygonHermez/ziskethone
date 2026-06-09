@@ -294,7 +294,7 @@ bool op_sar(EvmState& s) {
 
 }  // namespace
 
-void register_bitwise(InstrTable& t) {
+void register_bitwise(InstrTable& t, evmc_revision rev) {
     t[0x10] = &op_lt;
     t[0x11] = &op_gt;
     t[0x12] = &op_slt;
@@ -306,10 +306,13 @@ void register_bitwise(InstrTable& t) {
     t[0x18] = &op_xor;
     t[0x19] = &op_not;
     t[0x1a] = &op_byte;
-    t[0x1b] = &op_shl;
-    t[0x1c] = &op_shr;
-    t[0x1d] = &op_sar;
-    t[0x1e] = &op_clz;
+    if (rev >= EVMC_CONSTANTINOPLE) {  // EIP-145
+        t[0x1b] = &op_shl;
+        t[0x1c] = &op_shr;
+        t[0x1d] = &op_sar;
+    }
+    if (rev >= EVMC_OSAKA)  // EIP-7939
+        t[0x1e] = &op_clz;
 }
 
 }  // namespace zevm

@@ -383,18 +383,22 @@ bool op_invalid(EvmState& s) {
 
 }  // namespace
 
-void register_system(InstrTable& t) {
-    t[0x3d] = &op_returndatasize;
-    t[0x3e] = &op_returndatacopy;
+void register_system(InstrTable& t, evmc_revision rev) {
     t[0xf0] = &op_create;
     t[0xf1] = &op_call;
     t[0xf2] = &op_callcode;
     t[0xf3] = &op_return;
-    t[0xf4] = &op_delegatecall;
-    t[0xf5] = &op_create2;
-    t[0xfa] = &op_staticcall;
-    t[0xfd] = &op_revert;
     t[0xfe] = &op_invalid;
+    if (rev >= EVMC_HOMESTEAD)  // EIP-7
+        t[0xf4] = &op_delegatecall;
+    if (rev >= EVMC_BYZANTIUM) {  // EIP-211 (RETURNDATA*), EIP-214 (STATICCALL), EIP-140 (REVERT)
+        t[0x3d] = &op_returndatasize;
+        t[0x3e] = &op_returndatacopy;
+        t[0xfa] = &op_staticcall;
+        t[0xfd] = &op_revert;
+    }
+    if (rev >= EVMC_CONSTANTINOPLE)  // EIP-1014
+        t[0xf5] = &op_create2;
 }
 
 }  // namespace zevm

@@ -20,28 +20,43 @@ bool op_unimplemented(EvmState& s) {
     return false;  // stop
 }
 
-InstrTable build_table() {
+// Build the table for `rev`. Categories that gate opcodes by fork (bitwise,
+// storage, system) take `rev` and simply skip registering an opcode introduced
+// later — it stays op_unimplemented (undefined, no gas), exactly as evmone
+// treats an opcode absent from a revision's table.
+InstrTable build_table(evmc_revision rev) {
     InstrTable t{};
     for (auto& fn : t)
         fn = &op_unimplemented;
 
     register_arith(t);
-    register_bitwise(t);
+    register_bitwise(t, rev);
     register_keccak(t);
     register_env(t);
     register_memory(t);
-    register_storage(t);
+    register_storage(t, rev);
     register_control(t);
     register_stack(t);
     register_push(t);
     register_log(t);
-    register_system(t);
+    register_system(t, rev);
 
     return t;
 }
 
 }  // namespace
 
-const InstrTable instruction_table = build_table();
+const InstrTable& instruction_table_for(evmc_revision rev) {
+    // One table per revision, built on first use. The active revision is constant
+    // for a whole block, so in practice this builds at most once per run.
+    static InstrTable cache[EVMC_MAX_REVISION + 1];
+    static bool       built[EVMC_MAX_REVISION + 1] = {};
+    const int i = static_cast<int>(rev);
+    if (!built[i]) {
+        cache[i] = build_table(rev);
+        built[i] = true;
+    }
+    return cache[i];
+}
 
 }  // namespace zevm

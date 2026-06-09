@@ -59,16 +59,19 @@ inline void to_be(EvmState& s, uint32_t i) {
 // Per-category table registration. Each is defined in its own translation unit
 // (instructions/<category>.cpp) and slots its handlers into `t`; table.cpp calls
 // them all over the default-filled table.
+// The `rev` overloads gate fork-introduced opcodes: an opcode is registered only
+// when `rev` is at or past the fork that introduced it (otherwise it stays
+// op_unimplemented, i.e. undefined).
 void register_arith(InstrTable& t);
-void register_bitwise(InstrTable& t);
+void register_bitwise(InstrTable& t, evmc_revision rev);
 void register_keccak(InstrTable& t);
 void register_env(InstrTable& t);
 void register_memory(InstrTable& t);
-void register_storage(InstrTable& t);
+void register_storage(InstrTable& t, evmc_revision rev);
 void register_control(InstrTable& t);
 void register_stack(InstrTable& t);
 void register_push(InstrTable& t);
 void register_log(InstrTable& t);
-void register_system(InstrTable& t);
+void register_system(InstrTable& t, evmc_revision rev);
 
 }  // namespace zevm
