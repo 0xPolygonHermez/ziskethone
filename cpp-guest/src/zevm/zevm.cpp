@@ -11,6 +11,7 @@
 #include "zevm.hpp"
 
 #include <cstdlib>
+#include <memory>
 
 #include "evm_mem.hpp"     // EVMMem::data — the frame's output window
 #include "evm_state.hpp"
@@ -33,7 +34,14 @@ evmc_result run(const evmc_host_interface* host, evmc_host_context* context,
                 evmc_revision rev, const evmc_message* msg,
                 const uint8_t* code, size_t code_size,
                 const uint8_t* prebuilt) noexcept {
-    EvmState state(msg, code, code_size, host, context, rev, prebuilt);
+    // EvmState is large (~34 KB — it embeds the 1024-entry operand stack), and a
+    // nested CALL re-enters run() recursively up to EVM max depth (1024). Keeping
+    // it on the native C++ stack would need ~34 MB at full depth and overflow the
+    // thread stack; allocate it on the heap so deep recursion keeps only small
+    // frames on the native stack.
+    auto statePtr =
+        std::make_unique<EvmState>(msg, code, code_size, host, context, rev, prebuilt);
+    EvmState& state = *statePtr;
 
     // Dispatch table for this revision (fork-gated opcodes resolved at build).
     const InstrTable& itable = instruction_table_for(rev);
