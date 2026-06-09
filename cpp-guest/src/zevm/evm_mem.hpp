@@ -67,6 +67,17 @@ public:
     // store instead of a memcpy, and no length handling.
     static MemError writeByte(size_t addr, uint8_t value, int64_t* gas);
 
+    // Grow the current frame so [addr, addr+len) is addressable, charging gas
+    // (and cleaning recycled bytes) — the "check_memory" primitive for CALL
+    // arg/return regions, RETURN/REVERT, and *COPY opcodes. No-op for len == 0.
+    static MemError expand(size_t addr, size_t len, int64_t* gas);
+
+    // Raw pointer to byte `addr` of the current frame's memory. Valid only while
+    // this frame is live (until destroyMemory) and only within the already-grown
+    // size. Used to point a sub-call's input at memory and to copy its output
+    // back — no copy through a temporary.
+    static uint8_t* data(size_t addr) { return s_handles[s_cur].start_ptr + addr; }
+
     // Current frame's memory size in bytes (word-aligned).
     static size_t size();
     // Current top handle index (call depth); -1 when no frame is active.

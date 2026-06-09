@@ -79,6 +79,20 @@ struct EvmState {
     evmc_host_context*            context = nullptr;    // borrowed
     evmc_revision                 rev = EVMC_FRONTIER;
 
+    // ----- output & return data -----
+    // RETURN/REVERT set the frame's output region (a window into memory); run()
+    // copies it into the evmc_result. output_size == 0 means no output.
+    size_t         output_offset = 0;
+    size_t         output_size   = 0;
+    // The most recent sub-call's result (CALL family), whose output_data/
+    // output_size back RETURNDATASIZE / RETURNDATACOPY — no copy. A zevm child
+    // runs at depth+1, i.e. the *other* EVMMem zone (depth parity), which the
+    // parent never writes, so its output is conserved until the parent's next
+    // call. Released when superseded or at teardown — which only does work for a
+    // precompile's output (heap-owned: malloc'd, release set); a zevm child's
+    // output lives in EVMMem and has no release.
+    evmc_result    returnDataOwner{};
+
     // ----- execution control -----
     // The status the frame will report back to evmc. Handlers set this before
     // halting; the execute() loop turns it into the returned evmc_result.

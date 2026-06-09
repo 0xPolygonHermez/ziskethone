@@ -110,6 +110,14 @@ MemError EVMMem::writeBytes(size_t addr, const uint8_t* src, size_t len, int64_t
     return MemError::Ok;
 }
 
+MemError EVMMem::expand(size_t addr, size_t len, int64_t* gas) {
+    if (len == 0)
+        return MemError::Ok;
+    if (addr > kMaxMemPerTx || len > kMaxMemPerTx)
+        return MemError::OutOfGas;
+    return ensure(addr + len, gas);
+}
+
 MemError EVMMem::writeByte(size_t addr, uint8_t value, int64_t* gas) {
     if (addr > kMaxMemPerTx)
         return MemError::OutOfGas;

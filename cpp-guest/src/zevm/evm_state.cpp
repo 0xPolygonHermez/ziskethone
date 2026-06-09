@@ -62,6 +62,10 @@ EvmState::~EvmState() {
     EVMMem::destroyMemory();
     if (ownsAnalysis)
         std::free(const_cast<uint8_t*>(analyzedCode));
+    // Release the last sub-call's result if it owns its output (precompiles);
+    // a zevm child's output lives in EVMMem and has no release.
+    if (returnDataOwner.release)
+        returnDataOwner.release(&returnDataOwner);
 }
 
 }  // namespace zevm

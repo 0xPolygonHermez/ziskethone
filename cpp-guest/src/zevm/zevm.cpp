@@ -12,6 +12,7 @@
 
 #include <cstdlib>
 
+#include "evm_mem.hpp"     // EVMMem::data — the frame's output window
 #include "evm_state.hpp"
 #include "instructions.hpp"
 
@@ -41,18 +42,19 @@ evmc_result run(const evmc_host_interface* host, evmc_host_context* context,
         cont = instruction_table[opcode](state);
     } while (cont);
 
-    // Scaffold result: report the frame's status and remaining gas, no output.
-    // Real RETURN/REVERT data handling (and a release() for owned output
-    // buffers) will be added with the memory/return opcodes.
+    // Report status, remaining gas, refund, and the RETURN/REVERT output. The
+    // output points straight into this frame's EVMMem zone (set by
+    // op_return/op_revert) with no release: the bytes are conserved after the
+    // frame is popped because the caller is in the other zone (depth parity) and
+    // copies/consumes them before reusing this zone. The pointer is captured here
+    // while the frame is still the active EVMMem handle.
     evmc_result result{};
     result.status_code = state.status;
     result.gas_left =
-        (state.status == EVMC_SUCCESS || state.status == EVMC_REVERT)
-            ? state.gas
-            : 0;
+        (state.status == EVMC_SUCCESS || state.status == EVMC_REVERT) ? state.gas : 0;
     result.gas_refund = (state.status == EVMC_SUCCESS) ? state.gas_refund : 0;
-    result.output_data = nullptr;
-    result.output_size = 0;
+    result.output_data = state.output_size != 0 ? EVMMem::data(state.output_offset) : nullptr;
+    result.output_size = state.output_size;
     result.release = nullptr;
     return result;
 }
