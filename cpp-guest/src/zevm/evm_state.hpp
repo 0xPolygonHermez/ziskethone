@@ -67,6 +67,9 @@ struct EvmState {
 
     // ----- gas -----
     int64_t        gas = 0;
+    // Accumulated gas refund (SSTORE clears, etc.; may go negative). Reported in
+    // the frame's evmc_result on success; the host applies the EIP-3529 cap.
+    int64_t        gas_refund = 0;
 
     // ----- evmc plumbing -----
     const evmc_message*           evmcMsg = nullptr;   // borrowed (this frame's message)

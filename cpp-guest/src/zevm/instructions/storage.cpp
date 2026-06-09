@@ -1,12 +1,153 @@
 // storage.cpp — persistent & transient storage opcodes (SLOAD 0x54, SSTORE 0x55,
 // TLOAD 0x5c, TSTORE 0x5d).
 //
-// Stub: handlers land here as they are implemented.
+// These call back into the host (ZiskStateDB) through the evmc C interface for
+// the account whose storage is being accessed — the message recipient. Keys and
+// values are evmc_bytes32, i.e. 32 big-endian bytes, which is exactly the BE
+// stack representation: once a slot is in BE form its raw bytes *are* the
+// evmc_bytes32, so endianness conversion is just to_be + a memcpy.
+//
+// Gas matches evmone for Berlin..Prague (EIP-2929 warm/cold, EIP-2200 net
+// metering, EIP-3529 refunds, EIP-1706 sentry). SSTORE returns its
+// {cost, refund} from set_storage's classification; the refund accumulates on
+// EvmState::gas_refund (the host applies the transaction cap).
 
 #include "detail.hpp"
 
+#include <cstring>
+
 namespace zevm {
 
-void register_storage(InstrTable& /*t*/) {}
+namespace {
+
+constexpr int64_t WARM_STORAGE_READ_COST = 100;
+constexpr int64_t COLD_SLOAD_COST        = 2100;
+constexpr int64_t SSTORE_SENTRY_GAS      = 2300;   // EIP-1706
+
+// Net-metering SSTORE schedule for London..Prague, derived from the spec
+// constants exactly as evmone builds its table (so refunds can't be mistyped).
+constexpr int64_t SS_SET    = 20000;                       // 0 -> nonzero
+constexpr int64_t SS_RESET  = 5000 - COLD_SLOAD_COST;      // 2900 (cold surcharge split out)
+constexpr int64_t SS_CLEAR  = 4800;                        // EIP-3529 clear refund
+
+struct SStoreCost { int64_t cost; int64_t refund; };
+
+// Indexed by evmc_storage_status (0..8): ASSIGNED, ADDED, DELETED, MODIFIED,
+// DELETED_ADDED, MODIFIED_DELETED, DELETED_RESTORED, ADDED_DELETED,
+// MODIFIED_RESTORED.
+constexpr SStoreCost SSTORE_COST[] = {
+    {WARM_STORAGE_READ_COST, 0},                                          // ASSIGNED
+    {SS_SET, 0},                                                          // ADDED
+    {SS_RESET, SS_CLEAR},                                                 // DELETED
+    {SS_RESET, 0},                                                        // MODIFIED
+    {WARM_STORAGE_READ_COST, -SS_CLEAR},                                  // DELETED_ADDED
+    {WARM_STORAGE_READ_COST, SS_CLEAR},                                   // MODIFIED_DELETED
+    {WARM_STORAGE_READ_COST, SS_RESET - WARM_STORAGE_READ_COST - SS_CLEAR}, // DELETED_RESTORED
+    {WARM_STORAGE_READ_COST, SS_SET - WARM_STORAGE_READ_COST},            // ADDED_DELETED
+    {WARM_STORAGE_READ_COST, SS_RESET - WARM_STORAGE_READ_COST},          // MODIFIED_RESTORED
+};
+
+// The 32 big-endian bytes of stack slot `i`. Caller must have made it BE; then
+// the slot's memory is the evmc_bytes32 already.
+inline evmc_bytes32 slot_bytes(const EvmState& s, uint32_t i) {
+    evmc_bytes32 b;
+    std::memcpy(b.bytes, &s.stack[i], 32);
+    return b;
+}
+
+// 0x54 SLOAD — push storage[key]. Warm (100) base + cold surcharge (EIP-2929).
+bool op_sload(EvmState& s) {
+    if (s.gas < WARM_STORAGE_READ_COST) { s.status = EVMC_OUT_OF_GAS; return false; }
+    s.gas -= WARM_STORAGE_READ_COST;
+    if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+
+    to_be(s, s.stackPointer);                       // key as big-endian bytes
+    const evmc_bytes32 key = slot_bytes(s, s.stackPointer);
+    if (s.rev >= EVMC_BERLIN &&
+        s.host->access_storage(s.context, &s.evmcMsg->recipient, &key) == EVMC_ACCESS_COLD) {
+        const int64_t extra = COLD_SLOAD_COST - WARM_STORAGE_READ_COST;
+        if (s.gas < extra) { s.status = EVMC_OUT_OF_GAS; return false; }
+        s.gas -= extra;
+    }
+    const evmc_bytes32 v = s.host->get_storage(s.context, &s.evmcMsg->recipient, &key);
+    std::memcpy(&s.stack[s.stackPointer], v.bytes, 32);  // value is big-endian -> BE form
+    s.stackBE[s.stackPointer] = kBE;
+    ++s.pc;
+    return true;
+}
+
+// 0x55 SSTORE — storage[key] = value (EIP-2200/2929/3529 metering + refunds).
+bool op_sstore(EvmState& s) {
+    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
+    if (s.rev >= EVMC_ISTANBUL && s.gas <= SSTORE_SENTRY_GAS) {
+        s.status = EVMC_OUT_OF_GAS;  // EIP-1706 sentry
+        return false;
+    }
+    to_be(s, s.stackPointer);
+    to_be(s, s.stackPointer + 1);
+    const evmc_bytes32 key   = slot_bytes(s, s.stackPointer);
+    const evmc_bytes32 value = slot_bytes(s, s.stackPointer + 1);
+
+    int64_t cold = 0;
+    if (s.rev >= EVMC_BERLIN &&
+        s.host->access_storage(s.context, &s.evmcMsg->recipient, &key) == EVMC_ACCESS_COLD) {
+        cold = COLD_SLOAD_COST;
+    }
+    const evmc_storage_status st =
+        s.host->set_storage(s.context, &s.evmcMsg->recipient, &key, &value);
+    const SStoreCost sc = SSTORE_COST[st];
+    const int64_t cost = sc.cost + cold;
+    if (s.gas < cost) { s.status = EVMC_OUT_OF_GAS; return false; }
+    s.gas -= cost;
+    s.gas_refund += sc.refund;
+
+    s.stackPointer += 2;  // pop key and value
+    ++s.pc;
+    return true;
+}
+
+// 0x5c TLOAD — push transient_storage[key] (EIP-1153). Flat 100 gas.
+bool op_tload(EvmState& s) {
+    if (s.gas < WARM_STORAGE_READ_COST) { s.status = EVMC_OUT_OF_GAS; return false; }
+    s.gas -= WARM_STORAGE_READ_COST;
+    if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+
+    to_be(s, s.stackPointer);
+    const evmc_bytes32 key = slot_bytes(s, s.stackPointer);
+    const evmc_bytes32 v =
+        s.host->get_transient_storage(s.context, &s.evmcMsg->recipient, &key);
+    std::memcpy(&s.stack[s.stackPointer], v.bytes, 32);
+    s.stackBE[s.stackPointer] = kBE;
+    ++s.pc;
+    return true;
+}
+
+// 0x5d TSTORE — transient_storage[key] = value (EIP-1153). Flat 100 gas.
+bool op_tstore(EvmState& s) {
+    if (s.gas < WARM_STORAGE_READ_COST) { s.status = EVMC_OUT_OF_GAS; return false; }
+    s.gas -= WARM_STORAGE_READ_COST;
+    if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
+    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+
+    to_be(s, s.stackPointer);
+    to_be(s, s.stackPointer + 1);
+    const evmc_bytes32 key   = slot_bytes(s, s.stackPointer);
+    const evmc_bytes32 value = slot_bytes(s, s.stackPointer + 1);
+    s.host->set_transient_storage(s.context, &s.evmcMsg->recipient, &key, &value);
+
+    s.stackPointer += 2;  // pop key and value
+    ++s.pc;
+    return true;
+}
+
+}  // namespace
+
+void register_storage(InstrTable& t) {
+    t[0x54] = &op_sload;
+    t[0x55] = &op_sstore;
+    t[0x5c] = &op_tload;
+    t[0x5d] = &op_tstore;
+}
 
 }  // namespace zevm

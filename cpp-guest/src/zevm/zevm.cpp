@@ -50,7 +50,7 @@ evmc_result run(const evmc_host_interface* host, evmc_host_context* context,
         (state.status == EVMC_SUCCESS || state.status == EVMC_REVERT)
             ? state.gas
             : 0;
-    result.gas_refund = 0;
+    result.gas_refund = (state.status == EVMC_SUCCESS) ? state.gas_refund : 0;
     result.output_data = nullptr;
     result.output_size = 0;
     result.release = nullptr;
