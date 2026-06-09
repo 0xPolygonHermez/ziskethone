@@ -278,12 +278,17 @@ bool create_impl(EvmState& s, evmc_call_kind kind) {
     if (EVMMem::expand(static_cast<size_t>(off), static_cast<size_t>(size), &s.gas) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
     }
-    // EIP-3860: cap init-code size, charge per word (+ CREATE2 keccak per word)
-    if (size > MAX_INITCODE_SIZE) { s.status = EVMC_OUT_OF_GAS; return false; }
-    const int64_t word_cost = INITCODE_WORD_COST + (is2 ? KECCAK_WORD_COST : 0);
-    const int64_t init_cost = static_cast<int64_t>((size + 31) / 32) * word_cost;
-    if (s.gas < init_cost) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= init_cost;
+    // EIP-3860 (Shanghai+): cap init-code size and add 2 gas/word. The CREATE2
+    // keccak word cost (6/word) applies on its own since Constantinople, so
+    // pre-Shanghai CREATE pays nothing here and CREATE2 pays only the 6/word.
+    const bool eip3860 = s.rev >= EVMC_SHANGHAI;
+    if (eip3860 && size > MAX_INITCODE_SIZE) { s.status = EVMC_OUT_OF_GAS; return false; }
+    const int64_t word_cost = (is2 ? KECCAK_WORD_COST : 0) + (eip3860 ? INITCODE_WORD_COST : 0);
+    if (word_cost != 0) {
+        const int64_t init_cost = num_words(size) * word_cost;
+        if (s.gas < init_cost) { s.status = EVMC_OUT_OF_GAS; return false; }
+        s.gas -= init_cost;
+    }
 
     if (s.evmcMsg->depth >= 1024) return finish_fail();
     if (nonzero_value) {
