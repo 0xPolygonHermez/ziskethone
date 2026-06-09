@@ -1,11 +1,16 @@
-// zevm.cpp — evmc_vm glue and the top-level execution loop.
+// zevm.cpp — evmc2 glue and the top-level execution loop.
 //
-// This file implements the evmc C-ABI surface (the same one evmone exposes) and
-// the interpreter dispatch loop the user specified: construct an EvmState, then
-// repeatedly fetch the opcode at pc and call its handler until one returns
-// false. Opcode semantics live in instructions.cpp (currently mocks).
+// Implements the evmc2 surface for the hand-written EVM: the base evmc ops
+// (execute / destroy / get_capabilities) plus the evmc2 extensions (prepare /
+// execute2 / release_pre_execution). The interpreter dispatch loop the user
+// specified — construct an EvmState, then repeatedly fetch the opcode at pc and
+// call its handler until one returns false — lives in run(), parameterized by an
+// optional precomputed JUMPDEST analysis. Opcode semantics live in
+// instructions.cpp (currently mostly mocks).
 
 #include "zevm.hpp"
+
+#include <cstdlib>
 
 #include "evm_state.hpp"
 #include "instructions.hpp"
@@ -14,15 +19,19 @@ namespace zevm {
 
 namespace {
 
-// The interpreter loop. Builds an evmc_result from the frame's final state.
-evmc_result execute(evmc_vm* /*vm*/,
-                    const evmc_host_interface* host,
-                    evmc_host_context* context,
-                    evmc_revision rev,
-                    const evmc_message* msg,
-                    const uint8_t* code,
-                    size_t code_size) noexcept {
-    EvmState state(msg, code, code_size, host, context, rev);
+// zevm's evmc2_pre_execution: the precomputed JUMPDEST map for one bytecode.
+struct Analysis {
+    uint8_t* jumpdests = nullptr;  // length == code_size it was prepared from
+};
+
+// Run one frame to completion and build its evmc_result. `prebuilt` is an
+// optional JUMPDEST map borrowed for this frame; when null, EvmState builds its
+// own.
+evmc_result run(const evmc_host_interface* host, evmc_host_context* context,
+                evmc_revision rev, const evmc_message* msg,
+                const uint8_t* code, size_t code_size,
+                const uint8_t* prebuilt) noexcept {
+    EvmState state(msg, code, code_size, host, context, rev, prebuilt);
 
     bool cont = true;
     do {
@@ -48,28 +57,69 @@ evmc_result execute(evmc_vm* /*vm*/,
     return result;
 }
 
-void destroy(evmc_vm* /*vm*/) noexcept {
-    // The VM instance is a single static object (see evmc_create_zevm); nothing
+// ----- base evmc operations -----
+
+evmc_result w_execute(evmc_vm* /*vm*/, const evmc_host_interface* host,
+                      evmc_host_context* context, evmc_revision rev,
+                      const evmc_message* msg, const uint8_t* code,
+                      size_t code_size) noexcept {
+    return run(host, context, rev, msg, code, code_size, /*prebuilt=*/nullptr);
+}
+
+void w_destroy(evmc_vm* /*vm*/) noexcept {
+    // The VM instance is a single static object (see evmc2_create_zevm); nothing
     // to free.
 }
 
-evmc_capabilities_flagset get_capabilities(evmc_vm* /*vm*/) noexcept {
+evmc_capabilities_flagset w_get_capabilities(evmc_vm* /*vm*/) noexcept {
     return EVMC_CAPABILITY_EVM1;
+}
+
+// ----- evmc2 extensions -----
+
+evmc2_pre_execution* w_prepare(evmc_vm* /*vm*/, const uint8_t* code,
+                               size_t code_size) noexcept {
+    auto* a = new Analysis{};
+    if (code_size != 0) {
+        a->jumpdests = static_cast<uint8_t*>(std::calloc(code_size, 1));
+        build_jumpdests(code, code_size, a->jumpdests);
+    }
+    return reinterpret_cast<evmc2_pre_execution*>(a);
+}
+
+void w_release(evmc_vm* /*vm*/, evmc2_pre_execution* pre) noexcept {
+    auto* a = reinterpret_cast<Analysis*>(pre);
+    std::free(a->jumpdests);
+    delete a;
+}
+
+evmc_result w_execute2(evmc_vm* /*vm*/, const evmc_host_interface* host,
+                       evmc_host_context* context, evmc_revision rev,
+                       const evmc_message* msg, const uint8_t* code,
+                       size_t code_size, evmc2_pre_execution* pre) noexcept {
+    const uint8_t* prebuilt =
+        pre != nullptr ? reinterpret_cast<Analysis*>(pre)->jumpdests : nullptr;
+    return run(host, context, rev, msg, code, code_size, prebuilt);
 }
 
 }  // namespace
 
 }  // namespace zevm
 
-extern "C" struct evmc_vm* evmc_create_zevm(void) EVMC_NOEXCEPT {
-    static struct evmc_vm vm = {
-        EVMC_ABI_VERSION,
-        "zevm",
-        "0.0.1",
-        zevm::destroy,
-        zevm::execute,
-        zevm::get_capabilities,
-        nullptr,  // set_option: unsupported
+extern "C" evmc2_vm* evmc2_create_zevm(void) {
+    static evmc2_vm vm = {
+        /*base=*/ {
+            EVMC_ABI_VERSION,
+            "zevm",
+            "0.0.1",
+            zevm::w_destroy,
+            zevm::w_execute,
+            zevm::w_get_capabilities,
+            nullptr,  // set_option: unsupported
+        },
+        zevm::w_prepare,
+        zevm::w_execute2,
+        zevm::w_release,
     };
     return &vm;
 }

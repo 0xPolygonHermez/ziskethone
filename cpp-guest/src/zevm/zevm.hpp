@@ -1,21 +1,21 @@
-// zevm.hpp — public evmc factory for the hand-written EVM.
+// zevm.hpp — public evmc2 factory for the hand-written EVM.
 //
-// zevm is a drop-in replacement for evmone at the evmc C-ABI boundary. A client
-// obtains a VM instance with evmc_create_zevm() exactly as it would with
-// evmc_create_evmone(), then drives it through the returned evmc_vm's function
-// pointers (execute / get_capabilities / destroy).
+// zevm is a drop-in replacement for evmone at the evmc2 boundary. A client
+// obtains an instance with evmc2_create_zevm() exactly as it would with
+// evmc2_create_evmone(), then drives it through prepare / execute2 / the base
+// evmc operations.
 
 #pragma once
 
-#include <evmc/evmc.h>
-#include <evmc/utils.h>  // EVMC_EXPORT / EVMC_NOEXCEPT
+#include "zeg/evmc2.h"
 
 #if __cplusplus
 extern "C" {
 #endif
 
-// Creates a zevm instance. Mirrors evmc_create_evmone(). Never returns NULL.
-EVMC_EXPORT struct evmc_vm* evmc_create_zevm(void) EVMC_NOEXCEPT;
+// Creates a zevm instance as an evmc2 VM. Mirrors evmc2_create_evmone(). Never
+// returns NULL.
+evmc2_vm* evmc2_create_zevm(void);
 
 #if __cplusplus
 }

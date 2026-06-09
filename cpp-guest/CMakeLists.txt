@@ -169,7 +169,6 @@ set(GUEST_SOURCES
     src/storages.cpp
     src/transactions.cpp
     src/transient_storage.cpp
-    src/evmc2_evmone.cpp
     src/zisk_crypto.cpp
     src/zisk_state_db.cpp
 )
@@ -195,11 +194,12 @@ endif()
 
 # ----- EVM backend selection -------------------------------------------------
 #
-# The guest drives an EVM through the raw evmc C ABI (see ZiskStateDB::exec),
-# so the interpreter is swappable. `evmone` (default) uses the upstream
-# interpreter; `zevm` uses our hand-written one (cpp-guest/src/zevm), built as
-# a drop-in evmc replacement. Both paths still link evmone::precompiles +
-# evmone::state because precompile dispatch lives in the host/state layer.
+# The guest drives an EVM through the evmc2 interface (see ZiskStateDB::vm2_ /
+# execute2), so the interpreter is swappable. `evmone` (default) uses the
+# upstream interpreter via evmc2_create_evmone; `zevm` uses our hand-written one
+# (cpp-guest/src/zevm) via evmc2_create_zevm. Both paths still link
+# evmone::precompiles + evmone::state because precompile dispatch lives in the
+# host/state layer.
 set(EVM_BACKEND "evmone" CACHE STRING "EVM implementation: evmone | zevm")
 set_property(CACHE EVM_BACKEND PROPERTY STRINGS evmone zevm)
 
@@ -223,10 +223,13 @@ target_link_libraries(zisk_eth_guest PRIVATE evmone::precompiles evmone::state i
 if(EVM_BACKEND STREQUAL "zevm")
     add_subdirectory(src/zevm)
     target_link_libraries(zisk_eth_guest PRIVATE zevm)
-    # Selects evmc_create_zevm() over evmc_create_evmone() at the VM-creation
+    # Selects evmc2_create_zevm() over evmc2_create_evmone() at the VM-creation
     # site in zisk_state_db.cpp.
     target_compile_definitions(zisk_eth_guest PRIVATE USE_ZEVM)
 elseif(EVM_BACKEND STREQUAL "evmone")
+    # evmc2_create_evmone wraps evmone baseline; only built for this backend
+    # (it needs evmone's headers + lib, which the zevm backend doesn't link).
+    target_sources(zisk_eth_guest PRIVATE src/evmc2_evmone.cpp)
     target_link_libraries(zisk_eth_guest PRIVATE evmone)
 else()
     message(FATAL_ERROR "EVM_BACKEND must be evmone | zevm (got ${EVM_BACKEND})")

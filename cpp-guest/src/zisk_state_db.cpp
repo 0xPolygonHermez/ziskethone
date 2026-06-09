@@ -12,9 +12,9 @@
 // time: EVM_BACKEND=zevm defines USE_ZEVM and links the hand-written EVM;
 // otherwise the evmone-baseline adapter.
 #if defined(USE_ZEVM)
-#include "zevm/evmc2_zevm.hpp"  // evmc2_create_zevm
+#include "zevm/zevm.hpp"     // evmc2_create_zevm
 #else
-#include "evmc2_evmone.hpp"     // evmc2_create_evmone
+#include "evmc2_evmone.hpp"  // evmc2_create_evmone
 #endif
 
 #include "zeg/bloom.hpp"

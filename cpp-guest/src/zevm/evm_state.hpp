@@ -22,6 +22,12 @@ namespace zevm {
 
 inline constexpr size_t kStackLimit = 1024;
 
+// Fill `out` (a zero-initialized byte array of length codeSize) with the
+// JUMPDEST validity map: out[i] == 1 iff code[i] is a JUMPDEST (0x5b) that is
+// not inside PUSH immediate data. Shared by EvmState's own analysis and by the
+// evmc2 `prepare` path, which precomputes this once per distinct bytecode.
+void build_jumpdests(const uint8_t* code, size_t codeSize, uint8_t* out);
+
 // All the mutable state of a single call frame. One EvmState is created per
 // execute() invocation (top-level call or nested CALL/CREATE) and destroyed
 // when the frame returns.
@@ -33,8 +39,10 @@ struct EvmState {
 
     // Per-byte JUMPDEST validity map, same length as `code`: analyzedCode[i]
     // == 1 iff `code[i]` is a JUMPDEST opcode that is NOT inside PUSH data.
-    // Owned by this state (allocated in the constructor, freed in the dtor).
-    uint8_t*       analyzedCode = nullptr;
+    // Either borrowed from a precomputed evmc2 analysis (when one is passed to
+    // the ctor) or owned (allocated + filled by the ctor, freed by the dtor).
+    const uint8_t* analyzedCode = nullptr;
+    bool           ownsAnalysis = false;
 
     // ----- operand stack -----
     // 256-bit words. stackPointer follows the spec's convention: it counts
@@ -66,23 +74,22 @@ struct EvmState {
     // halting; the execute() loop turns it into the returned evmc_result.
     evmc_status_code status = EVMC_SUCCESS;
 
-    // Creates and initializes the frame, then runs analyze(). `code`/`msg`/
-    // `host`/`ctx` are borrowed and must outlive this state.
+    // Creates and initializes the frame. If `prebuilt_analysis` is non-null it is
+    // borrowed as the JUMPDEST map (a length-`codeSize` array from a prior
+    // build_jumpdests / evmc2 prepare); otherwise the map is built and owned
+    // here. `code`/`msg`/`host`/`ctx`/`prebuilt_analysis` are borrowed and must
+    // outlive this state.
     EvmState(const evmc_message* msg,
              const uint8_t* code, size_t codeSize,
              const evmc_host_interface* host,
              evmc_host_context* ctx,
-             evmc_revision rev);
+             evmc_revision rev,
+             const uint8_t* prebuilt_analysis = nullptr);
 
     ~EvmState();
 
     EvmState(const EvmState&) = delete;
     EvmState& operator=(const EvmState&) = delete;
-
-    // Builds analyzedCode: walk the bytecode, mark JUMPDEST (0x5b) bytes, and
-    // skip over the immediate data of PUSH1..PUSH32 so a 0x5b that is really
-    // push data is never treated as a jump target.
-    void analyze();
 };
 
 }  // namespace zevm
