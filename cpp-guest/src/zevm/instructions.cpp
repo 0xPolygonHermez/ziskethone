@@ -10,7 +10,14 @@
 
 #include "instructions.hpp"
 
+#include <cstring>  // memcpy for the unaligned PUSH word loads
+
 #include "bigint/backend.hpp"  // zeg::bi::add256 — ZisK-accelerated 256-bit add
+
+// libgcc 64-bit byte swap. On the ZisK target (rv64ima, no Zbb) there is no
+// hardware byteswap instruction, so this resolves to the soft implementation in
+// zisk/compiler_rt.cpp; on the host it comes from the compiler-rt builtins.
+extern "C" uint64_t __bswapdi2(uint64_t);
 
 namespace zevm {
 
@@ -23,6 +30,13 @@ constexpr int64_t GAS_VERYLOW = 3;   // ADD, SUB, NOT, PUSH, ...
 // kStackLimit (empty) toward 0 (full), so depth == kStackLimit - stackPointer.
 inline size_t stack_depth(const EvmState& s) {
     return kStackLimit - s.stackPointer;
+}
+
+// Unaligned 64-bit load from code.
+inline uint64_t load_u64(const uint8_t* p) {
+    uint64_t v;
+    std::memcpy(&v, p, sizeof(v));
+    return v;
 }
 
 // Default for every opcode without a dedicated handler. Halts the frame with a
@@ -96,15 +110,27 @@ bool op_push32(EvmState& s) {
         return false;
     }
 
-    // The 32 immediate bytes follow the opcode. If the code ends early, the
-    // missing low-order bytes read as zero (EVM zero-pads PUSH data).
-    uint8_t be[32];
-    for (size_t k = 0; k < 32; ++k) {
-        const size_t idx = s.pc + 1 + k;
-        be[k] = idx < s.codeSize ? s.code[idx] : 0;
-    }
+    // The 32 immediate bytes follow the opcode, big-endian. The stack word is
+    // little-endian uint64_t[4], so each 8-byte group is byte-swapped into a
+    // limb (limb[3] is the most significant). When all 32 bytes are present we
+    // read them as four 64-bit words and write the swapped limbs straight into
+    // the stack slot — no temporary, no byte loop.
     --s.stackPointer;
-    s.stack[s.stackPointer] = u256_from_be(be);
+    U256& w = s.stack[s.stackPointer];
+    const uint8_t* p = s.code + s.pc + 1;
+    if (s.pc + 32 < s.codeSize) {
+        w.limbs[3] = __bswapdi2(load_u64(p +  0));
+        w.limbs[2] = __bswapdi2(load_u64(p +  8));
+        w.limbs[1] = __bswapdi2(load_u64(p + 16));
+        w.limbs[0] = __bswapdi2(load_u64(p + 24));
+    } else {
+        // PUSH data runs past the end of code (rare): zero-pad the missing
+        // low-order bytes. `code` isn't padded, so the blind 64-bit reads above
+        // would be out of bounds here.
+        uint8_t be[32] = {};
+        std::memcpy(be, p, s.codeSize - (s.pc + 1));
+        w = u256_from_be(be);
+    }
 
     s.pc += 33;  // opcode + 32 immediate bytes
     return true;
