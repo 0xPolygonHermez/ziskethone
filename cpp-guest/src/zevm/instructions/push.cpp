@@ -28,17 +28,11 @@ bool op_push1(EvmState& s) {
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
     U256& w = s.stack[s.stackPointer];
-    if (s.pc + 1 >= 7 && s.pc + 2 <= s.codeSize) {
-        const uint8_t* end = s.code + s.pc + 2;
-        w.limbs[0] = __bswapdi2(load_u64(end - 8)) & 0xffULL;
-        w.limbs[1] = 0; w.limbs[2] = 0; w.limbs[3] = 0;
-    } else {
-        uint8_t be[32] = {};
-        const size_t pc1 = s.pc + 1;
-        const size_t avail = pc1 < s.codeSize ? std::min<size_t>(1, s.codeSize - pc1) : 0;
-        std::memcpy(be + 31, s.code + pc1, avail);
-        w = u256_from_be(be);
-    }
+    // A single immediate byte, right-aligned into limb 0 (zero if code ends at
+    // the opcode). Reading just the one byte needs no 64-bit load, hence no
+    // low-side bounds check.
+    w.limbs[0] = s.pc + 1 < s.codeSize ? s.code[s.pc + 1] : 0;
+    w.limbs[1] = 0; w.limbs[2] = 0; w.limbs[3] = 0;
     s.pc += 2;
     return true;
 }
