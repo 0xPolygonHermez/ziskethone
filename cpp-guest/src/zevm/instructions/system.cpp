@@ -11,8 +11,9 @@
 // charges the code deposit — and returns gas_left + output (+ create_address).
 // Leftover gas and the child's refund flow back here.
 //
-// NOTE (deferred): EIP-7702 delegation-target resolution (get_target_address) is
-// not handled — code_address is the call target as-is.
+// EIP-7702: a call whose target is a delegated EOA (code == 0xef0100 || address)
+// runs the delegate's code (code_address moves to the delegate, recipient stays
+// the EOA), charging the delegate's account-access gas — see call_impl.
 
 #include "detail.hpp"
 
@@ -130,6 +131,26 @@ bool call_impl(EvmState& s, evmc_call_kind kind, bool has_value, bool static_for
         s.gas -= ACCOUNT_CREATION;
     }
 
+    // ----- EIP-7702 (Prague+): resolve a delegated call target -----
+    // If the callee's code is a delegation designator (0xef0100 || address), run
+    // the delegate's code instead — charging the delegate's EIP-2929 account
+    // access (2600 cold / 100 warm) on top of the target's own access above. The
+    // child still uses `recipient` for storage/context; only `code_address` moves
+    // to the delegate. (EXTCODE* are unaffected: they see the designator.)
+    evmc_address code_addr = dst;
+    if (s.rev >= EVMC_PRAGUE) {
+        uint8_t desig[23];  // 0xef 0x01 0x00 + 20-byte delegate address
+        const size_t n = s.host->copy_code(s.context, &dst, 0, desig, sizeof(desig));
+        if (n == sizeof(desig) && desig[0] == 0xef && desig[1] == 0x01 && desig[2] == 0x00) {
+            std::memcpy(code_addr.bytes, desig + 3, 20);
+            const int64_t dcost =
+                s.host->access_account(s.context, &code_addr) == EVMC_ACCESS_COLD
+                    ? COLD_ACCOUNT_ACCESS : WARM_ACCESS;
+            if (s.gas < dcost) { s.status = EVMC_OUT_OF_GAS; return false; }
+            s.gas -= dcost;
+        }
+    }
+
     // ----- gas: memory expansion for the input and output windows -----
     if (EVMMem::expand(static_cast<size_t>(in_off), static_cast<size_t>(in_size), &s.gas) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
@@ -150,7 +171,9 @@ bool call_impl(EvmState& s, evmc_call_kind kind, bool has_value, bool static_for
     msg.depth        = s.evmcMsg->depth + 1;
     msg.gas          = call_gas;
     msg.recipient    = (kind == EVMC_CALL) ? dst : s.evmcMsg->recipient;   // CALL/STATICCALL -> dst
-    msg.code_address = dst;
+    msg.code_address = code_addr;                                          // delegate when 7702-delegated
+    if (std::memcmp(dst.bytes, code_addr.bytes, sizeof(dst.bytes)) != 0)
+        msg.flags |= EVMC_DELEGATED;
     msg.sender       = (kind == EVMC_DELEGATECALL) ? s.evmcMsg->sender : s.evmcMsg->recipient;
     if (kind == EVMC_DELEGATECALL) msg.value = s.evmcMsg->value;
     else if (has_value)            msg.value = value_be;                   // STATICCALL keeps 0
