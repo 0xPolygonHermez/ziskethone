@@ -110,6 +110,15 @@ MemError EVMMem::writeBytes(size_t addr, const uint8_t* src, size_t len, int64_t
     return MemError::Ok;
 }
 
+MemError EVMMem::writeByte(size_t addr, uint8_t value, int64_t* gas) {
+    if (addr > kMaxMemPerTx)
+        return MemError::OutOfGas;
+    if (const MemError e = ensure(addr + 1, gas); e != MemError::Ok)
+        return e;
+    s_handles[s_cur].start_ptr[addr] = value;
+    return MemError::Ok;
+}
+
 size_t EVMMem::size() {
     return s_handles[s_cur].size;
 }

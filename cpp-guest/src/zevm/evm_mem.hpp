@@ -62,6 +62,11 @@ public:
     static MemError readBytes (size_t addr, uint8_t* dst, size_t len, int64_t* gas);
     static MemError writeBytes(size_t addr, const uint8_t* src, size_t len, int64_t* gas);
 
+    // Write a single byte to memory[addr], growing memory (charging *gas) as
+    // needed. A leaner path than writeBytes(addr, &b, 1, gas) for MSTORE8: one
+    // store instead of a memcpy, and no length handling.
+    static MemError writeByte(size_t addr, uint8_t value, int64_t* gas);
+
     // Current frame's memory size in bytes (word-aligned).
     static size_t size();
     // Current top handle index (call depth); -1 when no frame is active.

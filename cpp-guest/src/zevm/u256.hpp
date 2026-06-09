@@ -28,6 +28,16 @@ inline U256 u256_from_be(const uint8_t bytes[32]) {
     return v;
 }
 
+// Store a 256-bit value as 32 big-endian bytes (out[0] is most significant) —
+// the inverse of u256_from_be, used by MSTORE / RETURN / LOG / KECCAK input.
+inline void u256_to_be(const U256& v, uint8_t out[32]) {
+    for (int i = 0; i < 4; ++i) {
+        const uint64_t w = v.limbs[3 - i];   // most significant limb first
+        for (int j = 0; j < 8; ++j)
+            out[i * 8 + j] = static_cast<uint8_t>(w >> (56 - 8 * j));
+    }
+}
+
 // ----- value helpers (shared by the arithmetic / bitwise opcode handlers) -----
 
 inline bool u256_is_zero(const U256& a) {
