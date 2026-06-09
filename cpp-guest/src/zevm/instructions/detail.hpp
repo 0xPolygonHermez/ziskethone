@@ -19,10 +19,12 @@
 namespace zevm {
 
 // EVM gas cost tiers (subset; grows as opcodes land).
+inline constexpr int64_t GAS_JUMPDEST = 1;  // JUMPDEST
 inline constexpr int64_t GAS_BASE    = 2;   // MSIZE, PC, POP, GAS, address/block info, ...
 inline constexpr int64_t GAS_VERYLOW = 3;   // ADD, SUB, NOT, PUSH, LT, AND, SHL, MLOAD, ...
 inline constexpr int64_t GAS_LOW     = 5;   // MUL, DIV, SDIV, MOD, SMOD, SIGNEXTEND
-inline constexpr int64_t GAS_MID     = 8;   // ADDMOD, MULMOD
+inline constexpr int64_t GAS_MID     = 8;   // ADDMOD, MULMOD, JUMP
+inline constexpr int64_t GAS_HIGH    = 10;  // JUMPI
 inline constexpr int64_t GAS_EXP     = 10;  // EXP base
 inline constexpr int64_t GAS_EXPBYTE = 50;  // EXP per byte of exponent (>= Spurious Dragon)
 
