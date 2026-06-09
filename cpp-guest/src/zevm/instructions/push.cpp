@@ -1,101 +1,16 @@
-// instructions.cpp — MOCK opcode handlers + the dispatch table.
+// push.cpp — PUSH1..PUSH32 (opcodes 0x60..0x7f).
 //
-// SCAFFOLDING ONLY. None of these implement real EVM semantics yet; they exist
-// so the dispatch table, the execute() loop, and the evmc result plumbing can
-// be wired up and compiled end to end. As real opcodes land, replace the mock
-// bodies one at a time. Arithmetic / bitwise opcodes (ADD, MUL, AND, ...) are
-// the prime candidates for routing through the ZisK-accelerated zeg::bi backend
-// (cpp-guest/zisk/bigint/backend.hpp), since the stack words are already in its
-// little-endian uint64_t[4] layout.
+// Read the n big-endian immediate bytes (right-aligned, low bytes of the
+// 256-bit stack word) as 64-bit words and byte-swap them straight into the
+// limbs; full limbs whole, the partial limb masked, higher limbs 0. A both-ends
+// in-bounds fast path falls back to a zero-padded build near the start/end of
+// code. See instructions/detail.hpp for the shared helpers.
 
-#include "instructions.hpp"
-
-#include <algorithm>  // std::min for the PUSH zero-pad fallback
-#include <cstring>    // memcpy for the unaligned PUSH word loads
-
-#include "bigint/backend.hpp"  // zeg::bi::add256 — ZisK-accelerated 256-bit add
-
-// libgcc 64-bit byte swap. On the ZisK target (rv64ima, no Zbb) there is no
-// hardware byteswap instruction, so this resolves to the soft implementation in
-// zisk/compiler_rt.cpp; on the host it comes from the compiler-rt builtins.
-extern "C" uint64_t __bswapdi2(uint64_t);
+#include "detail.hpp"
 
 namespace zevm {
 
 namespace {
-
-// EVM gas cost tiers (subset; grows as opcodes land).
-constexpr int64_t GAS_VERYLOW = 3;   // ADD, SUB, NOT, PUSH, ...
-
-// Number of live operands on the stack. stackPointer counts DOWN from
-// kStackLimit (empty) toward 0 (full), so depth == kStackLimit - stackPointer.
-inline size_t stack_depth(const EvmState& s) {
-    return kStackLimit - s.stackPointer;
-}
-
-// Unaligned 64-bit load from code.
-inline uint64_t load_u64(const uint8_t* p) {
-    uint64_t v;
-    std::memcpy(&v, p, sizeof(v));
-    return v;
-}
-
-// Default for every opcode without a dedicated handler. Halts the frame with a
-// failure status so unknown/unimplemented opcodes are observable rather than
-// silently skipped.
-bool op_unimplemented(EvmState& s) {
-    s.status = EVMC_UNDEFINED_INSTRUCTION;
-    return false;  // stop
-}
-
-// 0x00 STOP — halt successfully.
-bool op_stop(EvmState& s) {
-    s.status = EVMC_SUCCESS;
-    return false;  // stop
-}
-
-// 0xfe INVALID — designated invalid opcode; consumes all gas (real semantics
-// will zero gas), halts with failure.
-bool op_invalid(EvmState& s) {
-    s.status = EVMC_INVALID_INSTRUCTION;
-    return false;  // stop
-}
-
-// 0x01 ADD — pop a and b, push (a + b) mod 2^256.
-bool op_add(EvmState& s) {
-    // Charge gas first (matches evmone/revm ordering: gas before stack work).
-    if (s.gas < GAS_VERYLOW) {
-        s.status = EVMC_OUT_OF_GAS;
-        return false;
-    }
-    s.gas -= GAS_VERYLOW;
-
-    // Needs two operands.
-    if (stack_depth(s) < 2) {
-        s.status = EVMC_STACK_UNDERFLOW;
-        return false;
-    }
-
-    // Top is stack[stackPointer], the next item is stack[stackPointer + 1].
-    // After popping both and pushing the result the new top lands in the second
-    // slot, so add in place straight into it — no temporary, no copy. add256
-    // reads both inputs before writing, so output aliasing input `b` is fine; it
-    // does the full 256-bit add and returns the carry-out, which we drop to wrap
-    // mod 2^256.
-    const U256& a = s.stack[s.stackPointer];
-    U256&       b = s.stack[s.stackPointer + 1];
-    zeg::bi::add256(a.limbs, b.limbs, /*cin=*/0, b.limbs);  // b = a + b (mod 2^256)
-
-    ++s.stackPointer;  // net: pop two, push one (result already in place)
-    ++s.pc;
-    return true;
-}
-
-// 0x5b JUMPDEST — valid jump target marker; a no-op that just advances pc.
-bool op_jumpdest(EvmState& s) {
-    ++s.pc;
-    return true;
-}
 
 // 0x60..0x7e PUSH1..PUSH31 — push the next n code bytes as a big-endian word,
 // right-aligned in the 256-bit stack word (high bytes zero). Written out
@@ -835,19 +750,9 @@ bool op_push32(EvmState& s) {
     s.pc += 33;  // opcode + 32 immediate bytes
     return true;
 }
+}  // namespace
 
-// Build the full 256-entry table: default every slot to op_unimplemented, then
-// slot in the handlers we have. Done at static-init time via a constexpr
-// builder so the array is genuinely const with no designated-initializer
-// extensions.
-constexpr InstrTable build_table() {
-    InstrTable t{};
-    for (auto& fn : t)
-        fn = &op_unimplemented;
-
-    t[0x00] = &op_stop;
-    t[0x01] = &op_add;
-    t[0x5b] = &op_jumpdest;
+void register_push(InstrTable& t) {
     t[0x60] = &op_push1;   t[0x61] = &op_push2;   t[0x62] = &op_push3;
     t[0x63] = &op_push4;   t[0x64] = &op_push5;   t[0x65] = &op_push6;
     t[0x66] = &op_push7;   t[0x67] = &op_push8;   t[0x68] = &op_push9;
@@ -859,13 +764,6 @@ constexpr InstrTable build_table() {
     t[0x78] = &op_push25;  t[0x79] = &op_push26;  t[0x7a] = &op_push27;
     t[0x7b] = &op_push28;  t[0x7c] = &op_push29;  t[0x7d] = &op_push30;
     t[0x7e] = &op_push31;  t[0x7f] = &op_push32;
-    t[0xfe] = &op_invalid;
-
-    return t;
 }
-
-}  // namespace
-
-const InstrTable instruction_table = build_table();
 
 }  // namespace zevm

@@ -10,7 +10,18 @@ add_library(zevm STATIC
     zevm.cpp
     evm_state.cpp
     evm_mem.cpp
-    instructions.cpp
+    instructions/table.cpp
+    instructions/arith.cpp
+    instructions/bitwise.cpp
+    instructions/keccak.cpp
+    instructions/env.cpp
+    instructions/memory.cpp
+    instructions/storage.cpp
+    instructions/control.cpp
+    instructions/stack.cpp
+    instructions/push.cpp
+    instructions/log.cpp
+    instructions/system.cpp
 )
 
 target_include_directories(zevm
