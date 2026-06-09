@@ -5,9 +5,10 @@
 #include <cstring>
 #include <vector>
 
-#include <evmone/evmone.h>  // evmc_create_evmone for the owned VM instance
 #include <intx/intx.hpp>    // 256-bit add for selfdestruct balance transfer
 #include <test/state/precompiles.hpp>  // evmone::state::call_precompile
+
+#include "evmc2_evmone.hpp"  // evmc2_create_evmone — the owned VM (evmc2 over evmone)
 
 #include "zeg/bloom.hpp"
 #include "zeg/config.hpp"
@@ -87,7 +88,15 @@ ZiskStateDB::ZiskStateDB(Accounts&             accounts,
       contracts_(contracts),
       previous_blocks_(previous_blocks),
       storages_(storages),
-      vm_raw_(evmc_create_evmone()) {}
+      vm2_(evmc2_create_evmone()) {}
+
+ZiskStateDB::~ZiskStateDB() {
+    // Release every cached pre-analysis handle, then destroy the owned VM.
+    for (auto& [hash, pre] : analysis_cache_) {
+        vm2_->release_pre_execution(&vm2_->base, pre);
+    }
+    vm2_->base.destroy(&vm2_->base);
+}
 
 // ===== evmc::Host overrides =====
 //
