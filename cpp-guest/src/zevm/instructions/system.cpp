@@ -1,7 +1,8 @@
 // system.cpp — the call/create subsystem: CALL (0xf1), CALLCODE (0xf2),
 // DELEGATECALL (0xf4), STATICCALL (0xfa), CREATE (0xf0), CREATE2 (0xf5); the
-// halting/output opcodes RETURN (0xf3) and REVERT (0xfd); the return-data
-// opcodes RETURNDATASIZE (0x3d) and RETURNDATACOPY (0x3e); and INVALID (0xfe).
+// halting/output opcodes RETURN (0xf3), REVERT (0xfd) and SELFDESTRUCT (0xff);
+// the return-data opcodes RETURNDATASIZE (0x3d) and RETURNDATACOPY (0x3e); and
+// INVALID (0xfe).
 //
 // zevm is the interpreter: it pops/caps the gas, charges every call/create cost
 // (EIP-2929 account access, value, new-account, args/return memory, EIP-3860
@@ -35,6 +36,9 @@ constexpr int64_t GAS_CREATE          = 32000;  // CREATE / CREATE2 base
 constexpr uint64_t MAX_INITCODE_SIZE  = 0xC000; // EIP-3860 (2 * 24576)
 constexpr int64_t INITCODE_WORD_COST  = 2;      // EIP-3860 per 32-byte word
 constexpr int64_t KECCAK_WORD_COST    = 6;      // CREATE2 hashes the init code
+
+constexpr int64_t SELFDESTRUCT_GAS    = 5000;   // SELFDESTRUCT base (Tangerine+)
+constexpr int64_t SELFDESTRUCT_REFUND = 24000;  // pre-London only
 
 // Unsigned compare of two big-endian 256-bit words (memcmp works: MSB first).
 inline bool be_lt(const evmc_uint256be& a, const evmc_uint256be& b) {
@@ -398,6 +402,43 @@ bool op_invalid(EvmState& s) {
     return false;
 }
 
+// 0xff SELFDESTRUCT — transfer the account's balance to the beneficiary and halt.
+// Deletion itself is host-side (EIP-6780: only if the account was created in this
+// tx); the interpreter just charges gas and calls host->selfdestruct.
+bool op_selfdestruct(EvmState& s) {
+    if (s.gas < SELFDESTRUCT_GAS) { s.status = EVMC_OUT_OF_GAS; return false; }
+    s.gas -= SELFDESTRUCT_GAS;
+    if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
+
+    to_be(s, s.stackPointer);
+    evmc_address ben;
+    std::memcpy(ben.bytes, reinterpret_cast<const uint8_t*>(&s.stack[s.stackPointer]) + 12, 20);
+
+    // Cold beneficiary access (Berlin+): the full 2600 (no warm base for SELFDESTRUCT).
+    if (s.rev >= EVMC_BERLIN &&
+        s.host->access_account(s.context, &ben) == EVMC_ACCESS_COLD) {
+        if (s.gas < COLD_ACCOUNT_ACCESS) { s.status = EVMC_OUT_OF_GAS; return false; }
+        s.gas -= COLD_ACCOUNT_ACCESS;
+    }
+    // New-account surcharge: charged when the account has balance to send and the
+    // beneficiary does not yet exist.
+    const evmc_uint256be bal = s.host->get_balance(s.context, &s.evmcMsg->recipient);
+    bool bal_nonzero = false;
+    for (int i = 0; i < 32; ++i)
+        if (bal.bytes[i] != 0) { bal_nonzero = true; break; }
+    if (bal_nonzero && !s.host->account_exists(s.context, &ben)) {
+        if (s.gas < ACCOUNT_CREATION) { s.status = EVMC_OUT_OF_GAS; return false; }
+        s.gas -= ACCOUNT_CREATION;
+    }
+
+    const bool first = s.host->selfdestruct(s.context, &s.evmcMsg->recipient, &ben);
+    if (first && s.rev < EVMC_LONDON) s.gas_refund += SELFDESTRUCT_REFUND;
+
+    s.status = EVMC_SUCCESS;
+    return false;  // halt the frame
+}
+
 }  // namespace
 
 void register_system(InstrTable& t, evmc_revision rev) {
@@ -406,6 +447,7 @@ void register_system(InstrTable& t, evmc_revision rev) {
     t[0xf2] = &op_callcode;
     t[0xf3] = &op_return;
     t[0xfe] = &op_invalid;
+    t[0xff] = &op_selfdestruct;
     if (rev >= EVMC_HOMESTEAD)  // EIP-7
         t[0xf4] = &op_delegatecall;
     if (rev >= EVMC_BYZANTIUM) {  // EIP-211 (RETURNDATA*), EIP-214 (STATICCALL), EIP-140 (REVERT)
