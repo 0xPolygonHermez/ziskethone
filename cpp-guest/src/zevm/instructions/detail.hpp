@@ -56,6 +56,24 @@ inline void to_be(EvmState& s, uint32_t i) {
     if (!s.stackBE[i]) { s.stack[i] = byteswap256(s.stack[i]); s.stackBE[i] = kBE; }
 }
 
+// A 256-bit stack value used as a memory offset/size: its integer value, or
+// UINT64_MAX when any high limb is set (which forces an out-of-gas in
+// EVMMem::expand, matching the EVM "offset too large" behaviour).
+inline uint64_t mem_arg(const U256& v) {
+    return (v.limbs[1] | v.limbs[2] | v.limbs[3]) != 0 ? UINT64_MAX : v.limbs[0];
+}
+
+// Number of 32-byte EVM words spanned by `n` bytes.
+inline int64_t num_words(uint64_t n) {
+    return static_cast<int64_t>((n + 31) / 32);
+}
+
+// Gas to copy `n` bytes: G_copy = 3 per word (CALLDATACOPY/CODECOPY/EXTCODECOPY/
+// MCOPY, on top of their VERYLOW base).
+inline int64_t copy_cost(uint64_t n) {
+    return num_words(n) * 3;
+}
+
 // Per-category table registration. Each is defined in its own translation unit
 // (instructions/<category>.cpp) and slots its handlers into `t`; table.cpp calls
 // them all over the default-filled table.
@@ -65,12 +83,12 @@ inline void to_be(EvmState& s, uint32_t i) {
 void register_arith(InstrTable& t);
 void register_bitwise(InstrTable& t, evmc_revision rev);
 void register_keccak(InstrTable& t);
-void register_env(InstrTable& t);
-void register_memory(InstrTable& t);
+void register_env(InstrTable& t, evmc_revision rev);
+void register_memory(InstrTable& t, evmc_revision rev);
 void register_storage(InstrTable& t, evmc_revision rev);
 void register_control(InstrTable& t);
 void register_stack(InstrTable& t);
-void register_push(InstrTable& t);
+void register_push(InstrTable& t, evmc_revision rev);
 void register_log(InstrTable& t);
 void register_system(InstrTable& t, evmc_revision rev);
 

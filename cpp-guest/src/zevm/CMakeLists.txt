@@ -33,6 +33,12 @@ target_include_directories(zevm
         ${CMAKE_CURRENT_SOURCE_DIR}/../../zisk      # zeg::bi 256-bit backend (bigint/backend.hpp)
 )
 
+# KECCAK256 (and future hash precompiles) use zeg::keccak256_bytes32, which wraps
+# evmone's keccak (ethash::keccak256). evmone_precompiles is the precompiles
+# library — not the interpreter — and carries the <evmone_precompiles/...> header
+# include path plus the keccak symbol.
+target_link_libraries(zevm PUBLIC evmone_precompiles)
+
 target_compile_features(zevm PUBLIC cxx_std_20)
 target_compile_options(zevm PRIVATE -Wall -Wextra)
 

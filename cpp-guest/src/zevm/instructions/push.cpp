@@ -1,4 +1,4 @@
-// push.cpp — PUSH1..PUSH32 (opcodes 0x60..0x7f).
+// push.cpp — PUSH0 (0x5f) and PUSH1..PUSH32 (0x60..0x7f).
 //
 // Lazy endianness: a PUSH value is left in big-endian form. The n immediate
 // bytes are big-endian and right-aligned in the 256-bit word, so the word's
@@ -14,6 +14,18 @@
 namespace zevm {
 
 namespace {
+
+// 0x5f PUSH0 (Shanghai, EIP-3855) — push the constant zero.
+bool op_push0(EvmState& s) {
+    if (s.gas < GAS_BASE) { s.status = EVMC_OUT_OF_GAS; return false; }
+    s.gas -= GAS_BASE;
+    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --s.stackPointer;
+    s.stack[s.stackPointer] = U256{};
+    s.stackBE[s.stackPointer] = kLE;
+    ++s.pc;
+    return true;
+}
 
 // 0x60 PUSH1.
 bool op_push1(EvmState& s) {
@@ -529,7 +541,9 @@ bool op_push32(EvmState& s) {
 
 }  // namespace
 
-void register_push(InstrTable& t) {
+void register_push(InstrTable& t, evmc_revision rev) {
+    if (rev >= EVMC_SHANGHAI)  // EIP-3855
+        t[0x5f] = &op_push0;
     t[0x60] = &op_push1;   t[0x61] = &op_push2;   t[0x62] = &op_push3;
     t[0x63] = &op_push4;   t[0x64] = &op_push5;   t[0x65] = &op_push6;
     t[0x66] = &op_push7;   t[0x67] = &op_push8;   t[0x68] = &op_push9;

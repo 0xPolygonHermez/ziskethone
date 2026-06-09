@@ -1,5 +1,5 @@
 // memory.cpp — memory opcodes (MLOAD 0x51, MSTORE 0x52, MSTORE8 0x53,
-// MSIZE 0x59 today; MCOPY 0x5e to follow). Backed by the static EVMMem manager.
+// MSIZE 0x59, MCOPY 0x5e). Backed by the static EVMMem manager.
 //
 // Memory is big-endian, which is exactly the BE stack representation (the 32
 // wire bytes laid out as four little-endian limbs == the value's raw bytes). So
@@ -9,6 +9,9 @@
 // high limb set addresses far beyond what gas could cover -> out-of-gas.
 
 #include "detail.hpp"
+
+#include <algorithm>
+#include <cstring>
 
 #include "evm_mem.hpp"
 
@@ -105,13 +108,44 @@ bool op_msize(EvmState& s) {
     return true;
 }
 
+// 0x5e MCOPY (Cancun, EIP-5656) — copy `size` bytes within memory, src -> dst.
+bool op_mcopy(EvmState& s) {
+    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    s.gas -= GAS_VERYLOW;
+    if (stack_depth(s) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+
+    const uint32_t sp = s.stackPointer;
+    to_le(s, sp); to_le(s, sp + 1); to_le(s, sp + 2);
+    const uint64_t dst  = mem_arg(s.stack[sp]);
+    const uint64_t src  = mem_arg(s.stack[sp + 1]);
+    const uint64_t size = mem_arg(s.stack[sp + 2]);
+
+    // Grow once to cover both windows (the higher of dst/src + size).
+    const uint64_t hi = dst > src ? dst : src;
+    if (EVMMem::expand(static_cast<size_t>(hi), static_cast<size_t>(size), &s.gas) != MemError::Ok) {
+        s.status = EVMC_OUT_OF_GAS; return false;
+    }
+    const int64_t cc = copy_cost(size);
+    if (s.gas < cc) { s.status = EVMC_OUT_OF_GAS; return false; }
+    s.gas -= cc;
+
+    if (size != 0)  // overlap-safe
+        std::memmove(EVMMem::data(static_cast<size_t>(dst)),
+                     EVMMem::data(static_cast<size_t>(src)), static_cast<size_t>(size));
+    s.stackPointer += 3;
+    ++s.pc;
+    return true;
+}
+
 }  // namespace
 
-void register_memory(InstrTable& t) {
+void register_memory(InstrTable& t, evmc_revision rev) {
     t[0x51] = &op_mload;
     t[0x52] = &op_mstore;
     t[0x53] = &op_mstore8;
     t[0x59] = &op_msize;
+    if (rev >= EVMC_CANCUN)  // EIP-5656
+        t[0x5e] = &op_mcopy;
 }
 
 }  // namespace zevm

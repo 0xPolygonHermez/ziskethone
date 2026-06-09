@@ -1,5 +1,5 @@
-// control.cpp — control-flow & halting opcodes: STOP (0x00), JUMP (0x56),
-// JUMPI (0x57), JUMPDEST (0x5b). (POP/PC/GAS as they land.)
+// control.cpp — control-flow, halting & misc opcodes: STOP (0x00), JUMP (0x56),
+// JUMPI (0x57), JUMPDEST (0x5b), POP (0x50), PC (0x58), GAS (0x5a).
 //
 // JUMP/JUMPI validate the target against the analyzer's push-data map via
 // EvmState::is_jumpdest (a 0x5b opcode that isn't PUSH immediate data); an
@@ -63,12 +63,49 @@ bool op_jumpdest(EvmState& s) {
     return true;
 }
 
+// 0x50 POP — discard the top stack item.
+bool op_pop(EvmState& s) {
+    if (s.gas < GAS_BASE) { s.status = EVMC_OUT_OF_GAS; return false; }
+    s.gas -= GAS_BASE;
+    if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    ++s.stackPointer;
+    ++s.pc;
+    return true;
+}
+
+// 0x58 PC — push the program counter of this instruction.
+bool op_pc(EvmState& s) {
+    if (s.gas < GAS_BASE) { s.status = EVMC_OUT_OF_GAS; return false; }
+    s.gas -= GAS_BASE;
+    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --s.stackPointer;
+    s.stack[s.stackPointer] = U256{{static_cast<uint64_t>(s.pc), 0, 0, 0}};
+    s.stackBE[s.stackPointer] = kLE;
+    ++s.pc;
+    return true;
+}
+
+// 0x5a GAS — push the gas remaining after this instruction's own cost.
+bool op_gas(EvmState& s) {
+    if (s.gas < GAS_BASE) { s.status = EVMC_OUT_OF_GAS; return false; }
+    s.gas -= GAS_BASE;
+    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --s.stackPointer;
+    s.stack[s.stackPointer] = U256{{static_cast<uint64_t>(s.gas), 0, 0, 0}};
+    s.stackBE[s.stackPointer] = kLE;
+    ++s.pc;
+    return true;
+}
+
 }  // namespace
 
 void register_control(InstrTable& t) {
     t[0x00] = &op_stop;
+    t[0x50] = &op_pop;
     t[0x56] = &op_jump;
     t[0x57] = &op_jumpi;
+    t[0x58] = &op_pc;
+    t[0x5a] = &op_gas;
     t[0x5b] = &op_jumpdest;
 }
 

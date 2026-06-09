@@ -19,12 +19,6 @@ namespace {
 constexpr int64_t GAS_LOG     = 375;  // per LOG + per topic (G_log / G_logtopic)
 constexpr int64_t GAS_LOGDATA = 8;    // per byte of logged data
 
-// A 256-bit stack value as a memory offset/size: its value, or UINT64_MAX when
-// it has high limbs set (forcing out-of-gas in expand).
-inline uint64_t mem_arg(const U256& v) {
-    return (v.limbs[1] | v.limbs[2] | v.limbs[3]) != 0 ? UINT64_MAX : v.limbs[0];
-}
-
 // Shared implementation of LOG0..LOG4 (n = number of topics, 0..4).
 bool log_impl(EvmState& s, unsigned n) {
     const int64_t base = GAS_LOG * static_cast<int64_t>(1 + n);

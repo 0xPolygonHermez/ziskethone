@@ -35,12 +35,6 @@ constexpr uint64_t MAX_INITCODE_SIZE  = 0xC000; // EIP-3860 (2 * 24576)
 constexpr int64_t INITCODE_WORD_COST  = 2;      // EIP-3860 per 32-byte word
 constexpr int64_t KECCAK_WORD_COST    = 6;      // CREATE2 hashes the init code
 
-// A 256-bit stack value used as a memory offset/size: its integer value, or
-// UINT64_MAX when it has high limbs set (which forces an out-of-gas in expand).
-inline uint64_t mem_arg(const U256& v) {
-    return (v.limbs[1] | v.limbs[2] | v.limbs[3]) != 0 ? UINT64_MAX : v.limbs[0];
-}
-
 // Unsigned compare of two big-endian 256-bit words (memcmp works: MSB first).
 inline bool be_lt(const evmc_uint256be& a, const evmc_uint256be& b) {
     return std::memcmp(a.bytes, b.bytes, 32) < 0;

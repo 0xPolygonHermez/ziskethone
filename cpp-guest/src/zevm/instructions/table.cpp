@@ -32,12 +32,12 @@ InstrTable build_table(evmc_revision rev) {
     register_arith(t);
     register_bitwise(t, rev);
     register_keccak(t);
-    register_env(t);
-    register_memory(t);
+    register_env(t, rev);
+    register_memory(t, rev);
     register_storage(t, rev);
     register_control(t);
     register_stack(t);
-    register_push(t);
+    register_push(t, rev);
     register_log(t);
     register_system(t, rev);
 
