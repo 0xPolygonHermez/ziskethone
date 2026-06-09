@@ -22,11 +22,13 @@ namespace zevm {
 
 inline constexpr size_t kStackLimit = 1024;
 
-// Fill `out` (a zero-initialized byte array of length codeSize) with the
-// JUMPDEST validity map: out[i] == 1 iff code[i] is a JUMPDEST (0x5b) that is
-// not inside PUSH immediate data. Shared by EvmState's own analysis and by the
-// evmc2 `prepare` path, which precomputes this once per distinct bytecode.
-void build_jumpdests(const uint8_t* code, size_t codeSize, uint8_t* out);
+// Fill `out` (ceil(codeSize/32) bytes) with the per-32-byte-chunk first-
+// instruction map: out[w] is the offset (0..31) of the first real opcode in
+// chunk w, or 32 if the chunk is entirely PUSH continuation. With `code` this
+// decides valid JUMPDESTs by a short local parse (see EvmState::is_jumpdest).
+// Shared by EvmState's own analysis and by the evmc2 `prepare` path, which
+// precomputes it once per distinct bytecode.
+void mark_first_instruction_in_word(const uint8_t* code, size_t codeSize, uint8_t* out);
 
 // All the mutable state of a single call frame. One EvmState is created per
 // execute() invocation (top-level call or nested CALL/CREATE) and destroyed
@@ -37,10 +39,12 @@ struct EvmState {
     const uint8_t* code = nullptr;     // borrowed; owned by the caller
     size_t         codeSize = 0;
 
-    // Per-byte JUMPDEST validity map, same length as `code`: analyzedCode[i]
-    // == 1 iff `code[i]` is a JUMPDEST opcode that is NOT inside PUSH data.
-    // Either borrowed from a precomputed evmc2 analysis (when one is passed to
-    // the ctor) or owned (allocated + filled by the ctor, freed by the dtor).
+    // First-instruction-per-chunk map (ceil(codeSize/32) bytes): analyzedCode[w]
+    // is the offset of chunk w's first opcode, or 32 if none (see
+    // mark_first_instruction_in_word). With `code` it decides valid JUMPDESTs
+    // (see is_jumpdest). Either borrowed from a precomputed evmc2 analysis (when
+    // one is passed to the ctor) or owned (allocated + filled by the ctor, freed
+    // by the dtor).
     const uint8_t* analyzedCode = nullptr;
     bool           ownsAnalysis = false;
 
@@ -98,8 +102,33 @@ struct EvmState {
     // halting; the execute() loop turns it into the returned evmc_result.
     evmc_status_code status = EVMC_SUCCESS;
 
+    // Is `pos` a valid jump target — in code, a JUMPDEST (0x5b) opcode, and not
+    // inside PUSH data? Quick-rejects non-0x5b, then parses forward from the
+    // first instruction of pos's chunk; if that instruction is past pos (pos is
+    // PUSH continuation), the covering PUSH started in the previous chunk, so one
+    // step back always lands on a real instruction <= pos. pos is a real opcode
+    // iff the parse lands exactly on it. Used by JUMP / JUMPI.
+    bool is_jumpdest(size_t pos) const {
+        if (pos >= codeSize || code[pos] != 0x5b)
+            return false;
+        size_t chunk = pos >> 5;       // pos / 32
+        size_t base  = chunk << 5;     // chunk * 32
+        if (base + analyzedCode[chunk] > pos) {  // first instruction past pos -> back up one chunk
+            --chunk;
+            base -= 32;
+        }
+        size_t p = base + analyzedCode[chunk];
+        while (p < pos) {
+            const uint8_t op = code[p];
+            p += (static_cast<int8_t>(op) >= static_cast<int8_t>(0x60))
+                     ? static_cast<size_t>(op - 0x60) + 2
+                     : 1;
+        }
+        return p == pos;
+    }
+
     // Creates and initializes the frame. If `prebuilt_analysis` is non-null it is
-    // borrowed as the JUMPDEST map (a length-`codeSize` array from a prior
+    // borrowed as the JUMPDEST bitmap (ceil(codeSize/8) bytes from a prior
     // build_jumpdests / evmc2 prepare); otherwise the map is built and owned
     // here. `code`/`msg`/`host`/`ctx`/`prebuilt_analysis` are borrowed and must
     // outlive this state.

@@ -20,9 +20,10 @@ namespace zevm {
 
 namespace {
 
-// zevm's evmc2_pre_execution: the precomputed JUMPDEST map for one bytecode.
+// zevm's evmc2_pre_execution: the first-instruction-per-32-byte-chunk map for
+// one bytecode (ceil(code_size/32) bytes; see mark_first_instruction_in_word).
 struct Analysis {
-    uint8_t* jumpdests = nullptr;  // length == code_size it was prepared from
+    uint8_t* firstInstr = nullptr;
 };
 
 // Run one frame to completion and build its evmc_result. `prebuilt` is an
@@ -83,15 +84,15 @@ evmc2_pre_execution* w_prepare(evmc_vm* /*vm*/, const uint8_t* code,
                                size_t code_size) noexcept {
     auto* a = new Analysis{};
     if (code_size != 0) {
-        a->jumpdests = static_cast<uint8_t*>(std::calloc(code_size, 1));
-        build_jumpdests(code, code_size, a->jumpdests);
+        a->firstInstr = static_cast<uint8_t*>(std::calloc((code_size + 31) / 32, 1));
+        mark_first_instruction_in_word(code, code_size, a->firstInstr);
     }
     return reinterpret_cast<evmc2_pre_execution*>(a);
 }
 
 void w_release(evmc_vm* /*vm*/, evmc2_pre_execution* pre) noexcept {
     auto* a = reinterpret_cast<Analysis*>(pre);
-    std::free(a->jumpdests);
+    std::free(a->firstInstr);
     delete a;
 }
 
@@ -100,7 +101,7 @@ evmc_result w_execute2(evmc_vm* /*vm*/, const evmc_host_interface* host,
                        const evmc_message* msg, const uint8_t* code,
                        size_t code_size, evmc2_pre_execution* pre) noexcept {
     const uint8_t* prebuilt =
-        pre != nullptr ? reinterpret_cast<Analysis*>(pre)->jumpdests : nullptr;
+        pre != nullptr ? reinterpret_cast<Analysis*>(pre)->firstInstr : nullptr;
     return run(host, context, rev, msg, code, code_size, prebuilt);
 }
 

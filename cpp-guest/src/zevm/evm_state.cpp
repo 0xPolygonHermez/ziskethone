@@ -9,24 +9,35 @@
 
 namespace zevm {
 
-void build_jumpdests(const uint8_t* code, size_t codeSize, uint8_t* out) {
-    // PUSH1 (0x60) .. PUSH32 (0x7f): the opcode is followed by 1..32 immediate
-    // bytes that must not be scanned for opcodes. JUMPDEST is 0x5b.
+void mark_first_instruction_in_word(const uint8_t* code, size_t codeSize, uint8_t* out) {
+    // For each 32-byte chunk, store the offset (0..31) of its first instruction —
+    // the first byte that is an opcode, not PUSH immediate data — or 32 if the
+    // chunk has none (it's entirely the continuation of a PUSH from an earlier
+    // chunk). `out` holds ceil(codeSize/32) bytes. This lets is_jumpdest begin a
+    // local parse near any position instead of scanning from the start of code.
     constexpr uint8_t PUSH1 = 0x60;
-    constexpr uint8_t PUSH32 = 0x7f;
-    constexpr uint8_t JUMPDEST = 0x5b;
+    const size_t nWords = (codeSize + 31) / 32;
+    if (nWords == 0)
+        return;  // empty code (callers also guard this)
 
-    for (size_t i = 0; i < codeSize;) {
-        const uint8_t op = code[i];
-        if (op == JUMPDEST) {
-            out[i] = 1;
-            ++i;
-        } else if (op >= PUSH1 && op <= PUSH32) {
-            i += static_cast<size_t>(op - PUSH1) + 2;  // opcode + immediate data
-        } else {
-            ++i;
+    const uint8_t* p          = code;  // next instruction boundary
+    const uint8_t* chunkStart = code;  // start of the chunk being recorded
+
+    // Full chunks (all but the last): every byte walked is within the code, so
+    // the inner walk needs no end check.
+    for (size_t i = 0; i + 1 < nWords; ++i) {
+        out[i] = static_cast<uint8_t>(p - chunkStart);  // 0..32 (32 == no instruction)
+        chunkStart += 32;
+        while (p < chunkStart) {  // advance past PUSH data to the next chunk's first opcode
+            const uint8_t op = *p;
+            p += (static_cast<int8_t>(op) >= static_cast<int8_t>(PUSH1))
+                     ? static_cast<size_t>(op - PUSH1) + 2   // opcode + immediate bytes
+                     : 1;
         }
     }
+    // Last (possibly partial) chunk: its first instruction may be past the code
+    // (a PUSH truncated at the end) -> 32. No walk needed; nothing follows it.
+    out[nWords - 1] = p < code + codeSize ? static_cast<uint8_t>(p - chunkStart) : 32;
 }
 
 EvmState::EvmState(const evmc_message* msg,
@@ -46,9 +57,9 @@ EvmState::EvmState(const evmc_message* msg,
         analyzedCode = prebuilt_analysis;  // borrowed (e.g. from evmc2 prepare)
         ownsAnalysis = false;
     } else if (codeSize != 0) {
-        // One JUMPDEST-map byte per code byte. Zero-initialized, then filled.
-        auto* buf = static_cast<uint8_t*>(std::calloc(codeSize, 1));
-        build_jumpdests(code, codeSize, buf);
+        // First-instruction-per-32-byte-chunk map: ceil(codeSize/32) bytes.
+        auto* buf = static_cast<uint8_t*>(std::calloc((codeSize + 31) / 32, 1));
+        mark_first_instruction_in_word(code, codeSize, buf);
         analyzedCode = buf;
         ownsAnalysis = true;
     }
