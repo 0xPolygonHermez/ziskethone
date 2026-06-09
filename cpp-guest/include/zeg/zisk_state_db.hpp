@@ -35,8 +35,8 @@
 #include <vector>
 
 #include <evmc/evmc.hpp>
-#include <evmone/baseline.hpp>  // CodeAnalysis / analyze / execute(VM&, ...)
-#include <evmone/vm.hpp>        // evmone::VM (the type behind vm_raw_)
+
+#include "zeg/evmc2.h"          // backend-agnostic VM interface (prepare/execute2)
 
 #include "zeg/accounts.hpp"
 #include "zeg/consensus_info.hpp"
@@ -71,6 +71,9 @@ public:
                 Contracts&            contracts,
                 const PreviousBlocks& previous_blocks,
                 Storages&             storages);
+
+    // Releases every cached pre-analysis handle and destroys the owned VM.
+    ~ZiskStateDB();
 
     // ===== evmc::Host overrides =====
     //
@@ -119,46 +122,19 @@ public:
     // interface (callers below the top level use copy_code instead).
     std::span<const uint8_t> code(const evmc::address& addr) const noexcept;
 
-    // Like code(), but also returns the account's code-hash (the cache key for
-    // the analysis-caching exec() overload). `out_hash` is set to the empty-code
-    // hash when the account has no code.
+    // Like code(), but also returns the account's code-hash. `out_hash` is set
+    // to the empty-code hash when the account has no code. The hash keys the
+    // per-contract pre-analysis (see analysis_for).
     std::span<const uint8_t> code_and_hash(const evmc::address& addr,
                                            evmc::bytes32& out_hash) const noexcept;
 
-    // Execute `code` against the owned EVM via the raw evmc C ABI (the
-    // replaceable boundary). `*this` is the evmc::Host, so the host interface and
-    // context come straight from it; the evmc::Result wraps/owns the C result.
-    // Used for both top-level execution (from main()) and nested calls.
-    evmc::Result exec(evmc_revision rev, const evmc_message& msg,
-                      const uint8_t* code, size_t code_size) noexcept {
-        return evmc::Result{vm_raw_->execute(
-            vm_raw_, &evmc::Host::get_interface(), to_context(), rev, &msg, code, code_size)};
-    }
-
-    // Same as above, but reuses a cached baseline analysis keyed by the code's
-    // keccak hash. evmone's public execute() rebuilds the full CodeAnalysis
-    // (jumpdest map + padded code) on *every* call; for a contract called many
-    // times in a block that re-analysis dominates cost. `analyze()` depends only
-    // on the bytecode, so we analyze once per distinct code and dispatch through
-    // evmone's pre-analyzed execute() overload thereafter. Used only where the
-    // code-hash is known for free from account state (regular CALLs); CREATE
-    // initcode keeps the plain exec() above (it runs once, and its transient
-    // bytes are not a stable cache key).
-    evmc::Result exec(evmc_revision rev, const evmc_message& msg,
-                      const uint8_t* code, size_t code_size,
-                      const evmc::bytes32& code_hash) noexcept {
-        auto it = analysis_cache_.find(code_hash);
-        if (it == analysis_cache_.end()) {
-            it = analysis_cache_
-                     .emplace(code_hash,
-                              evmone::baseline::analyze(
-                                  evmone::bytes_view{code, code_size}))
-                     .first;
-        }
-        return evmc::Result{evmone::baseline::execute(
-            *static_cast<evmone::VM*>(vm_raw_), evmc::Host::get_interface(),
-            to_context(), rev, msg, it->second)};
-    }
+    // Returns the pre-analysis handle for the code at `code_hash`, preparing it
+    // once (via vm2_->prepare) on first use and caching it on the Contract for
+    // the rest of the block. Returns nullptr when the account has no code. Pass
+    // the result straight to vm2_->execute2 — that's how the call sites avoid
+    // re-analyzing a contract on every invocation. The handle is owned by the VM
+    // and released in the destructor (Contracts::release_analyses).
+    evmc2_pre_execution* analysis_for(const evmc::bytes32& code_hash) noexcept;
 
     // ----- tx_context plumbing -----
     //
@@ -389,7 +365,7 @@ private:
     // fields filled by pre_execute_block) + per-tx fields from `tx`.
     // `blob_hashes` and `initcodes_vec` are scratch buffers the caller
     // owns; pointers into them are written into the returned ctx so
-    // they must outlive any subsequent exec() call.
+    // they must outlive any subsequent execute2 call.
     evmc_tx_context build_per_tx_context(
         const Transactions::View&        tx,
         std::vector<evmc::bytes32>&      blob_hashes,
@@ -464,29 +440,12 @@ private:
 
     evmc_tx_context       tx_context_{};
     Journal               journal_{};
-    // The owned EVM, held as the raw evmc_vm* so execution goes through the pure
-    // evmc C ABI (see exec() above) — keeping the boundary VM-agnostic.
-    evmc_vm*              vm_raw_;
+    // The owned EVM, held through the evmc2 interface (a backwards-compatible
+    // superset of evmc) so execution goes through the VM-agnostic boundary and
+    // analysis caching is expressed via prepare()/execute2() (the call sites use
+    // vm2_->execute2 directly; see analysis_for()).
+    evmc2_vm*             vm2_;
 
-    // Per-block cache of baseline analyses, keyed by code-hash. Filled lazily by
-    // the analysis-caching exec() overload so each distinct contract bytecode is
-    // analyzed once instead of on every call. CodeAnalysis is move-only and owns
-    // its padded-code buffer; the map keeps it alive for the block. The key
-    // bytes are already cryptographic-grade, so they double as the hash.
-    struct CodeHashAsHash {
-        size_t operator()(const evmc::bytes32& h) const noexcept {
-            size_t v;
-            std::memcpy(&v, h.bytes, sizeof(v));
-            return v;
-        }
-    };
-    struct CodeHashEq {
-        bool operator()(const evmc::bytes32& a, const evmc::bytes32& b) const noexcept {
-            return std::memcmp(a.bytes, b.bytes, sizeof(a.bytes)) == 0;
-        }
-    };
-    std::unordered_map<evmc::bytes32, evmone::baseline::CodeAnalysis,
-                       CodeHashAsHash, CodeHashEq> analysis_cache_;
     // EIP-1153 transient storage. Reset at the start of every EVM
     // frame (each tx + each system call) by the call sites that bump
     // tx_counter_. TSTORE writes are journaled so revert restores

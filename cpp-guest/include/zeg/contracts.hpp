@@ -15,6 +15,10 @@
 
 #include <evmc/evmc.hpp>
 
+// Opaque evmc2 pre-analysis handle (the VM defines its layout; a Contract only
+// caches a pointer to it). Forward-declared to avoid pulling evmc2.h here.
+struct evmc2_pre_execution;
+
 namespace zeg {
 
 class Contracts {
@@ -25,6 +29,12 @@ public:
         evmc::bytes32  hash;
         const uint8_t* code;
         uint64_t       code_size;
+        // Pre-analysis handle for this bytecode (jumpdest map etc.), prepared
+        // once per block on first execution and reused across calls. Owned by
+        // the VM that produced it (via evmc2 prepare/release); `mutable` so it
+        // can be filled lazily through a `const Contract&`. See
+        // `Contracts::release_analyses` for teardown.
+        mutable ::evmc2_pre_execution* analysis = nullptr;
     };
 
     // Build the table by reading a `u64` count from `cursor` followed
@@ -56,6 +66,20 @@ public:
     const Contract& at(size_t idx) const { return contracts_[idx]; }
 
     uint64_t size() const noexcept { return contracts_.size(); }
+
+    // Release every prepared analysis handle and clear it. The handles are owned
+    // by the VM, so the caller passes a releaser that forwards to the VM's
+    // release_pre_execution; this just walks the table. Called on teardown,
+    // before the VM is destroyed.
+    template <class Release>
+    void release_analyses(Release&& release) {
+        for (auto& c : contracts_) {
+            if (c.analysis != nullptr) {
+                release(c.analysis);
+                c.analysis = nullptr;
+            }
+        }
+    }
 
     // Insert a contract deployed at runtime (CREATE/CREATE2). The
     // prover's prestate diff omits contracts that are created and then

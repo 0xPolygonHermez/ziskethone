@@ -169,6 +169,7 @@ set(GUEST_SOURCES
     src/storages.cpp
     src/transactions.cpp
     src/transient_storage.cpp
+    src/evmc2_evmone.cpp
     src/zisk_crypto.cpp
     src/zisk_state_db.cpp
 )
