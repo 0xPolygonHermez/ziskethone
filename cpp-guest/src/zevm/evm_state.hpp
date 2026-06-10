@@ -22,6 +22,11 @@ namespace zevm {
 
 inline constexpr size_t kStackLimit = 1024;
 
+// EVM maximum call depth — also the number of preallocated frames (one per live
+// depth) and == EVMMem's handle count. run() indexes its static frame array by
+// the message's call depth, the same index EVMMem uses for its zones.
+inline constexpr size_t kMaxCallDepth = 1024;
+
 // Fill `out` (ceil(codeSize/32) bytes) with the per-32-byte-chunk first-
 // instruction map: out[w] is the offset (0..31) of the first real opcode in
 // chunk w, or 32 if the chunk is entirely PUSH continuation. With `code` this
@@ -30,30 +35,31 @@ inline constexpr size_t kStackLimit = 1024;
 // precomputes it once per distinct bytecode.
 void mark_first_instruction_in_word(const uint8_t* code, size_t codeSize, uint8_t* out);
 
-// All the mutable state of a single call frame. One EvmState is created per
-// execute() invocation (top-level call or nested CALL/CREATE) and destroyed
-// when the frame returns.
+// All the mutable state of a single call frame. Frames are preallocated, one per
+// call depth, in run()'s static g_frames array and reused across calls — so
+// EvmState is a *trivial* type (no in-class member initializers, trivial default
+// ctor + dtor) and the array is plain BSS with no global ctor/atexit pass over
+// it. reset() initializes every field for a new frame; teardown() releases it.
 struct EvmState {
     // ----- program counter & code -----
-    size_t         pc = 0;
-    const uint8_t* code = nullptr;     // borrowed; owned by the caller
-    size_t         codeSize = 0;
+    size_t         pc;
+    const uint8_t* code;               // borrowed; owned by the caller
+    size_t         codeSize;
 
     // First-instruction-per-chunk map (ceil(codeSize/32) bytes): analyzedCode[w]
     // is the offset of chunk w's first opcode, or 32 if none (see
     // mark_first_instruction_in_word). With `code` it decides valid JUMPDESTs
-    // (see is_jumpdest). Either borrowed from a precomputed evmc2 analysis (when
-    // one is passed to the ctor) or owned (allocated + filled by the ctor, freed
-    // by the dtor).
-    const uint8_t* analyzedCode = nullptr;
-    bool           ownsAnalysis = false;
+    // (see is_jumpdest). Either borrowed from a precomputed evmc2 analysis or
+    // owned (allocated + filled by reset(), freed by teardown()).
+    const uint8_t* analyzedCode;
+    bool           ownsAnalysis;
 
     // ----- operand stack -----
     // 256-bit words. stackPointer follows the spec's convention: it counts
     // DOWN from kStackLimit (empty) toward 0 (full). A push pre-decrements,
     // a pop post-increments. Number of live items == kStackLimit - stackPointer.
     U256           stack[kStackLimit];
-    uint32_t       stackPointer = kStackLimit;   // kStackLimit == empty
+    uint32_t       stackPointer;       // kStackLimit == empty
 
     // Per-entry endianness of stack[i] (lazy-endianness optimization): 0 == LE
     // (standard limbs, what zeg::bi consumes), 1 == BE (byteswap256 of the value
@@ -65,29 +71,30 @@ struct EvmState {
     // ----- memory -----
     // Handle into the static EVMMem manager (== this frame's call depth). The
     // frame's bytes live in one of EVMMem's two zones; access goes through
-    // EVMMem::readBytes/writeBytes, which use the current top handle. Set by the ctor
-    // (createMemory), released by the dtor (destroyMemory).
-    int            memHandle = -1;
+    // EVMMem::readBytes/writeBytes, which use the current top handle. Set by
+    // reset() (createMemory), released by teardown() (destroyMemory); -1 == no
+    // live EVMMem frame (the guard that makes teardown idempotent).
+    int            memHandle;
 
     // ----- gas -----
-    int64_t        gas = 0;
+    int64_t        gas;
     // Accumulated gas refund (SSTORE clears, etc.; may go negative). Reported in
     // the frame's evmc_result on success; the host applies the EIP-3529 cap.
-    int64_t        gas_refund = 0;
+    int64_t        gas_refund;
 
     // ----- evmc plumbing -----
-    const evmc_message*           evmcMsg = nullptr;   // borrowed (this frame's message)
-    evmc_result*                  evmcResult = nullptr; // result being built for this frame
-    evmc_result*                  lastResult = nullptr; // result of the most recent sub-call
-    const evmc_host_interface*    host = nullptr;       // borrowed
-    evmc_host_context*            context = nullptr;    // borrowed
-    evmc_revision                 rev = EVMC_FRONTIER;
+    const evmc_message*           evmcMsg;     // borrowed (this frame's message)
+    evmc_result*                  evmcResult;  // result being built for this frame
+    evmc_result*                  lastResult;  // result of the most recent sub-call
+    const evmc_host_interface*    host;        // borrowed
+    evmc_host_context*            context;     // borrowed
+    evmc_revision                 rev;
 
     // ----- output & return data -----
     // RETURN/REVERT set the frame's output region (a window into memory); run()
     // copies it into the evmc_result. output_size == 0 means no output.
-    size_t         output_offset = 0;
-    size_t         output_size   = 0;
+    size_t         output_offset;
+    size_t         output_size;
     // The most recent sub-call's result (CALL family), whose output_data/
     // output_size back RETURNDATASIZE / RETURNDATACOPY — no copy. A zevm child
     // runs at depth+1, i.e. the *other* EVMMem zone (depth parity), which the
@@ -95,12 +102,12 @@ struct EvmState {
     // call. Released when superseded or at teardown — which only does work for a
     // precompile's output (heap-owned: malloc'd, release set); a zevm child's
     // output lives in EVMMem and has no release.
-    evmc_result    returnDataOwner{};
+    evmc_result    returnDataOwner;
 
     // ----- execution control -----
     // The status the frame will report back to evmc. Handlers set this before
     // halting; the execute() loop turns it into the returned evmc_result.
-    evmc_status_code status = EVMC_SUCCESS;
+    evmc_status_code status;
 
     // Is `pos` a valid jump target — in code, a JUMPDEST (0x5b) opcode, and not
     // inside PUSH data? Quick-rejects non-0x5b, then parses forward from the
@@ -127,19 +134,35 @@ struct EvmState {
         return p == pos;
     }
 
-    // Creates and initializes the frame. If `prebuilt_analysis` is non-null it is
-    // borrowed as the JUMPDEST bitmap (ceil(codeSize/8) bytes from a prior
-    // build_jumpdests / evmc2 prepare); otherwise the map is built and owned
-    // here. `code`/`msg`/`host`/`ctx`/`prebuilt_analysis` are borrowed and must
-    // outlive this state.
+    // (Re)initialize this frame for a new call: sets every field (a reused slot
+    // has stale values), borrows or builds the chunk map, and pushes a fresh
+    // EVMMem frame. `code`/`msg`/`host`/`ctx`/`prebuilt_analysis` are borrowed and
+    // must outlive the frame. When `prebuilt_analysis` is non-null it is borrowed
+    // as the chunk map (from a prior evmc2 prepare); else the map is built/owned.
+    void reset(const evmc_message* msg,
+               const uint8_t* code, size_t codeSize,
+               const evmc_host_interface* host,
+               evmc_host_context* ctx,
+               evmc_revision rev,
+               const uint8_t* prebuilt_analysis = nullptr);
+
+    // Release the frame: pop its EVMMem frame, free an owned chunk map, release a
+    // held sub-call result. Idempotent (guarded by memHandle).
+    void teardown();
+
+    // Trivial default ctor + dtor keep the static g_frames array plain BSS (no
+    // global init/atexit pass). The argument ctor is a convenience for
+    // stack-allocated frames (host unit tests); they must call teardown().
+    EvmState() = default;
+    ~EvmState() = default;
     EvmState(const evmc_message* msg,
              const uint8_t* code, size_t codeSize,
              const evmc_host_interface* host,
              evmc_host_context* ctx,
              evmc_revision rev,
-             const uint8_t* prebuilt_analysis = nullptr);
-
-    ~EvmState();
+             const uint8_t* prebuilt_analysis = nullptr) {
+        reset(msg, code, codeSize, host, ctx, rev, prebuilt_analysis);
+    }
 
     EvmState(const EvmState&) = delete;
     EvmState& operator=(const EvmState&) = delete;

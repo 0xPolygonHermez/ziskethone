@@ -40,19 +40,33 @@ void mark_first_instruction_in_word(const uint8_t* code, size_t codeSize, uint8_
     out[nWords - 1] = p < code + codeSize ? static_cast<uint8_t>(p - chunkStart) : 32;
 }
 
-EvmState::EvmState(const evmc_message* msg,
-                   const uint8_t* code_, size_t codeSize_,
-                   const evmc_host_interface* host_,
-                   evmc_host_context* ctx_,
-                   evmc_revision rev_,
-                   const uint8_t* prebuilt_analysis)
-    : code(code_),
-      codeSize(codeSize_),
-      gas(msg ? msg->gas : 0),
-      evmcMsg(msg),
-      host(host_),
-      context(ctx_),
-      rev(rev_) {
+void EvmState::reset(const evmc_message* msg,
+                     const uint8_t* code_, size_t codeSize_,
+                     const evmc_host_interface* host_,
+                     evmc_host_context* ctx_,
+                     evmc_revision rev_,
+                     const uint8_t* prebuilt_analysis) {
+    // Every field is set explicitly: a slot reused from run()'s static frame
+    // array carries the previous frame's values, and EvmState has no in-class
+    // member initializers. stack[]/stackBE[] are intentionally left untouched —
+    // only entries below stackPointer are read, and pushes write them first.
+    pc            = 0;
+    code          = code_;
+    codeSize      = codeSize_;
+    stackPointer  = kStackLimit;
+    gas           = msg ? msg->gas : 0;
+    gas_refund    = 0;
+    evmcMsg       = msg;
+    evmcResult    = nullptr;
+    lastResult    = nullptr;
+    host          = host_;
+    context       = ctx_;
+    rev           = rev_;
+    output_offset = 0;
+    output_size   = 0;
+    returnDataOwner = evmc_result{};
+    status        = EVMC_SUCCESS;
+
     if (prebuilt_analysis != nullptr) {
         analyzedCode = prebuilt_analysis;  // borrowed (e.g. from evmc2 prepare)
         ownsAnalysis = false;
@@ -63,21 +77,32 @@ EvmState::EvmState(const evmc_message* msg,
         mark_first_instruction_in_word(code, codeSize, buf);
         analyzedCode = buf;
         ownsAnalysis = true;
+    } else {
+        analyzedCode = nullptr;
+        ownsAnalysis = false;
     }
 
-    // Push this frame's memory onto the static manager. Nested EvmStates are
-    // created/destroyed strictly LIFO, matching EVMMem's stack discipline.
+    // Push this frame's memory onto the static manager. Frames are reset/torn
+    // down strictly LIFO, matching EVMMem's stack discipline.
     memHandle = EVMMem::createMemory();
 }
 
-EvmState::~EvmState() {
-    EVMMem::destroyMemory();
-    if (ownsAnalysis)
+void EvmState::teardown() {
+    if (memHandle != -1) {
+        EVMMem::destroyMemory();
+        memHandle = -1;
+    }
+    if (ownsAnalysis) {
         std::free(const_cast<uint8_t*>(analyzedCode));
+        analyzedCode = nullptr;
+        ownsAnalysis = false;
+    }
     // Release the last sub-call's result if it owns its output (precompiles);
     // a zevm child's output lives in EVMMem and has no release.
-    if (returnDataOwner.release)
+    if (returnDataOwner.release) {
         returnDataOwner.release(&returnDataOwner);
+        returnDataOwner = evmc_result{};
+    }
 }
 
 }  // namespace zevm

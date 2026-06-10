@@ -11,7 +11,6 @@
 #include "zevm.hpp"
 
 #include <cstdlib>
-#include <memory>
 
 #include "evm_mem.hpp"     // EVMMem::data — the frame's output window
 #include "evm_state.hpp"
@@ -27,6 +26,13 @@ struct Analysis {
     uint8_t* firstInstr = nullptr;
 };
 
+// One preallocated frame per call depth, reused across calls (the call stack has
+// exactly one live frame per depth). Static (not heap): the trivial EvmState
+// makes this plain zeroed BSS. run() reset()s the slot on entry, teardown()s it
+// on return. Indexed by msg->depth — the same index EVMMem uses for its zones,
+// so the existing depth-limit light-fail keeps it in range.
+EvmState g_frames[kMaxCallDepth];
+
 // Run one frame to completion and build its evmc_result. `prebuilt` is an
 // optional JUMPDEST map borrowed for this frame; when null, EvmState builds its
 // own.
@@ -34,14 +40,13 @@ evmc_result run(const evmc_host_interface* host, evmc_host_context* context,
                 evmc_revision rev, const evmc_message* msg,
                 const uint8_t* code, size_t code_size,
                 const uint8_t* prebuilt) noexcept {
-    // EvmState is large (~34 KB — it embeds the 1024-entry operand stack), and a
-    // nested CALL re-enters run() recursively up to EVM max depth (1024). Keeping
-    // it on the native C++ stack would need ~34 MB at full depth and overflow the
-    // thread stack; allocate it on the heap so deep recursion keeps only small
-    // frames on the native stack.
-    auto statePtr =
-        std::make_unique<EvmState>(msg, code, code_size, host, context, rev, prebuilt);
-    EvmState& state = *statePtr;
+    // Use this depth's preallocated frame and reset it for the call. EvmState is
+    // large (~34 KB — it embeds the 1024-entry operand stack); the static array
+    // keeps it off both the native C++ stack (a nested CALL re-enters run()
+    // recursively, so on-stack frames would overflow the thread stack near max
+    // depth) and the heap (no per-frame allocation).
+    EvmState& state = g_frames[msg->depth];
+    state.reset(msg, code, code_size, host, context, rev, prebuilt);
 
     // Dispatch table for this revision (fork-gated opcodes resolved at build).
     const InstrTable& itable = instruction_table_for(rev);
@@ -68,6 +73,11 @@ evmc_result run(const evmc_host_interface* host, evmc_host_context* context,
     result.output_data = state.output_size != 0 ? EVMMem::data(state.output_offset) : nullptr;
     result.output_size = state.output_size;
     result.release = nullptr;
+
+    // Release the frame (pop its EVMMem zone, free an owned chunk map, release any
+    // held sub-call result). The output pointer above was captured while the frame
+    // was active; its bytes stay conserved in the popped zone (depth parity).
+    state.teardown();
     return result;
 }
 
