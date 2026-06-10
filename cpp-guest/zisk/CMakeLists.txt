@@ -77,13 +77,15 @@ message(STATUS "intx include: ${INTX_INCLUDE}")
 # Guest sources (exclude host-only crypto backends; main.cpp etc. are dual-mode).
 file(GLOB GUEST_SRC ${GUEST_ROOT}/src/*.cpp)
 
-# --- EVM backend: zevm (default, hand-written) | evmone ----------------------
+# --- EVM backend: evmone (default, upstream) | zevm (hand-written) -----------
 # zevm swaps the evmc2 VM only: zisk_state_db.cpp picks evmc2_create_zevm over
 # evmc2_create_evmone under USE_ZEVM. evmone's precompiles/state still build (the
 # host dispatches ECRECOVER/MODEXP/… through them); just the interpreter changes.
 # zevm's 256-bit math compiles against the ZisK zeg::bi backend (ZEG_ZISK), and
 # its KECCAK256 resolves to the same accelerated ethash_keccak256 (keccak_zisk).
-set(EVM_BACKEND "zevm" CACHE STRING "EVM implementation: zevm | evmone")
+# evmone is the default: its baseline interpreter is currently ~30% cheaper on
+# ZisK for contract-heavy blocks (zevm pays per-op byteswaps + gas/stack checks).
+set(EVM_BACKEND "evmone" CACHE STRING "EVM implementation: evmone | zevm")
 if(EVM_BACKEND STREQUAL "zevm")
   list(FILTER GUEST_SRC EXCLUDE REGEX "/evmc2_evmone\\.cpp$")
   file(GLOB ZEVM_SRC ${GUEST_ROOT}/src/zevm/*.cpp ${GUEST_ROOT}/src/zevm/instructions/*.cpp)
