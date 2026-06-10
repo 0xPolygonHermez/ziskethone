@@ -1,7 +1,7 @@
 // detail.hpp — internal shared bits for the zevm opcode handlers.
 //
 // Included by every instructions/<category>.cpp. Holds the small helpers the
-// handlers share (gas tiers, stack depth, unaligned loads, the libgcc byte
+// handlers share (gas tiers, stack depth, unaligned loads, the inline byte
 // swap) plus the per-category table-registration declarations consumed by
 // table.cpp. Not a public header — the dispatch surface is instructions.hpp.
 
@@ -14,7 +14,7 @@
 
 #include "evm_state.hpp"     // EvmState, kStackLimit
 #include "instructions.hpp"  // InstrFn, InstrTable
-#include "u256.hpp"          // U256, u256_from_be/to_be, __bswapdi2
+#include "u256.hpp"          // U256, u256_from_be/to_be, bswap64
 
 namespace zevm {
 

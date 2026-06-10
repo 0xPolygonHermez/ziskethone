@@ -10,20 +10,30 @@
 #include <cstdint>
 #include <cstring>  // std::memcpy
 
-// libgcc 64-bit byte swap: soft implementation in zisk/compiler_rt.cpp on the
-// ZisK target (rv64ima, no Zbb), compiler-rt builtin on the host.
-extern "C" uint64_t __bswapdi2(uint64_t);
-
 namespace zevm {
 
 struct U256 {
     uint64_t limbs[4];
 };
 
+// 64-bit byte swap, inline (no Zbb on the ZisK target, so this is the soft
+// shift/mask sequence; inlining drops the call/ret that an out-of-line
+// __bswapdi2 would cost per limb). Zero shortcut: zevm's lazy endianness swaps
+// whole 256-bit words and most EVM values are small, so typically 3 of 4 limbs
+// are zero — those exit in ~2 steps instead of the ~20-op body, while nonzero
+// limbs pay a single untaken branch.
+inline uint64_t bswap64(uint64_t x) {
+    if (x == 0) return 0;
+    return  (x >> 56) | ((x >> 40) & 0xFF00ull) | ((x >> 24) & 0xFF0000ull) |
+            ((x >> 8) & 0xFF000000ull) | ((x << 8) & 0xFF00000000ull) |
+            ((x << 24) & 0xFF0000000000ull) | ((x << 40) & 0xFF000000000000ull) |
+            (x << 56);
+}
+
 // Load a 256-bit value from 32 big-endian bytes (bytes[0] is most significant),
 // the on-wire layout used by EVM code immediates (PUSH) and memory (MLOAD). On a
 // little-endian target each 8-byte group reads as a word whose byte order is the
-// reverse of the wire, so one __bswapdi2 per limb fixes it; bytes[0..7] are the
+// reverse of the wire, so one bswap64 per limb fixes it; bytes[0..7] are the
 // most significant, hence limb[3].
 inline U256 u256_from_be(const uint8_t bytes[32]) {
     uint64_t w0, w1, w2, w3;
@@ -31,16 +41,16 @@ inline U256 u256_from_be(const uint8_t bytes[32]) {
     std::memcpy(&w2, bytes +  8, 8);
     std::memcpy(&w1, bytes + 16, 8);
     std::memcpy(&w0, bytes + 24, 8);
-    return U256{{__bswapdi2(w0), __bswapdi2(w1), __bswapdi2(w2), __bswapdi2(w3)}};
+    return U256{{bswap64(w0), bswap64(w1), bswap64(w2), bswap64(w3)}};
 }
 
 // Store a 256-bit value as 32 big-endian bytes (out[0] is most significant) —
 // the inverse of u256_from_be, used by MSTORE / RETURN / LOG / KECCAK input.
 inline void u256_to_be(const U256& v, uint8_t out[32]) {
-    const uint64_t w3 = __bswapdi2(v.limbs[3]);   // most significant limb -> out[0..7]
-    const uint64_t w2 = __bswapdi2(v.limbs[2]);
-    const uint64_t w1 = __bswapdi2(v.limbs[1]);
-    const uint64_t w0 = __bswapdi2(v.limbs[0]);
+    const uint64_t w3 = bswap64(v.limbs[3]);   // most significant limb -> out[0..7]
+    const uint64_t w2 = bswap64(v.limbs[2]);
+    const uint64_t w1 = bswap64(v.limbs[1]);
+    const uint64_t w0 = bswap64(v.limbs[0]);
     std::memcpy(out +  0, &w3, 8);
     std::memcpy(out +  8, &w2, 8);
     std::memcpy(out + 16, &w1, 8);
@@ -50,10 +60,10 @@ inline void u256_to_be(const U256& v, uint8_t out[32]) {
 // Reverse all 32 bytes of a 256-bit word. This converts between the two stack
 // representations (see EvmState::stackBE): LE limbs <-> the big-endian wire form
 // (the 32 memory/code bytes loaded directly as four little-endian words). It is
-// its own inverse. Four __bswapdi2 plus a limb reorder.
+// its own inverse. Four bswap64 plus a limb reorder.
 inline U256 byteswap256(const U256& x) {
-    return U256{{__bswapdi2(x.limbs[3]), __bswapdi2(x.limbs[2]),
-                 __bswapdi2(x.limbs[1]), __bswapdi2(x.limbs[0])}};
+    return U256{{bswap64(x.limbs[3]), bswap64(x.limbs[2]),
+                 bswap64(x.limbs[1]), bswap64(x.limbs[0])}};
 }
 
 // ----- value helpers (shared by the arithmetic / bitwise opcode handlers) -----
