@@ -3,6 +3,7 @@
 #include <cstdio>
 
 #include "zeg/fatal.hpp"
+#include "zeg/hash_reserve.hpp"
 #include "zeg/stream.hpp"
 
 namespace zeg {
@@ -13,7 +14,7 @@ void Storages::reserve(uint64_t count) {
     originals_.reserve(count);
     mods_.reserve(count);
     leaf_.reserve(count);
-    index_.reserve(count);
+    hash_reserve_empty(index_, count);  // not .reserve(): see zeg/hash_reserve.hpp
 }
 
 size_t Storages::append(const evmc::address& address,

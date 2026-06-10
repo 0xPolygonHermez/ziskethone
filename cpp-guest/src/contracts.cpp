@@ -6,6 +6,7 @@
 #include <evmone_precompiles/keccak.hpp>
 
 #include "zeg/fatal.hpp"
+#include "zeg/hash_reserve.hpp"
 #include "zeg/stream.hpp"
 
 namespace zeg {
@@ -13,7 +14,7 @@ namespace zeg {
 Contracts::Contracts(const uint8_t*& cursor) {
     const uint64_t count = read_u64_le(cursor);
     contracts_.reserve(count);
-    index_.reserve(count);
+    hash_reserve_empty(index_, count);  // not .reserve(): see zeg/hash_reserve.hpp
     for (uint64_t i = 0; i < count; ++i) {
         const uint64_t size = read_u64_le(cursor);
         const uint8_t* code = cursor;
