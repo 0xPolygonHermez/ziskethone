@@ -20,11 +20,10 @@ namespace zevm {
 
 namespace {
 
-// zevm's evmc2_pre_execution: the first-instruction-per-32-byte-chunk map for
-// one bytecode (ceil(code_size/32) bytes; see mark_first_instruction_in_word).
-struct Analysis {
-    uint8_t* firstInstr = nullptr;
-};
+// zevm's evmc2_pre_execution handle IS the first-instruction-per-32-byte-chunk
+// map itself: ceil(code_size/32) malloc'd bytes (see
+// mark_first_instruction_in_word), cast to/from the opaque handle type — no
+// wrapper struct. Null when code_size == 0 (nothing to analyze).
 
 // One preallocated frame per call depth, reused across calls (the call stack has
 // exactly one live frame per depth). Static (not heap): the trivial EvmState
@@ -103,28 +102,24 @@ evmc_capabilities_flagset w_get_capabilities(evmc_vm* /*vm*/) noexcept {
 
 evmc2_pre_execution* w_prepare(evmc_vm* /*vm*/, const uint8_t* code,
                                size_t code_size) noexcept {
-    auto* a = new Analysis{};
-    if (code_size != 0) {
-        // malloc (not calloc): mark_first_instruction_in_word writes every byte.
-        a->firstInstr = static_cast<uint8_t*>(std::malloc((code_size + 31) / 32));
-        mark_first_instruction_in_word(code, code_size, a->firstInstr);
-    }
-    return reinterpret_cast<evmc2_pre_execution*>(a);
+    if (code_size == 0)
+        return nullptr;
+    // malloc (not calloc): mark_first_instruction_in_word writes every byte.
+    auto* map = static_cast<uint8_t*>(std::malloc((code_size + 31) / 32));
+    mark_first_instruction_in_word(code, code_size, map);
+    return reinterpret_cast<evmc2_pre_execution*>(map);
 }
 
 void w_release(evmc_vm* /*vm*/, evmc2_pre_execution* pre) noexcept {
-    auto* a = reinterpret_cast<Analysis*>(pre);
-    std::free(a->firstInstr);
-    delete a;
+    std::free(pre);
 }
 
 evmc_result w_execute2(evmc_vm* /*vm*/, const evmc_host_interface* host,
                        evmc_host_context* context, evmc_revision rev,
                        const evmc_message* msg, const uint8_t* code,
                        size_t code_size, evmc2_pre_execution* pre) noexcept {
-    const uint8_t* prebuilt =
-        pre != nullptr ? reinterpret_cast<Analysis*>(pre)->firstInstr : nullptr;
-    return run(host, context, rev, msg, code, code_size, prebuilt);
+    return run(host, context, rev, msg, code, code_size,
+               reinterpret_cast<const uint8_t*>(pre));
 }
 
 }  // namespace
