@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use alloy::consensus::TxEnvelope;
 use alloy::eips::eip2718::Encodable2718;
-use alloy::primitives::{Address, PrimitiveSignature, B256, U256};
+use alloy::primitives::{Address, B256, U256};
 use alloy::rpc::types::{Block, BlockTransactions};
 use anyhow::Result;
 use sha3::{Digest, Keccak256};
@@ -18,6 +18,9 @@ use crate::writer::Writer;
 
 /// On-wire format version, written in the 4 bytes after the magic.
 /// Must match the guest's `kVersion` in `cpp-guest/include/zeg/binary_format.hpp`.
+/// v6: no more secp256k1 pubkey hints — the per-tx 64 B sender pubkey and the
+/// Type-4 per-authorization 64 B pubkeys are gone; the guest recovers every
+/// signer itself via ecrecover (fp_sqrt-fcall accelerated on ZisK).
 /// v5: ConsensusInfo prefix +8 B — adds blob_base_fee_update_fraction (u64-le at
 /// offset 344) so the guest uses the block's actual blob schedule fraction.
 /// v4: witness-only StateRoot — the encoder transcribes the pre-state MPT
@@ -32,7 +35,7 @@ use crate::writer::Writer;
 /// derives read-only-ness dynamically (original == current).
 /// v1: StateRoot `Op::Leaf` carries no index (keccak-sorted tables +
 /// counter-derived index in the guest).
-pub const FORMAT_VERSION: u32 = 5;
+pub const FORMAT_VERSION: u32 = 6;
 
 /// File magic prefix (8 bytes): 4 B ASCII `"ZEG0"` + 4 B little-endian
 /// format version, which also keeps the cursor 8-byte aligned for the
@@ -170,8 +173,10 @@ pub fn write_consensus_info(
 /// Section 2 — `Transactions`.
 ///
 /// For each tx in `current.transactions`, writes the per-tx record:
-///   `u64 envelope_size` + 64 B sender pubkey + envelope bytes
-///   + pad-to-8 + (if Type-4) N × 64 B auth-signer pubkeys.
+///   `u64 envelope_size` + envelope bytes + pad-to-8.
+///
+/// No pubkey hints: the guest recovers every signer (tx sender, EIP-7702
+/// auth signers) from the signatures itself via ecrecover.
 ///
 /// `current` must have been fetched with `BlockTransactionsKind::Full`
 /// — i.e. via `Client::block_full`.
@@ -190,60 +195,12 @@ pub fn write_transactions(w: &mut Writer, current: &Block) -> Result<()> {
         let mut env_buf = Vec::with_capacity(env.encode_2718_len());
         env.encode_2718(&mut env_buf);
 
-        // Recover the sender's uncompressed pubkey (64 B, x || y, BE).
-        let sender_pk = recover_pubkey(env.signature(), &env.signature_hash())?;
-
         w.u64_le(env_buf.len() as u64);
-        w.bytes(&sender_pk);
         w.bytes(&env_buf);
         w.pad_to_8();
-
-        // EIP-7702 (Type-4) only: append one 64 B pubkey per
-        // authorization in the auth list. The cpp-guest reads them in
-        // the same order — see `transactions.cpp:540-551`.
-        //
-        // For auths whose signature is INVALID (bad parity, s out of
-        // range, etc.), write 64 zero bytes as a sentinel. Per EIP-7702,
-        // invalid auths must be SKIPPED — the block-level tx still
-        // executes, only the auth itself is a no-op. cpp-guest
-        // detects the all-zero sentinel and treats the auth as
-        // unverifiable (= skip). Fixtures like
-        // test_valid_tx_invalid_auth_signature exercise this path.
-        if let TxEnvelope::Eip7702(signed) = env {
-            for auth in &signed.tx().authorization_list {
-                let auth_pk: [u8; 64] = match auth.signature() {
-                    Ok(sig) => recover_pubkey(&sig, &auth.inner().signature_hash())
-                        .unwrap_or([0u8; 64]),
-                    Err(_) => [0u8; 64],
-                };
-                w.bytes(&auth_pk);
-            }
-            // 64 B is already 8-aligned; no extra pad needed.
-        }
     }
     w.assert_aligned();
     Ok(())
-}
-
-/// Recover the 64-byte uncompressed secp256k1 pubkey (x || y, BE)
-/// that signed `prehash` to produce `sig`.
-fn recover_pubkey(sig: &PrimitiveSignature, prehash: &B256) -> Result<[u8; 64]> {
-    let vk = sig
-        .recover_from_prehash(prehash)
-        .map_err(|e| anyhow::anyhow!("pubkey recovery failed: {e}"))?;
-    // SEC1 uncompressed encoding: 65 bytes = 0x04 || x || y. Drop the
-    // tag byte to get the 64 B x || y the cpp-guest expects.
-    let point = vk.to_encoded_point(false);
-    let bytes = point.as_bytes();
-    anyhow::ensure!(
-        bytes.len() == 65 && bytes[0] == 0x04,
-        "unexpected SEC1 encoding (len={}, tag={:#04x})",
-        bytes.len(),
-        bytes.first().copied().unwrap_or(0),
-    );
-    let mut out = [0u8; 64];
-    out.copy_from_slice(&bytes[1..]);
-    Ok(out)
 }
 
 // ----- keccak helper used by Accounts + Contracts ----------------------------

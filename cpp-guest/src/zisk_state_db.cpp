@@ -1402,21 +1402,17 @@ int64_t ZiskStateDB::apply_authorization_list(const Transactions::View& tx) noex
     }
     int64_t       auth_refund = 0;
     rlp::ListIter auth_it{auth_outer.payload};
-    size_t        auth_idx = 0;
     while (auth_it.has_next()) {
         const auto auth_item = auth_it.next();
         if (auth_item.kind != rlp::ItemKind::List) {
             fatal("EIP-7702: authorization entry not an RLP list");
         }
-        auth_refund += process_single_authorization(auth_item, tx, auth_idx);
-        ++auth_idx;
+        auth_refund += process_single_authorization(auth_item);
     }
     return auth_refund;
 }
 
-int64_t ZiskStateDB::process_single_authorization(const rlp::Item&          auth_item,
-                                                  const Transactions::View& tx,
-                                                  size_t                    auth_idx) noexcept {
+int64_t ZiskStateDB::process_single_authorization(const rlp::Item& auth_item) noexcept {
     // Parse the 6 fields per EIP-7702: chain_id, address, nonce,
     // y_parity, r, s.
     rlp::ListIter fit{auth_item.payload};
@@ -1433,7 +1429,7 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item&          auth
     if (!fit.has_next()) fatal("EIP-7702: auth missing nonce");
     const uint64_t a_nonce = rlp::as_u64(fit.next());
     if (!fit.has_next()) fatal("EIP-7702: auth missing y_parity");
-    (void)rlp::as_u64(fit.next());  // y_parity — not used here
+    const uint64_t a_parity = rlp::as_u64(fit.next());
     if (!fit.has_next()) fatal("EIP-7702: auth missing r");
     const auto a_r = rlp::as_u256(fit.next());
     if (!fit.has_next()) fatal("EIP-7702: auth missing s");
@@ -1492,24 +1488,16 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item&          auth
     const auto a_hash = keccak256_bytes32(
         preimage.data(), preimage.size());
 
-    // Verify against prover-supplied pubkey, recover signer.
-    // rust-input-gen writes a 64-byte ALL-ZERO sentinel when the
-    // auth's signature is invalid (bad parity, s out of range, etc.)
-    // and pubkey recovery failed. Per EIP-7702 such auths are
-    // SKIPPED at the block-level (the tx still executes; the auth
-    // is a no-op). Detect the sentinel and short-circuit before
-    // verify_signature_and_get_signer (which would fatal).
-    const auto pk_span = tx.auth_pubkey(auth_idx);
-    {
-        bool pk_all_zero = true;
-        for (uint8_t b : pk_span) {
-            if (b != 0) { pk_all_zero = false; break; }
-        }
-        if (pk_all_zero) return 0;
+    // Recover the auth signer from the signature itself (no prover-supplied
+    // pubkey). Per EIP-7702, an auth with an invalid signature — bad parity,
+    // out-of-range r, unrecoverable point — is SKIPPED at the block level
+    // (the tx still executes; the auth is a no-op).
+    if (a_parity > 1) return 0;
+    evmc::address signer;
+    if (!ecrecover_address(a_hash, a_r, a_s,
+                           static_cast<unsigned>(a_parity), signer)) {
+        return 0;
     }
-    const evmc::address signer =
-        verify_signature_and_get_signer(pk_span.data(),
-                                        a_hash, a_r, a_s);
 
     // A well-formed auth signature deterministically recovers `signer`. If
     // the witness didn't reveal it, it's a fresh authority with empty

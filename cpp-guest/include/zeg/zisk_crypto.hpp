@@ -1,9 +1,9 @@
-// Thin re-declaration of the ZisK lib-c crypto syscalls the guest needs.
-// Mirrors the C ABI from `zisk/lib-c/c/src/ec/ec.hpp` so the rest of the
-// guest can call them without taking a build-time dependency on the
-// lib-c include path. The actual symbols are provided by ZisK lib-c on
-// the zkVM target; the host build links a weak stub that aborts (see
-// `src/zisk_crypto_host_stub.cpp`).
+// Thin re-declaration of the secp256k1 ECDSA C ABI the guest needs (the limb
+// convention originates from ZisK lib-c's `zisk/lib-c/c/src/ec/ec.hpp`). The
+// symbols come from the single shared implementation in
+// `cpp-guest/zisk/secp256k1.cpp` on every build: ZisK precompiles + verified
+// fcall hints on the zkVM target, its portable software backend
+// (ZEG_SECP256K1_SW) on the host.
 //
 // Limb convention: every `uint64_t* xxx` is a little-endian-ordered
 // array of 64-bit native-byte-order limbs (limb[0] is the least
@@ -19,24 +19,14 @@
 
 extern "C" {
 
-// Computes p = u1·G + u2·PK (over secp256k1) and writes its (x, y)
-// affine coordinates as 8 × uint64 limbs into `result`. The caller is
-// responsible for the final `result.x mod n == r` ECDSA check — this
-// function always returns 0. See `zisk/lib-c/c/src/ec/ec.cpp:196`.
-int secp256k1_ecdsa_verify(
-    const uint64_t* pk,     // 8 limbs: pk_x[4] || pk_y[4]
-    const uint64_t* z,      // 4 limbs: message hash
-    const uint64_t* r,      // 4 limbs
-    const uint64_t* s,      // 4 limbs
-    uint64_t*       result  // 8 limbs: x[4] || y[4]
-);
-
-// Recover the signing public key for the EVM ECRECOVER precompile. Given the
-// message hash `z`, signature (`r`, `s`) and recovery id `recid` (0 or 1, i.e.
-// EVM v of 27 or 28), writes the recovered pubkey (x[4] || y[4]) into `pubkey`
-// and returns 0. Returns non-zero when the signature is not recoverable. The
-// accelerated zkVM implementation lives in `zisk/secp256k1.cpp`; host builds
-// provide it from the chosen SECP backend.
+// Recover the signing public key from an ECDSA(secp256k1) signature. Given the
+// message hash `z`, signature (`r`, `s`) and recovery id `recid` (0 or 1),
+// writes the recovered pubkey (x[4] || y[4]) into `pubkey` and returns 0.
+// Returns non-zero when the signature is not recoverable. Implemented by the
+// single shared `cpp-guest/zisk/secp256k1.cpp` on every build (ZisK
+// precompiles + verified fcall hints on the zkVM, software on the host).
+// Used for everything that derives a signer: tx senders, EIP-7702
+// authorization signers, and the EVM ECRECOVER precompile.
 int secp256k1_ecdsa_recover(
     const uint64_t* z,      // 4 limbs: message hash
     const uint64_t* r,      // 4 limbs
@@ -49,21 +39,9 @@ int secp256k1_ecdsa_recover(
 
 namespace zeg {
 
-// Verify ECDSA(secp256k1) signature against `pubkey` (64 B, x || y, BE)
-// and return signer = keccak256(pubkey)[12:]. Aborts via zeg::fatal on
-// any verification failure (the wrapped lib-c call always returns 0;
-// the check is on `result.x mod n == r`).
-//
-// Used by the EIP-7702 authorization-list walk to recover each auth's
-// signer address.
-evmc::address verify_signature_and_get_signer(
-    const uint8_t*         pubkey,
-    const evmc::bytes32&   signing_hash,
-    const evmc::uint256be& r,
-    const evmc::uint256be& s);
-
-// EVM ECRECOVER (precompile 0x01): recover the signer address from the message
-// `hash`, signature (`r`, `s`) and recovery id `recid` (0 or 1). On success
+// Recover the signer address from the message `hash`, signature (`r`, `s`)
+// and recovery id `recid` (0 or 1) — tx senders, EIP-7702 auth signers, and
+// the EVM ECRECOVER precompile all derive signers through this. On success
 // writes signer = keccak256(pubkey)[12:] into `out` and returns true; returns
 // false when the signature is not recoverable (caller emits empty output).
 // Caller is responsible for the r/s range and v validity per EVM rules — this

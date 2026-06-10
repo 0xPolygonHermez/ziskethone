@@ -54,7 +54,7 @@ sized to a multiple of 8, so the next section starts 8-byte aligned.
 | Offset | Size | Field     | Description |
 |-------:|-----:|-----------|-------------|
 |      0 |    4 | `magic`   | ASCII `"ZEG0"` (`0x3047455A` little-endian, see [`binary_format.hpp`](cpp-guest/include/zeg/binary_format.hpp)) |
-|      4 |    4 | `version` | `u32` little-endian format version (`kVersion`, currently `4`). Also keeps the cursor 8-byte aligned for everything that follows |
+|      4 |    4 | `version` | `u32` little-endian format version (`kVersion`, currently `6`). Also keeps the cursor 8-byte aligned for everything that follows |
 
 The guest fatals on magic mismatch or on a `version` other than `kVersion`.
 Version `4` made the StateRoot trie hints **witness-only**: the encoder
@@ -135,24 +135,18 @@ Variable-length. Layout for each tx:
 +--------------------+
 | u64  envelope_size |    // 8 B; byte-length of the canonical wire envelope
 +--------------------+
-| u8   pubkey[64]    |    // 64 B uncompressed sender secp256k1 pubkey (x || y, BE)
-+--------------------+
 | u8   envelope[]    |    // envelope_size bytes — typed: type_byte || rlp(...);
 |                    |    // legacy: raw RLP list (no type byte). Type byte is one
 |                    |    // of {0x01..0x05} per EIP-2718.
 +--------------------+
 | u8   pad[0..7]     |    // zero-fill the envelope up to the next 8-byte boundary
 +--------------------+
-| u8   auth_pk[]     |    // ONLY for Type-4 (SetCode / EIP-7702): N × 64 B
-|                    |    // uncompressed pubkeys, one per authorization in the
-|                    |    // tx's authorization_list. 64 B is already 8-aligned.
-+--------------------+
 ```
 
-The prover supplies the sender pubkey alongside each envelope so the
-guest can verify the signature without running secp256k1 recovery; the
-signer address is then derived as `keccak256(pubkey)[12:]`. Same
-mechanism for each EIP-7702 auth signer.
+No public keys travel in the witness (v6): the guest recovers every
+signer — the tx sender and each EIP-7702 authorization signer — from the
+signature itself via ecrecover (`secp256k1_ecdsa_recover`, fp_sqrt-fcall
+accelerated on ZisK) and derives the address as `keccak256(pubkey)[12:]`.
 
 ## Section 3 — `Accounts` *(removed in v3)*
 

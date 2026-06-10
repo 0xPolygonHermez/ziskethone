@@ -1,28 +1,73 @@
-// secp256k1.cpp — secp256k1 ECDSA for the ZisK self-contained guest.
+// secp256k1.cpp — secp256k1 ECDSA recover, two implementations of the same ABI
+// selected by target (ZEG_ZISK):
 //
-// One source, two interchangeable backends for the low-level field/scalar/EC
-// primitives; the high-level ECDSA logic is shared:
+//   ZisK guest (ZEG_ZISK) : in-circuit recover over ZisK precompiles
+//                           (arith256_mod 0x802, secp256k1_add/dbl 0x803/0x804)
+//                           + verified fcall hints (FN_INV, FP_SQRT,
+//                           MSB_POS_256) — a faithful port of ziskos's
+//                           `zisklib`. `-DZEG_SECP256K1_SW` swaps the low-level
+//                           primitives for a portable software baseline (same
+//                           result, no accelerators); both run on ziskemu.
+//   host (!ZEG_ZISK)      : superaccelerated — delegates to evmone's
+//                           evmmax::secp256k1::secp256k1_ecdsa_recover (intx,
+//                           projective coords). The host only needs a correct
+//                           fast answer (it proves nothing), and evmone is the
+//                           reference implementation, so it doubles as the
+//                           differential oracle for the ZisK path.
 //
-//   default                : ZisK precompiles (arith256_mod 0x802,
-//                            secp256k1_add 0x803, secp256k1_dbl 0x804) plus
-//                            fcall hints (FN_INV, FP_SQRT, MSB_POS_256),
-//                            verified in-circuit — a faithful port of ziskos's
-//                            `zisklib` (mirrors ../../hello-zisk-c/src/secp256k1.cpp).
-//   -DZEG_SECP256K1_SW     : portable software baseline (no accelerators), for
-//                            benchmarking / as a reference. Same results.
-//
-// Public ABI (unchanged, see zeg/zisk_crypto.hpp):
-//   int secp256k1_ecdsa_verify(pk, z, r, s, result)
-//       result <- (u1·G + u2·PK).(x,y),  u1 = z·s⁻¹ mod n, u2 = r·s⁻¹ mod n
-// The caller (zeg::verify_and_recover_sender / verify_signature_and_get_signer)
-// does the final `result.x mod n == r` ECDSA check; on a degenerate (∞) result
-// we leave result = 0 so that check fails closed. Always returns 0.
-//
-// Limb convention everywhere: uint64_t[4] little-endian (limb[0] = low 64 bits);
-// points are uint64_t[8] = x[4] || y[4]. Matches the format the guest passes in
-// and expects back, so no endianness conversion is needed.
+// Public ABI (see zeg/zisk_crypto.hpp):
+//   int secp256k1_ecdsa_recover(z, r, s, recid, pubkey)
+//       full ECDSA public-key recovery — every signer derivation in the guest
+//       (tx senders, EIP-7702 auth signers, the EVM ECRECOVER precompile) goes
+//       through it via zeg::ecrecover_address. Limbs: uint64_t[4] little-endian
+//       (limb[0] = low 64 bits); points are uint64_t[8] = x[4] || y[4].
 
 #include <cstdint>
+
+#if !defined(ZEG_ZISK)
+// ===========================================================================
+// Host: delegate to evmone's reference recover.
+// ===========================================================================
+#include <evmone_precompiles/secp256k1.hpp>
+
+namespace {
+// LE limbs (uint64_t[4], limb[0] = low) <-> 32 big-endian bytes, for the evmone
+// boundary (it takes/returns big-endian).
+inline void limbs_to_be(const uint64_t l[4], uint8_t be[32]) {
+    for (int i = 0; i < 4; ++i) {
+        const uint64_t w = l[3 - i];
+        for (int j = 0; j < 8; ++j) be[i * 8 + j] = static_cast<uint8_t>(w >> (8 * (7 - j)));
+    }
+}
+inline void be_to_limbs(const uint8_t be[32], uint64_t l[4]) {
+    for (int i = 0; i < 4; ++i) {
+        uint64_t w = 0;
+        for (int j = 0; j < 8; ++j) w = (w << 8) | be[i * 8 + j];
+        l[3 - i] = w;
+    }
+}
+}  // namespace
+
+extern "C" int secp256k1_ecdsa_recover(const uint64_t* z, const uint64_t* r,
+                                       const uint64_t* s, unsigned recid,
+                                       uint64_t* pubkey) {
+    uint8_t zb[32], rb[32], sb[32];
+    limbs_to_be(z, zb);
+    limbs_to_be(r, rb);
+    limbs_to_be(s, sb);
+    // evmone validates r,s in [1,n-1] and returns nullopt when no point exists —
+    // identical precompile semantics to the ZisK path below.
+    const auto pt = evmmax::secp256k1::secp256k1_ecdsa_recover(zb, rb, sb, recid != 0);
+    if (!pt.has_value())
+        return 1;  // not recoverable
+    uint8_t pk[64];
+    pt->to_bytes(pk);  // x || y, 64 big-endian bytes (Montgomery -> normal)
+    be_to_limbs(pk, pubkey);
+    be_to_limbs(pk + 32, pubkey + 4);
+    return 0;
+}
+
+#else  // ===================== ZisK guest =====================================
 
 namespace {
 
@@ -56,10 +101,10 @@ const u64 P_PLUS_1_DIV_4[4] = {0xFFFFFFFFBFFFFF0CULL, 0xFFFFFFFFFFFFFFFFULL,
 // sqrt(alpha·NQR), which the guest verifies against alpha·NQR3.
 const u64 NQR3[4] = {3, 0, 0, 0};
 
-// Shared abort from runtime.cpp (marchid-dispatched unimp / magic write): fails
-// the run/proof immediately. Used when a verified hint turns out wrong — those
-// paths must never execute on a valid run, and trapping beats an infinite loop
-// (which would spin to the emulator's step ceiling before failing).
+// Abort used when a verified hint turns out wrong — those paths must never
+// execute on a valid run. The shared trap from runtime.cpp (marchid-dispatched
+// unimp / magic write) fails the run/proof immediately — trapping beats an
+// infinite loop, which would spin to the emulator's step ceiling before failing.
 extern "C" [[noreturn]] void zeg_zisk_halt();
 
 inline void cp4(u64 d[4], const u64 s[4]) { d[0]=s[0]; d[1]=s[1]; d[2]=s[2]; d[3]=s[3]; }
@@ -331,33 +376,6 @@ inline void fp_sqrt_hint(const u64 alpha[4], u64 parity, u64* is_qr, u64 y[4]) {
 } // namespace
 
 // ===========================================================================
-// Public ABI: compute result = u1·G + u2·PK. Always returns 0 (caller checks
-// result.x mod n == r). On a degenerate result (point at infinity) we leave
-// result = 0 so the caller's equality check fails and it fatals.
-// ===========================================================================
-extern "C" int secp256k1_ecdsa_verify(
-        const uint64_t *pk, const uint64_t *z, const uint64_t *r,
-        const uint64_t *s, uint64_t *result) {
-    u64 zn[4]; reduce_fn(z, zn);
-    u64 sinv[4]; inv_fn(s, sinv);
-    u64 u1[4]; mul_fn(zn, sinv, u1);
-    u64 u2[4]; mul_fn(r,  sinv, u2);
-
-    u64 A[8], B[8], R[8];
-    bool hasA = scalar_mul(u1, G,  A);
-    bool hasB = scalar_mul(u2, pk, B);
-    bool hasR;
-    if (hasA && hasB)      hasR = point_add(A, B, R);
-    else if (hasA)       { cp8(R, A); hasR = true; }
-    else if (hasB)       { cp8(R, B); hasR = true; }
-    else                   hasR = false;
-
-    if (!hasR) { for (int i=0;i<8;++i) result[i] = 0; return 0; }
-    cp8(result, R);
-    return 0;
-}
-
-// ===========================================================================
 // Public ABI: EVM ECRECOVER. Given message hash z, signature (r, s) and the
 // recovery id recid (0 or 1 — i.e. EVM v of 27 or 28), recover the signing
 // public key into pubkey_out (x[4] || y[4], little-endian limbs). Returns 0 on
@@ -429,3 +447,5 @@ extern "C" int secp256k1_ecdsa_recover(
     cp8(pubkey_out, Q);
     return 0;
 }
+
+#endif  // ZEG_ZISK

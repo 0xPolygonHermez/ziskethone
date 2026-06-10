@@ -12,6 +12,10 @@ namespace zeg {
 
 constexpr uint32_t kMagic   = 0x3047455Au; // "ZEG0" little-endian
 // Format version, stored in the 4 bytes immediately after the magic.
+// v6: no secp256k1 pubkey hints — the per-tx 64 B sender pubkey and the
+//     Type-4 per-authorization 64 B pubkeys are removed from the Transactions
+//     section; the guest recovers every signer itself via ecrecover
+//     (fp_sqrt-fcall accelerated on ZisK).
 // v5: ConsensusInfo fixed prefix grew 8 B — adds blob_base_fee_update_fraction
 //     (u64-le at offset 344), so the guest charges blob gas with the block's
 //     actual BLOB_BASE_FEE_UPDATE_FRACTION instead of a hardcoded constant.
@@ -30,7 +34,7 @@ constexpr uint32_t kMagic   = 0x3047455Au; // "ZEG0" little-endian
 //     guest derives read-only-ness dynamically (original == current).
 // v1: StateRoot `Op::Leaf` carries no index; keccak-sorted tables.
 // The guest rejects any version != kVersion.
-constexpr uint32_t kVersion = 5;
+constexpr uint32_t kVersion = 6;
 
 enum class SectionKind : uint32_t {
     ParentHeader      = 1,
