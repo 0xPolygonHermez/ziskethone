@@ -10,25 +10,15 @@
 #include <cstdint>
 #include <cstring>  // std::memcpy
 
+#include <zeg/bswap.hpp>  // the shared inline 64-bit byte swap (zero shortcut)
+
 namespace zevm {
 
 struct U256 {
     uint64_t limbs[4];
 };
 
-// 64-bit byte swap, inline (no Zbb on the ZisK target, so this is the soft
-// shift/mask sequence; inlining drops the call/ret that an out-of-line
-// __bswapdi2 would cost per limb). Zero shortcut: zevm's lazy endianness swaps
-// whole 256-bit words and most EVM values are small, so typically 3 of 4 limbs
-// are zero — those exit in ~2 steps instead of the ~20-op body, while nonzero
-// limbs pay a single untaken branch.
-inline uint64_t bswap64(uint64_t x) {
-    if (x == 0) return 0;
-    return  (x >> 56) | ((x >> 40) & 0xFF00ull) | ((x >> 24) & 0xFF0000ull) |
-            ((x >> 8) & 0xFF000000ull) | ((x << 8) & 0xFF00000000ull) |
-            ((x << 24) & 0xFF0000000000ull) | ((x << 40) & 0xFF000000000000ull) |
-            (x << 56);
-}
+using zeg::bswap64;
 
 // Load a 256-bit value from 32 big-endian bytes (bytes[0] is most significant),
 // the on-wire layout used by EVM code immediates (PUSH) and memory (MLOAD). On a

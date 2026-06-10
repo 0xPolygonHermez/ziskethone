@@ -18,6 +18,8 @@
 #include <utility>
 #include <unordered_map>   // declares std::__detail::_Prime_rehash_policy
 
+#include <zeg/bswap.hpp>   // zeg::bswap64 — the shared byte-swap implementation
+
 using u64 = uint64_t;
 using u32 = uint32_t;
 
@@ -26,17 +28,11 @@ using u32 = uint32_t;
 // ===========================================================================
 extern "C" {
 
-u64 __bswapdi2(u64 x) {
-    // Zero shortcut: byteswap256 (zevm's lazy endianness) does 4 of these per
-    // conversion and most EVM stack values are small, so typically 3 of 4 limbs
-    // are zero. A zero input returns in ~2 steps instead of the ~20-op body;
-    // a nonzero input pays a single untaken branch.
-    if (x == 0) return 0;
-    return  (x >> 56) | ((x >> 40) & 0xFF00ull) | ((x >> 24) & 0xFF0000ull) |
-            ((x >> 8) & 0xFF000000ull) | ((x << 8) & 0xFF00000000ull) |
-            ((x << 24) & 0xFF0000000000ull) | ((x << 40) & 0xFF000000000000ull) |
-            (x << 56);
-}
+// libgcc ABI symbol — the compiler emits calls to it for byte-swap idioms it
+// doesn't inline (it survives --gc-sections, so it is referenced). The
+// implementation is the shared zeg::bswap64 (zeg/bswap.hpp); zevm uses that
+// inline directly and never routes through this symbol.
+u64 __bswapdi2(u64 x) { return zeg::bswap64(x); }
 u32 __bswapsi2(u32 x) {
     return (x >> 24) | ((x >> 8) & 0xFF00u) | ((x << 8) & 0xFF0000u) | (x << 24);
 }
