@@ -195,13 +195,13 @@ endif()
 # ----- EVM backend selection -------------------------------------------------
 #
 # The guest drives an EVM through the evmc2 interface (see ZiskStateDB::vm2_ /
-# execute2), so the interpreter is swappable. `evmone` (default) uses the
-# upstream interpreter via evmc2_create_evmone; `zevm` uses our hand-written one
-# (cpp-guest/src/zevm) via evmc2_create_zevm. Both paths still link
+# execute2), so the interpreter is swappable. `zevm` (default) uses our
+# hand-written interpreter (cpp-guest/src/zevm) via evmc2_create_zevm; `evmone`
+# uses the upstream interpreter via evmc2_create_evmone. Both paths still link
 # evmone::precompiles + evmone::state because precompile dispatch lives in the
 # host/state layer.
-set(EVM_BACKEND "evmone" CACHE STRING "EVM implementation: evmone | zevm")
-set_property(CACHE EVM_BACKEND PROPERTY STRINGS evmone zevm)
+set(EVM_BACKEND "zevm" CACHE STRING "EVM implementation: zevm | evmone")
+set_property(CACHE EVM_BACKEND PROPERTY STRINGS zevm evmone)
 
 add_executable(zisk_eth_guest ${GUEST_SOURCES})
 
