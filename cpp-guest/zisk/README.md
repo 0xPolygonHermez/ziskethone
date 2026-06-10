@@ -78,8 +78,7 @@ The output must match the native guest:
 | `toolchain.cmake` | rv64ima cross toolchain (no `-ffreestanding`; `-nostdlib` at link) |
 | `CMakeLists.txt`  | standalone build; compiles guest + needed evmone sources, Hunter-free |
 | `_start.s`, `zisk.ld` | entry + memory map (from hello-zisk-c) |
-| `runtime.cpp`     | bump allocator, `mem*`, no-op libc stdio stubs, C++ ABI |
-| `compiler_rt.cpp` | libgcc builtins, soft-float, 128-bit div/shift, `_Prime_rehash_policy` |
+| `runtime.cpp`     | bump allocator, str*, libgcc builtins, no-op libc stdio stubs, C++ ABI, integer-only `_Prime_rehash_policy` |
 | `stdcxx_stubs.cpp`| `halt()` stubs for dead iostream/pmr paths (tracer, etc.) |
 | `secp256k1.cpp`   | secp256k1 `ecdsa_verify`: ZisK precompiles+fcalls, or software with `-DZEG_SECP256K1_SW` |
 | `keccak_zisk.cpp` | Keccak-256 via the ZisK keccakf precompile (CSR 0x800) |

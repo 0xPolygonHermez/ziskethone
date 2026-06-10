@@ -5,6 +5,7 @@ Cargo.lock
 
 # C++ / CMake
 cpp-guest/build*/
+cpp-guest/zisk/build*/
 cpp-guest/cmake-build-*/
 *.o
 *.obj

@@ -78,6 +78,20 @@ message(STATUS "intx include: ${INTX_INCLUDE}")
 file(GLOB GUEST_SRC ${GUEST_ROOT}/src/*.cpp)
 list(FILTER GUEST_SRC EXCLUDE REGEX "zisk_crypto_host_stub|zisk_crypto_libsecp256k1")
 
+# --- EVM backend: zevm (default, hand-written) | evmone ----------------------
+# zevm swaps the evmc2 VM only: zisk_state_db.cpp picks evmc2_create_zevm over
+# evmc2_create_evmone under USE_ZEVM. evmone's precompiles/state still build (the
+# host dispatches ECRECOVER/MODEXP/… through them); just the interpreter changes.
+# zevm's 256-bit math compiles against the ZisK zeg::bi backend (ZEG_ZISK), and
+# its KECCAK256 resolves to the same accelerated ethash_keccak256 (keccak_zisk).
+set(EVM_BACKEND "zevm" CACHE STRING "EVM implementation: zevm | evmone")
+if(EVM_BACKEND STREQUAL "zevm")
+  list(FILTER GUEST_SRC EXCLUDE REGEX "/evmc2_evmone\\.cpp$")
+  file(GLOB ZEVM_SRC ${GUEST_ROOT}/src/zevm/*.cpp ${GUEST_ROOT}/src/zevm/instructions/*.cpp)
+  list(APPEND GUEST_SRC ${ZEVM_SRC})
+endif()
+message(STATUS "EVM backend: ${EVM_BACKEND}")
+
 # evmone interpreter + modular-arith + precompiles (minus the heavy bls/kzg TUs).
 file(GLOB EVMONE_CORE   ${EVMONE_SRC}/lib/evmone/*.cpp)
 # cpu_check.cpp is x86-only (__builtin_cpu_supports). tracing.cpp is excluded — the
@@ -119,7 +133,6 @@ set(ZISK_SUPPORT
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp
   # secp256k1 ECDSA. Default: ZisK precompiles + fcall hints. With
   # -DZEG_SECP256K1_SW=ON: portable software baseline (same source, same result).
@@ -159,15 +172,16 @@ option(ZEG_SECP256K1_SW "Use the software secp256k1 baseline (no accelerators)" 
 
 target_compile_definitions(zisk_eth_guest.elf PRIVATE
   ZEG_ZISK
+  $<$<STREQUAL:${EVM_BACKEND},zevm>:USE_ZEVM>
   $<$<BOOL:${ZEG_SECP256K1_SW}>:ZEG_SECP256K1_SW>
   PROJECT_VERSION="0.21.0")          # normally injected by evmone's CMake
 target_compile_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
 target_link_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
-# runtime.cpp no longer defines mem* (those moved to dma/*.s), but it still has the
-# bump-allocator zero-fill/copy loops (calloc/realloc). Keep loop-distribute-patterns
-# + builtin idiom recognition disabled so those stay explicit loops — unchanged from
-# prior behavior. (Dropping these would let calloc/realloc lower to the DMA mem* too;
-# left out of scope here.)
+# runtime.cpp's calloc no longer zero-fills (the bump arena is fresh, ZisK-zero
+# RAM) and realloc copies via the DMA memcpy. -fno-builtin keeps that an
+# out-of-line call to the dma/*.s memcpy symbol rather than an inlined byte loop;
+# -fno-tree-loop-distribute-patterns keeps any other runtime.cpp loops (str*) from
+# being rewritten into mem* idioms.
 set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   TARGET_DIRECTORY zisk_eth_guest.elf PROPERTIES
   COMPILE_OPTIONS "-fno-tree-loop-distribute-patterns;-fno-builtin")
@@ -180,6 +194,8 @@ set_source_files_properties(${STATE_SRC} TARGET_DIRECTORY zisk_eth_guest.elf PRO
 
 target_include_directories(zisk_eth_guest.elf PRIVATE
   ${GUEST_ROOT}/include
+  ${GUEST_ROOT}/src/zevm                # zevm headers (no-op for evmone backend)
+  ${CMAKE_CURRENT_SOURCE_DIR}           # zeg::bi backend: bigint/backend.hpp
   ${EVMONE_SRC}/include
   ${EVMONE_SRC}/evmc/include
   ${EVMONE_SRC}                       # for <lib/...> and <test/state/...>
@@ -212,7 +228,6 @@ add_executable(bls_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(bls_selftest.elf PRIVATE ZEG_ZISK)
 target_compile_options(bls_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
@@ -236,7 +251,6 @@ add_executable(bigint_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(bigint_selftest.elf PRIVATE ZEG_ZISK)
 target_compile_options(bigint_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
@@ -259,7 +273,6 @@ add_executable(modexp_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(modexp_selftest.elf PRIVATE ZEG_ZISK)
 target_compile_options(modexp_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
@@ -284,7 +297,6 @@ add_executable(bls2537_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(bls2537_selftest.elf PRIVATE ZEG_ZISK)
 target_compile_options(bls2537_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
@@ -309,7 +321,6 @@ add_executable(bn254_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(bn254_selftest.elf PRIVATE ZEG_ZISK)
 target_compile_options(bn254_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
@@ -334,7 +345,6 @@ add_executable(p256_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(p256_selftest.elf PRIVATE ZEG_ZISK)
 target_compile_options(p256_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
@@ -359,7 +369,6 @@ add_executable(sha256_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(sha256_selftest.elf PRIVATE ZEG_ZISK)
 target_compile_options(sha256_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
@@ -384,7 +393,6 @@ add_executable(blake2_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(blake2_selftest.elf PRIVATE ZEG_ZISK)
 target_compile_options(blake2_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)

@@ -8,7 +8,14 @@
 #include <intx/intx.hpp>    // 256-bit add for selfdestruct balance transfer
 #include <test/state/precompiles.hpp>  // evmone::state::call_precompile
 
-#include "evmc2_evmone.hpp"  // evmc2_create_evmone — the owned VM (evmc2 over evmone)
+// The owned VM, behind the evmc2 interface. The backend is selected at build
+// time: EVM_BACKEND=zevm defines USE_ZEVM and links the hand-written EVM;
+// otherwise the evmone-baseline adapter.
+#if defined(USE_ZEVM)
+#include "zevm/zevm.hpp"     // evmc2_create_zevm
+#else
+#include "evmc2_evmone.hpp"  // evmc2_create_evmone
+#endif
 
 #include "zeg/bloom.hpp"
 #include "zeg/config.hpp"
@@ -88,7 +95,13 @@ ZiskStateDB::ZiskStateDB(Accounts&             accounts,
       contracts_(contracts),
       previous_blocks_(previous_blocks),
       storages_(storages),
-      vm2_(evmc2_create_evmone()) {}
+      vm2_(
+#if defined(USE_ZEVM)
+          evmc2_create_zevm()
+#else
+          evmc2_create_evmone()
+#endif
+      ) {}
 
 ZiskStateDB::~ZiskStateDB() {
     // Release every prepared analysis handle (cached on the Contracts, owned by

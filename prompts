@@ -198,3 +198,95 @@ The requests_hash (EIP-7685) — a sha256 reduction over the collected requests_
 
 
 TODO coinbase to not is_read_only should no be done together with withdrawal
+
+----
+
+I want to write a full evm to substitute evmone.
+The interface must be exactly the same that evmc so that it should be replaceable.
+Everything shuld be in the directory cpp-guest/src/zevm
+We should define a struct that's the the EvmState it should have:
+* pc (program counter)
+* code Pointer to code
+* codeSize Size of the code
+* analizedCode: A pointer to byteArray the same size of code that's 1 if a there is a valid JUMPDEST on that position. 0 otherwise
+* stack 1024 elements of 32bits
+* stackPointer A number betwee 0 (full) to 1024 (empty)
+* memoryPointers Array of pointers to 4096bytes pages
+* memorySize
+* gas
+* evmcMsg : Pointer to evmc_msg
+* evmcResult : Pointer to evmc_result
+* lastResult : Pointer to lastResut
+* const struct evmc_host_interface* host,
+* struct evmc_host_context* context,
+* enum evmc_revision rev,
+
+It will be a table instruction[256] of functions with a parameter to a pointer to evmState and returns false if it has to stop.
+
+Lets not implement the instructions yet. just put the mock mock functions.
+
+The execute function shoul be something like
+
+{
+     EvmState *evmState = new EvmState(msg, code, codeSize, host, ctx, rev); // This shoud create the struct, initialize and analyze
+
+     do {
+         byte code = evmState.pc < evmState.codeSize ? code[evmState.pc] : 0;
+         bool continue = instructions[code](evmState);
+     while (continue)
+
+   return evmS
+}
+
+The main goal is to use the 256 bit Arith and binary of ZisK when possible. And also to have a full control of the EVM.
+
+----
+
+Lets create the memory.
+I changed the idea and we will do it different
+
+
+We will create a new class EVMMem
+
+This object will be a static object.
+This object will have 2 zones initialized to zero (I zisk they are already initialized to 0)
+The size of those zones are at least the maximum allocatable memory per tx and a number that should be arround tha max used memory per block.
+
+Per each block we have two variables:
+   firstClean
+   firstAvailable
+
+It should be an array of 1024 handles with an current idx that assigns a handler.
+
+Each handle should have a pointer where it starts and a size.
+Even handlers should point to block 0 and odd handlers to block 1
+
+
+the class hass 4 functions.
+   createMemory
+   destroyMemory
+   read
+   write
+
+createMemory()
+------------
+
+increments the cur idx and set the start by
+pointing to firstClean if firstClean < BLOCK_SIZE - MAX_MEM_PER_TX otherwise just use h[cur-2].offset + h[cur-2].size. If cur <2 then offset is just the inital mem.
+The initial size is zero
+
+destroyMemory()
+----------
+cur--
+
+read(addr, &value, &gas) -> Error
+-----------
+
+write(addr, &value, &gas) -> Error
+-----------
+
+Check the gas and extend accordingly.
+Clean (set to zero) if needed
+
+This idx represents the depth. and even idx should point to the first memory block and odd idx to the second memory.
+
