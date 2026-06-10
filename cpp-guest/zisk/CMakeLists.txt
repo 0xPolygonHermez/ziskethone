@@ -133,7 +133,6 @@ set(ZISK_SUPPORT
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp
   # secp256k1 ECDSA. Default: ZisK precompiles + fcall hints. With
   # -DZEG_SECP256K1_SW=ON: portable software baseline (same source, same result).
@@ -229,7 +228,6 @@ add_executable(bls_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(bls_selftest.elf PRIVATE ZEG_ZISK)
 target_compile_options(bls_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
@@ -253,7 +251,6 @@ add_executable(bigint_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(bigint_selftest.elf PRIVATE ZEG_ZISK)
 target_compile_options(bigint_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
@@ -276,7 +273,6 @@ add_executable(modexp_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(modexp_selftest.elf PRIVATE ZEG_ZISK)
 target_compile_options(modexp_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
@@ -301,7 +297,6 @@ add_executable(bls2537_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(bls2537_selftest.elf PRIVATE ZEG_ZISK)
 target_compile_options(bls2537_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
@@ -326,7 +321,6 @@ add_executable(bn254_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(bn254_selftest.elf PRIVATE ZEG_ZISK)
 target_compile_options(bn254_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
@@ -351,7 +345,6 @@ add_executable(p256_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(p256_selftest.elf PRIVATE ZEG_ZISK)
 target_compile_options(p256_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
@@ -376,7 +369,6 @@ add_executable(sha256_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(sha256_selftest.elf PRIVATE ZEG_ZISK)
 target_compile_options(sha256_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
@@ -401,7 +393,6 @@ add_executable(blake2_selftest.elf
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/compiler_rt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
 target_compile_definitions(blake2_selftest.elf PRIVATE ZEG_ZISK)
 target_compile_options(blake2_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)

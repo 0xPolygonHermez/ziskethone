@@ -1,6 +1,6 @@
 // zeg/bswap.hpp — the 64-bit byte swap. The single implementation shared by
 // zevm (u256.hpp: byteswap256 / u256_from_be / u256_to_be) and by the ZisK
-// runtime's libgcc ABI symbol __bswapdi2 (zisk/compiler_rt.cpp), which is a
+// runtime's libgcc ABI symbol __bswapdi2 (zisk/runtime.cpp), which is a
 // one-line wrapper around it.
 //
 // Inline: the ZisK target (rv64ima, no Zbb) has no byte-swap instruction, so
