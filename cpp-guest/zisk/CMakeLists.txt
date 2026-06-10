@@ -78,6 +78,20 @@ message(STATUS "intx include: ${INTX_INCLUDE}")
 file(GLOB GUEST_SRC ${GUEST_ROOT}/src/*.cpp)
 list(FILTER GUEST_SRC EXCLUDE REGEX "zisk_crypto_host_stub|zisk_crypto_libsecp256k1")
 
+# --- EVM backend: evmone (default) | zevm (hand-written) ---------------------
+# zevm swaps the evmc2 VM only: zisk_state_db.cpp picks evmc2_create_zevm over
+# evmc2_create_evmone under USE_ZEVM. evmone's precompiles/state still build (the
+# host dispatches ECRECOVER/MODEXP/… through them); just the interpreter changes.
+# zevm's 256-bit math compiles against the ZisK zeg::bi backend (ZEG_ZISK), and
+# its KECCAK256 resolves to the same accelerated ethash_keccak256 (keccak_zisk).
+set(EVM_BACKEND "evmone" CACHE STRING "EVM implementation: evmone | zevm")
+if(EVM_BACKEND STREQUAL "zevm")
+  list(FILTER GUEST_SRC EXCLUDE REGEX "/evmc2_evmone\\.cpp$")
+  file(GLOB ZEVM_SRC ${GUEST_ROOT}/src/zevm/*.cpp ${GUEST_ROOT}/src/zevm/instructions/*.cpp)
+  list(APPEND GUEST_SRC ${ZEVM_SRC})
+endif()
+message(STATUS "EVM backend: ${EVM_BACKEND}")
+
 # evmone interpreter + modular-arith + precompiles (minus the heavy bls/kzg TUs).
 file(GLOB EVMONE_CORE   ${EVMONE_SRC}/lib/evmone/*.cpp)
 # cpu_check.cpp is x86-only (__builtin_cpu_supports). tracing.cpp is excluded — the
@@ -159,6 +173,7 @@ option(ZEG_SECP256K1_SW "Use the software secp256k1 baseline (no accelerators)" 
 
 target_compile_definitions(zisk_eth_guest.elf PRIVATE
   ZEG_ZISK
+  $<$<STREQUAL:${EVM_BACKEND},zevm>:USE_ZEVM>
   $<$<BOOL:${ZEG_SECP256K1_SW}>:ZEG_SECP256K1_SW>
   PROJECT_VERSION="0.21.0")          # normally injected by evmone's CMake
 target_compile_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
@@ -180,6 +195,8 @@ set_source_files_properties(${STATE_SRC} TARGET_DIRECTORY zisk_eth_guest.elf PRO
 
 target_include_directories(zisk_eth_guest.elf PRIVATE
   ${GUEST_ROOT}/include
+  ${GUEST_ROOT}/src/zevm                # zevm headers (no-op for evmone backend)
+  ${CMAKE_CURRENT_SOURCE_DIR}           # zeg::bi backend: bigint/backend.hpp
   ${EVMONE_SRC}/include
   ${EVMONE_SRC}/evmc/include
   ${EVMONE_SRC}                       # for <lib/...> and <test/state/...>
