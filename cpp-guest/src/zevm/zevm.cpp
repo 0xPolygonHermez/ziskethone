@@ -95,7 +95,8 @@ evmc2_pre_execution* w_prepare(evmc_vm* /*vm*/, const uint8_t* code,
                                size_t code_size) noexcept {
     auto* a = new Analysis{};
     if (code_size != 0) {
-        a->firstInstr = static_cast<uint8_t*>(std::calloc((code_size + 31) / 32, 1));
+        // malloc (not calloc): mark_first_instruction_in_word writes every byte.
+        a->firstInstr = static_cast<uint8_t*>(std::malloc((code_size + 31) / 32));
         mark_first_instruction_in_word(code, code_size, a->firstInstr);
     }
     return reinterpret_cast<evmc2_pre_execution*>(a);

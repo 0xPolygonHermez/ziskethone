@@ -57,8 +57,9 @@ EvmState::EvmState(const evmc_message* msg,
         analyzedCode = prebuilt_analysis;  // borrowed (e.g. from evmc2 prepare)
         ownsAnalysis = false;
     } else if (codeSize != 0) {
-        // First-instruction-per-32-byte-chunk map: ceil(codeSize/32) bytes.
-        auto* buf = static_cast<uint8_t*>(std::calloc((codeSize + 31) / 32, 1));
+        // First-instruction-per-32-byte-chunk map: ceil(codeSize/32) bytes. malloc
+        // (not calloc): mark_first_instruction_in_word writes every byte.
+        auto* buf = static_cast<uint8_t*>(std::malloc((codeSize + 31) / 32));
         mark_first_instruction_in_word(code, codeSize, buf);
         analyzedCode = buf;
         ownsAnalysis = true;
