@@ -27,6 +27,11 @@ using u32 = uint32_t;
 extern "C" {
 
 u64 __bswapdi2(u64 x) {
+    // Zero shortcut: byteswap256 (zevm's lazy endianness) does 4 of these per
+    // conversion and most EVM stack values are small, so typically 3 of 4 limbs
+    // are zero. A zero input returns in ~2 steps instead of the ~20-op body;
+    // a nonzero input pays a single untaken branch.
+    if (x == 0) return 0;
     return  (x >> 56) | ((x >> 40) & 0xFF00ull) | ((x >> 24) & 0xFF0000ull) |
             ((x >> 8) & 0xFF000000ull) | ((x << 8) & 0xFF00000000ull) |
             ((x << 24) & 0xFF0000000000ull) | ((x << 40) & 0xFF000000000000ull) |
