@@ -384,14 +384,12 @@ private:
     int64_t apply_authorization_list(const Transactions::View& tx) noexcept;
 
     // Per-auth helper: parse one RLP-encoded authorization entry,
-    // verify the signature, look up the signer in the witness, and
-    // (on success) bump the signer's nonce + write the 0xef0100 ||
+    // recover the signer from its signature (ecrecover), and (on
+    // success) bump the signer's nonce + write the 0xef0100 ||
     // delegate code_hash. Returns the refund delta — 12500 if the
     // signer was non-empty before the mutation, else 0; returns 0 on
     // any validity failure (silently skipped per the EIP).
-    int64_t process_single_authorization(const rlp::Item& auth_item,
-                                         const Transactions::View& tx,
-                                         size_t auth_idx) noexcept;
+    int64_t process_single_authorization(const rlp::Item& auth_item) noexcept;
 
     // Build the top-level evmc_message and dispatch CREATE vs CALL.
     // Caller is responsible for the surrounding checkpoint/rollback.

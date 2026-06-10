@@ -56,7 +56,7 @@ int64_t compute_intrinsic_gas(const Transactions::View& tx,
     // reading the prover-supplied auth pubkeys — reuse that count
     // instead of re-walking the RLP.
     if (tx.type() == TxType::SetCode) {
-        gas += 25000 * static_cast<int64_t>(tx.num_auth_pubkeys());
+        gas += 25000 * static_cast<int64_t>(tx.num_authorizations());
     }
 
     return gas;

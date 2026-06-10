@@ -76,7 +76,6 @@ message(STATUS "intx include: ${INTX_INCLUDE}")
 # --- source sets ------------------------------------------------------------
 # Guest sources (exclude host-only crypto backends; main.cpp etc. are dual-mode).
 file(GLOB GUEST_SRC ${GUEST_ROOT}/src/*.cpp)
-list(FILTER GUEST_SRC EXCLUDE REGEX "zisk_crypto_host_stub|zisk_crypto_libsecp256k1")
 
 # --- EVM backend: zevm (default, hand-written) | evmone ----------------------
 # zevm swaps the evmc2 VM only: zisk_state_db.cpp picks evmc2_create_zevm over

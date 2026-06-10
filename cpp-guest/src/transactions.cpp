@@ -203,97 +203,39 @@ evmc::bytes32 compute_signing_hash(const Transactions::View& v) {
 }
 
 // ============================================================================
-// Signature verification + sender recovery (file-local).
+// Sender recovery (file-local).
 //
-// ZisK's secp256k1_ecdsa_verify takes 256-bit values as 4-limb arrays
-// of native uint64 (limb[0] = least significant 64 bits, matching the
-// `mpz_import(..., -1, 8, -1, ...)` decoding in lib-c's array2fe).
-// Inputs from this guest are big-endian (Ethereum convention), so each
-// 32-byte value is byte-reversed limb-by-limb on the way in.
+// The sender is recovered from the envelope's signature alone — no
+// prover-supplied public key. The recovery id comes from the tx's own
+// v / y_parity field, and ecrecover_address (secp256k1_ecdsa_recover,
+// fp_sqrt-fcall accelerated on ZisK) reconstructs the pubkey and derives
+// sender = keccak256(pubkey)[12:].
 // ============================================================================
 
-// Read 8 big-endian bytes into a native uint64.
-uint64_t be_load64(const uint8_t* p) {
-    return (uint64_t(p[0]) << 56) | (uint64_t(p[1]) << 48)
-         | (uint64_t(p[2]) << 40) | (uint64_t(p[3]) << 32)
-         | (uint64_t(p[4]) << 24) | (uint64_t(p[5]) << 16)
-         | (uint64_t(p[6]) <<  8) |  uint64_t(p[7]);
-}
-
-// Convert a 32-byte big-endian integer into a 4-limb little-endian-ordered
-// array (limbs[0] = least significant 64 bits).
-void be32_to_limbs(const uint8_t* be32, uint64_t limbs[4]) {
-    limbs[0] = be_load64(be32 + 24);
-    limbs[1] = be_load64(be32 + 16);
-    limbs[2] = be_load64(be32 +  8);
-    limbs[3] = be_load64(be32 +  0);
-}
-
-// secp256k1 curve order n in the same limb layout (LE-ordered, native
-// limbs). Used to handle the rare case `result.x >= n` in the final
-// ECDSA check.
-constexpr uint64_t SECP256K1_N[4] = {
-    0xBFD25E8CD0364141ULL,
-    0xBAAEDCE6AF48A03BULL,
-    0xFFFFFFFFFFFFFFFEULL,
-    0xFFFFFFFFFFFFFFFFULL,
-};
-
-// 256-bit subtraction: out = a - b. Returns the final borrow (1 if
-// a < b, else 0).
-unsigned sub_256(const uint64_t a[4], const uint64_t b[4], uint64_t out[4]) {
-    unsigned borrow = 0;
-    for (int i = 0; i < 4; ++i) {
-        const uint64_t ai = a[i];
-        const uint64_t bi = b[i];
-        const uint64_t di = ai - bi - borrow;
-        borrow = (ai < bi + borrow) || (bi == ~uint64_t{0} && borrow) ? 1 : 0;
-        out[i] = di;
-    }
-    return borrow;
-}
-
-bool limbs_eq(const uint64_t a[4], const uint64_t b[4]) {
-    return a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3];
-}
-
-// Verify the (r, s) signature in `v` against `pubkey` (64 raw bytes,
-// x || y, BE) over the signing hash of `v`. Returns the recovered
-// sender address on success; aborts via zeg::fatal on any failure.
-evmc::address verify_and_recover_sender(const Transactions::View& v,
-                                        const uint8_t* pubkey) {
+// Recover the sender of `v` from its (r, s, v/y_parity) signature over the
+// signing hash. Aborts via zeg::fatal on any failure (a tx inside a block
+// must carry a recoverable signature).
+evmc::address recover_sender(const Transactions::View& v) {
     const evmc::bytes32 z = compute_signing_hash(v);
 
-    uint64_t pk[8];
-    be32_to_limbs(pubkey,      pk);       // pk_x
-    be32_to_limbs(pubkey + 32, pk + 4);   // pk_y
-
-    uint64_t z_limbs[4];
-    uint64_t r_limbs[4];
-    uint64_t s_limbs[4];
-    be32_to_limbs(z.bytes,         z_limbs);
-    be32_to_limbs(v.r().bytes,     r_limbs);
-    be32_to_limbs(v.s().bytes,     s_limbs);
-
-    uint64_t result[8];
-    secp256k1_ecdsa_verify(pk, z_limbs, r_limbs, s_limbs, result);
-
-    // ECDSA: signature is valid iff (result.x mod n) == r. result.x is
-    // mod p; it may exceed n by < n (since p < 2n for secp256k1), so
-    // at most one conditional subtraction is needed.
-    const uint64_t* rx = result;  // first 4 limbs = x
-    if (!limbs_eq(rx, r_limbs)) {
-        uint64_t reduced[4];
-        const unsigned borrow = sub_256(rx, SECP256K1_N, reduced);
-        if (borrow != 0 || !limbs_eq(reduced, r_limbs)) {
-            fatal("Transactions: secp256k1 signature verification failed");
-        }
+    // Recovery id: legacy pre-EIP-155 v in {27, 28} -> v - 27;
+    // EIP-155 v = 35 + 2*chain_id + parity -> (v - 35) & 1;
+    // typed txs carry y_parity (0 or 1) directly.
+    const uint64_t vv = v.v_or_y_parity();
+    unsigned recid;
+    if (v.type() == Transactions::Type::Legacy) {
+        if (vv == 27 || vv == 28)  recid = static_cast<unsigned>(vv - 27);
+        else if (vv >= 35)         recid = static_cast<unsigned>((vv - 35) & 1);
+        else fatal("Transactions: invalid legacy signature v");
+    } else {
+        if (vv > 1) fatal("Transactions: invalid y_parity");
+        recid = static_cast<unsigned>(vv);
     }
 
-    // Sender = keccak256(pubkey_64_bytes)[12:32]. No 0x04 SEC1 prefix.
-    const evmc::bytes32 ph = keccak256_bytes32(pubkey, 64);
     evmc::address sender;
-    std::memcpy(sender.bytes, ph.bytes + 12, 20);
+    if (!ecrecover_address(z, v.r(), v.s(), recid, sender)) {
+        fatal("Transactions: sender recovery failed");
+    }
     return sender;
 }
 
@@ -347,12 +289,6 @@ std::span<const uint8_t> Transactions::View::authorization_list_rlp() const {
     return authorization_list_rlp_;
 }
 
-std::span<const uint8_t> Transactions::View::auth_pubkey(size_t i) const {
-    if (i >= num_auth_pubkeys_) {
-        fatal("Transactions::View::auth_pubkey: index out of range");
-    }
-    return std::span<const uint8_t>{auth_pubkeys_ + i * 64, 64};
-}
 
 std::span<const uint8_t> Transactions::View::initcodes_rlp() const {
     if (type_ != Type::Osaka) {
@@ -470,9 +406,8 @@ void Transactions::parse_osaka(View& v, std::span<const uint8_t> outer_payload) 
 }
 
 // ============================================================================
-// Constructor — for each tx: read u64 envelope_size + 64 pubkey bytes +
-// envelope bytes + pad. Decode every field, verify signature, derive
-// sender.
+// Constructor — for each tx: read u64 envelope_size + envelope bytes + pad.
+// Decode every field, recover the sender from the signature.
 // ============================================================================
 
 Transactions::Transactions(const uint8_t*& cursor) {
@@ -487,12 +422,6 @@ Transactions::Transactions(const uint8_t*& cursor) {
 
     for (uint64_t i = 0; i < count; ++i) {
         const uint64_t env_size = read_u64_le(cursor);
-
-        // Prover-supplied sender pubkey. Starts at offset 8 within the
-        // record so naturally 8-byte aligned; 64 bytes is itself a
-        // multiple of 8.
-        const uint8_t* pubkey = cursor;
-        cursor += 64;
 
         const uint8_t* env = cursor;
         cursor += env_size;
@@ -532,11 +461,8 @@ Transactions::Transactions(const uint8_t*& cursor) {
             case Type::Osaka:      parse_osaka      (v, outer.payload); break;
         }
 
-        // For Type 4 (SetCode / EIP-7702): the prover supplies one
-        // uncompressed pubkey (64 B, x || y, BE) per authorization in
-        // the auth list. Count the auth entries we just parsed and
-        // read that many pubkeys from the stream. 64 B is already
-        // 8-aligned so no extra padding is needed.
+        // For Type 4 (SetCode / EIP-7702): count the auth-list entries
+        // (the intrinsic-gas calculation charges 25000 per authorization).
         if (v.type_ == Type::SetCode) {
             const Item auth_outer = rlp::decode_item(v.authorization_list_rlp_);
             if (auth_outer.kind != ItemKind::List) {
@@ -545,13 +471,11 @@ Transactions::Transactions(const uint8_t*& cursor) {
             size_t n = 0;
             ListIter ait{auth_outer.payload};
             while (ait.has_next()) { (void)ait.next(); ++n; }
-            v.auth_pubkeys_     = cursor;
-            v.num_auth_pubkeys_ = n;
-            cursor += n * 64;
+            v.num_authorizations_ = n;
         }
 
         v.transaction_hash_ = keccak256_bytes32(env, env_size);
-        v.sender_           = verify_and_recover_sender(v, pubkey);
+        v.sender_           = recover_sender(v);
 
         // MPT leaf: RLP(tx_index) → wire envelope verbatim.
         trie.insert(rlp::encode_u64(i),

@@ -1,28 +1,73 @@
-// secp256k1.cpp — secp256k1 ECDSA for the ZisK self-contained guest.
+// secp256k1.cpp — secp256k1 ECDSA recover, two implementations of the same ABI
+// selected by target (ZEG_ZISK):
 //
-// One source, two interchangeable backends for the low-level field/scalar/EC
-// primitives; the high-level ECDSA logic is shared:
+//   ZisK guest (ZEG_ZISK) : in-circuit recover over ZisK precompiles
+//                           (arith256_mod 0x802, secp256k1_add/dbl 0x803/0x804)
+//                           + verified fcall hints (FN_INV, FP_SQRT,
+//                           MSB_POS_256) — a faithful port of ziskos's
+//                           `zisklib`. `-DZEG_SECP256K1_SW` swaps the low-level
+//                           primitives for a portable software baseline (same
+//                           result, no accelerators); both run on ziskemu.
+//   host (!ZEG_ZISK)      : superaccelerated — delegates to evmone's
+//                           evmmax::secp256k1::secp256k1_ecdsa_recover (intx,
+//                           projective coords). The host only needs a correct
+//                           fast answer (it proves nothing), and evmone is the
+//                           reference implementation, so it doubles as the
+//                           differential oracle for the ZisK path.
 //
-//   default                : ZisK precompiles (arith256_mod 0x802,
-//                            secp256k1_add 0x803, secp256k1_dbl 0x804) plus
-//                            fcall hints (FN_INV, MSB_POS_256), verified
-//                            in-circuit — a faithful port of ziskos's `zisklib`
-//                            (mirrors ../../hello-zisk-c/src/secp256k1.cpp).
-//   -DZEG_SECP256K1_SW     : portable software baseline (no accelerators), for
-//                            benchmarking / as a reference. Same results.
-//
-// Public ABI (unchanged, see zeg/zisk_crypto.hpp):
-//   int secp256k1_ecdsa_verify(pk, z, r, s, result)
-//       result <- (u1·G + u2·PK).(x,y),  u1 = z·s⁻¹ mod n, u2 = r·s⁻¹ mod n
-// The caller (zeg::verify_and_recover_sender / verify_signature_and_get_signer)
-// does the final `result.x mod n == r` ECDSA check; on a degenerate (∞) result
-// we leave result = 0 so that check fails closed. Always returns 0.
-//
-// Limb convention everywhere: uint64_t[4] little-endian (limb[0] = low 64 bits);
-// points are uint64_t[8] = x[4] || y[4]. Matches the format the guest passes in
-// and expects back, so no endianness conversion is needed.
+// Public ABI (see zeg/zisk_crypto.hpp):
+//   int secp256k1_ecdsa_recover(z, r, s, recid, pubkey)
+//       full ECDSA public-key recovery — every signer derivation in the guest
+//       (tx senders, EIP-7702 auth signers, the EVM ECRECOVER precompile) goes
+//       through it via zeg::ecrecover_address. Limbs: uint64_t[4] little-endian
+//       (limb[0] = low 64 bits); points are uint64_t[8] = x[4] || y[4].
 
 #include <cstdint>
+
+#if !defined(ZEG_ZISK)
+// ===========================================================================
+// Host: delegate to evmone's reference recover.
+// ===========================================================================
+#include <evmone_precompiles/secp256k1.hpp>
+
+namespace {
+// LE limbs (uint64_t[4], limb[0] = low) <-> 32 big-endian bytes, for the evmone
+// boundary (it takes/returns big-endian).
+inline void limbs_to_be(const uint64_t l[4], uint8_t be[32]) {
+    for (int i = 0; i < 4; ++i) {
+        const uint64_t w = l[3 - i];
+        for (int j = 0; j < 8; ++j) be[i * 8 + j] = static_cast<uint8_t>(w >> (8 * (7 - j)));
+    }
+}
+inline void be_to_limbs(const uint8_t be[32], uint64_t l[4]) {
+    for (int i = 0; i < 4; ++i) {
+        uint64_t w = 0;
+        for (int j = 0; j < 8; ++j) w = (w << 8) | be[i * 8 + j];
+        l[3 - i] = w;
+    }
+}
+}  // namespace
+
+extern "C" int secp256k1_ecdsa_recover(const uint64_t* z, const uint64_t* r,
+                                       const uint64_t* s, unsigned recid,
+                                       uint64_t* pubkey) {
+    uint8_t zb[32], rb[32], sb[32];
+    limbs_to_be(z, zb);
+    limbs_to_be(r, rb);
+    limbs_to_be(s, sb);
+    // evmone validates r,s in [1,n-1] and returns nullopt when no point exists —
+    // identical precompile semantics to the ZisK path below.
+    const auto pt = evmmax::secp256k1::secp256k1_ecdsa_recover(zb, rb, sb, recid != 0);
+    if (!pt.has_value())
+        return 1;  // not recoverable
+    uint8_t pk[64];
+    pt->to_bytes(pk);  // x || y, 64 big-endian bytes (Montgomery -> normal)
+    be_to_limbs(pk, pubkey);
+    be_to_limbs(pk + 32, pubkey + 4);
+    return 0;
+}
+
+#else  // ===================== ZisK guest =====================================
 
 namespace {
 
@@ -41,15 +86,26 @@ const u64 ONE[4]  = {1, 0, 0, 0};
 const u64 TWO[4]  = {2, 0, 0, 0};
 
 // Field prime P = 2^256 - 2^32 - 977, the curve constant b = 7, and the modular
-// square-root exponent (P+1)/4 (valid because P ≡ 3 mod 4). Used by ecrecover to
-// reconstruct R.y from R.x. (verify needs none of these — it works mod N and
-// lets the EC precompiles handle the field internally — so P used to live only
-// in the software block; ecrecover needs it in both backends.)
+// square-root exponent (P+1)/4 (valid because P ≡ 3 mod 4; used only by the
+// software fp_sqrt_hint — the ZisK backend gets the root from the fp_sqrt
+// fcall). Used by ecrecover to reconstruct R.y from R.x. (verify needs none of
+// these — it works mod N and lets the EC precompiles handle the field
+// internally.)
 const u64 P[4]    = {0xFFFFFFFEFFFFFC2FULL, 0xFFFFFFFFFFFFFFFFULL,
                      0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL};
 const u64 SEVEN[4] = {7, 0, 0, 0};
 const u64 P_PLUS_1_DIV_4[4] = {0xFFFFFFFFBFFFFF0CULL, 0xFFFFFFFFFFFFFFFFULL,
                                0xFFFFFFFFFFFFFFFFULL, 0x3FFFFFFFFFFFFFFFULL};
+// First quadratic non-residue of Fp — must match the ZisK fp_sqrt fcall's NQR
+// (zisklib lib/secp256k1/constants.rs): on "no root" the fcall's witness is
+// sqrt(alpha·NQR), which the guest verifies against alpha·NQR3.
+const u64 NQR3[4] = {3, 0, 0, 0};
+
+// Abort used when a verified hint turns out wrong — those paths must never
+// execute on a valid run. The shared trap from runtime.cpp (marchid-dispatched
+// unimp / magic write) fails the run/proof immediately — trapping beats an
+// infinite loop, which would spin to the emulator's step ceiling before failing.
+extern "C" [[noreturn]] void zeg_zisk_halt();
 
 inline void cp4(u64 d[4], const u64 s[4]) { d[0]=s[0]; d[1]=s[1]; d[2]=s[2]; d[3]=s[3]; }
 inline void cp8(u64 d[8], const u64 s[8]) { for (int i=0;i<8;++i) d[i]=s[i]; }
@@ -228,7 +284,7 @@ inline void reduce_fn(const u64 x[4], u64 o[4]) {  // x mod N (x < 2^256)
 inline void inv_fn(const u64 x[4], u64 o[4]) {
     fn_inv_hint(x,o);
     u64 chk[4]; mul_fn(x,o,chk);
-    if (!eq4(chk,ONE)) { for(;;){} }  // hint was wrong: must never happen
+    if (!eq4(chk,ONE)) zeg_zisk_halt();  // hint was wrong: must never happen
 }
 
 // p1 (+) p2 for non-infinity affine points. Returns false if the sum is 𝒪.
@@ -247,7 +303,7 @@ bool scalar_mul(const u64 k[4], const u64 P_in[8], u64 res[8]) {
     if (eq4(k,TWO)) { cp8(res,P_in); ec_dbl(res); return true; }
 
     u64 limb, bit; msb_pos256(k,&limb,&bit);
-    if (((k[limb]>>bit)&1) != 1) { for(;;){} }   // first hinted bit must be set
+    if (((k[limb]>>bit)&1) != 1) zeg_zisk_halt();   // first hinted bit must be set
 
     cp8(res,P_in);
     u64 k_rec[4]={0,0,0,0}; k_rec[limb] = 1ULL<<bit;
@@ -262,7 +318,7 @@ bool scalar_mul(const u64 k[4], const u64 P_in[8], u64 res[8]) {
         }
         curbit=63;
     }
-    if (!eq4(k_rec,k)) { for(;;){} }             // recomposed scalar must match
+    if (!eq4(k_rec,k)) zeg_zisk_halt();             // recomposed scalar must match
     return true;
 }
 
@@ -288,34 +344,36 @@ inline void modpow_p(const u64 base[4], const u64 e[4], u64 o[4]) {
     cp4(o, r);
 }
 
-} // namespace
-
-// ===========================================================================
-// Public ABI: compute result = u1·G + u2·PK. Always returns 0 (caller checks
-// result.x mod n == r). On a degenerate result (point at infinity) we leave
-// result = 0 so the caller's equality check fails and it fatals.
-// ===========================================================================
-extern "C" int secp256k1_ecdsa_verify(
-        const uint64_t *pk, const uint64_t *z, const uint64_t *r,
-        const uint64_t *s, uint64_t *result) {
-    u64 zn[4]; reduce_fn(z, zn);
-    u64 sinv[4]; inv_fn(s, sinv);
-    u64 u1[4]; mul_fn(zn, sinv, u1);
-    u64 u2[4]; mul_fn(r,  sinv, u2);
-
-    u64 A[8], B[8], R[8];
-    bool hasA = scalar_mul(u1, G,  A);
-    bool hasB = scalar_mul(u2, pk, B);
-    bool hasR;
-    if (hasA && hasB)      hasR = point_add(A, B, R);
-    else if (hasA)       { cp8(R, A); hasR = true; }
-    else if (hasB)       { cp8(R, B); hasR = true; }
-    else                   hasR = false;
-
-    if (!hasR) { for (int i=0;i<8;++i) result[i] = 0; return 0; }
-    cp8(result, R);
-    return 0;
+// Square-root hint for Fp: sets *is_qr and y such that
+//   *is_qr == 1: y² ≡ alpha (mod P), with y's parity == `parity`;
+//   *is_qr == 0: y² ≡ alpha·NQR3 (mod P) — a witness that alpha has no root.
+// The hint is UNTRUSTED either way; the caller must verify it (see
+// secp256k1_ecdsa_recover). ZisK backend: the fp_sqrt fcall (id 3). Software
+// backend: the same contract computed locally via modpow_p, so both backends
+// exercise identical caller logic.
+inline void fp_sqrt_hint(const u64 alpha[4], u64 parity, u64* is_qr, u64 y[4]) {
+#if defined(ZEG_SECP256K1_SW)
+    u64 cand[4]; modpow_p(alpha, P_PLUS_1_DIV_4, cand);
+    u64 sq[4];   arith256_mod(cand, cand, ZERO, P, sq);
+    if (eq4(sq, alpha)) {
+        *is_qr = 1;
+        if ((cand[0] & 1ULL) != parity) { u64 n[4]; sub4(P, cand, n); cp4(cand, n); }
+        cp4(y, cand);
+    } else {
+        *is_qr = 0;
+        u64 an[4]; arith256_mod(alpha, NQR3, ZERO, P, an);
+        modpow_p(an, P_PLUS_1_DIV_4, y);
+    }
+#else
+    asm volatile("csrs 0x8F2, %0" : : "r"(alpha)  : "memory");  // param: alpha, 4 words
+    asm volatile("csrs 0x8F0, %0" : : "r"(parity) : "memory");  // param: parity (direct)
+    asm volatile("csrwi 0x8C0, 3" : : : "memory");              // trigger FP_SQRT
+    *is_qr = fcall_get();
+    y[0]=fcall_get(); y[1]=fcall_get(); y[2]=fcall_get(); y[3]=fcall_get();
+#endif
 }
+
+} // namespace
 
 // ===========================================================================
 // Public ABI: EVM ECRECOVER. Given message hash z, signature (r, s) and the
@@ -344,15 +402,26 @@ extern "C" int secp256k1_ecdsa_recover(
     arith256_mod(r2, r,   ZERO,  P, r3);
     arith256_mod(r3, ONE, SEVEN, P, alpha);
 
-    // y = alpha^((P+1)/4) mod P, then confirm it is a true square root —
-    // otherwise alpha is a quadratic non-residue and no R exists.
-    u64 y[4]; modpow_p(alpha, P_PLUS_1_DIV_4, y);
+    // y = sqrt(alpha) with parity == recid, via the fp_sqrt hint. The hint is
+    // untrusted, so verify whichever claim it makes:
+    //   root exists  -> y² ≡ alpha (mod P), y canonical (< P, else its parity
+    //                   is ill-defined: y and y+P square identically), parity
+    //                   == recid;
+    //   no root      -> y is a witness with y² ≡ alpha·NQR3 (mod P), which
+    //                   proves alpha is a non-residue (NQR3 is a fixed
+    //                   non-residue) -> R does not exist, not recoverable.
+    // A hint that satisfies neither claim is impossible on a valid run.
+    u64 is_qr, y[4];
+    fp_sqrt_hint(alpha, recid, &is_qr, y);
     u64 y2[4]; arith256_mod(y, y, ZERO, P, y2);
-    if (!eq4(y2, alpha)) return 1;
-
-    // Pick the root whose parity matches recid.
-    if (static_cast<unsigned>(y[0] & 1ULL) != recid) {
-        u64 ny[4]; sub4(P, y, ny); cp4(y, ny);
+    if (is_qr) {
+        if (!lt4(y, P)) return 1;
+        if (!eq4(y2, alpha)) zeg_zisk_halt();            // wrong hint: must never happen
+        if ((y[0] & 1ULL) != recid) zeg_zisk_halt();
+    } else {
+        u64 an[4]; arith256_mod(alpha, NQR3, ZERO, P, an);
+        if (!eq4(y2, an)) zeg_zisk_halt();               // witness must prove non-residue
+        return 1;                                     // no R exists → not recoverable
     }
 
     u64 R[8]; cp4(R, r); cp4(R + 4, y);
@@ -378,3 +447,5 @@ extern "C" int secp256k1_ecdsa_recover(
     cp8(pubkey_out, Q);
     return 0;
 }
+
+#endif  // ZEG_ZISK

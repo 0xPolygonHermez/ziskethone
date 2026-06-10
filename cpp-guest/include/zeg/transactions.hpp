@@ -2,13 +2,12 @@
 // the canonical RLP envelopes the prover provides.
 //
 // Each tx is decoded at construction into typed fields stored inside a
-// View. The canonical transaction hash and the recovered sender
-// address are both precomputed: the prover supplies the sender's
-// uncompressed secp256k1 public key alongside each envelope, the
-// constructor verifies the signature against it via ZisK's
-// secp256k1_ecdsa_verify syscall, then derives the sender as
-// keccak256(pubkey)[12:]. The intermediate signing hash and the pubkey
-// itself are not retained.
+// View. The canonical transaction hash and the sender address are both
+// precomputed: the constructor recovers the sender from the envelope's
+// signature (r, s, v / y_parity) via ecrecover (secp256k1_ecdsa_recover,
+// fp_sqrt-fcall accelerated on ZisK) and derives it as
+// keccak256(pubkey)[12:]. No prover-supplied public keys are needed (or
+// present) in the witness.
 
 #pragma once
 
@@ -80,14 +79,9 @@ public:
 
         // ----- EIP-7702 (Type 4 only; others abort) -----
         std::span<const uint8_t>   authorization_list_rlp() const;
-        // Number of authorization-signer pubkeys the prover supplied
-        // for this tx. For Type 4 this equals the auth-list length;
-        // for other types it's always 0.
-        size_t                     num_auth_pubkeys() const noexcept { return num_auth_pubkeys_; }
-        // Returns the 64-byte (x || y, big-endian) pubkey for the
-        // i-th authorization. Aborts via zeg::fatal if `i` is out of
-        // range.
-        std::span<const uint8_t>   auth_pubkey(size_t i) const;
+        // Number of entries in the tx's authorization list. For Type 4
+        // this equals the auth-list length; for other types it's always 0.
+        size_t                     num_authorizations() const noexcept { return num_authorizations_; }
 
         // ----- EIP-7873 / Osaka (Type 5 only; others abort) -----
         // Raw RLP of the TXCREATE initcode pool (a list of byte
@@ -132,11 +126,7 @@ public:
 
         // ----- EIP-7702 (Type 4) -----
         std::span<const uint8_t> authorization_list_rlp_{};
-        // Prover-supplied uncompressed pubkeys, one per auth entry,
-        // laid out contiguously (64 B each). Pointer into the input
-        // stream; the stream must outlive this View.
-        const uint8_t*           auth_pubkeys_{nullptr};
-        size_t                   num_auth_pubkeys_{0};
+        size_t                   num_authorizations_{0};
 
         // ----- EIP-7873 / Osaka (Type 5) -----
         std::span<const uint8_t> initcodes_rlp_{};
