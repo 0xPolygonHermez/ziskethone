@@ -52,6 +52,11 @@ extern "C" [[noreturn]] void zeg_zisk_halt() {
 // ===========================================================================
 static char *g_next = nullptr;
 
+// memcpy lives in dma/memcpy.s (routed through the ZisK DMA precompile); declare
+// it so realloc can use it. -fno-builtin (see zisk/CMakeLists.txt) keeps this an
+// out-of-line call to that symbol rather than an inlined byte loop.
+void *memcpy(void *dst, const void *src, size_t n);
+
 static inline char *heap_alloc(size_t size) {
     if (!g_next) g_next = &_kernel_heap_bottom;
     size = (size + 15) & ~size_t(15);            // 16-byte align (max_align_t)
@@ -65,10 +70,10 @@ void *malloc(size_t size) { return heap_alloc(size); }
 void  free(void *) {}
 
 void *calloc(size_t n, size_t size) {
-    size_t total = n * size;
-    char *p = heap_alloc(total);
-    for (size_t i = 0; i < total; ++i) p[i] = 0;
-    return p;
+    // No zero-fill needed: the bump allocator never reuses memory (free is a
+    // no-op, g_next only advances), so every allocation is fresh, never-written
+    // RAM — which ZisK guarantees starts at zero. So calloc == malloc here.
+    return heap_alloc(n * size);
 }
 
 // Bump-allocator realloc: allocate fresh and copy the *requested* new size
@@ -76,10 +81,10 @@ void *calloc(size_t n, size_t size) {
 void *realloc(void *ptr, size_t size) {
     if (!ptr) return heap_alloc(size);
     char *p = heap_alloc(size);
-    // Copy conservatively from the old block up to the new size. Safe because
-    // the heap is one contiguous region and old blocks stay mapped.
-    const char *src = static_cast<const char *>(ptr);
-    for (size_t i = 0; i < size; ++i) p[i] = src[i];
+    // Copy the old block up to the new size via the DMA-accelerated memcpy. Safe
+    // because the heap is one contiguous region and old blocks stay mapped; any
+    // bytes past the old allocation are fresh zero (the bump arena is untouched).
+    memcpy(p, ptr, size);
     return p;
 }
 

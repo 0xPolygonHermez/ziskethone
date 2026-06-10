@@ -178,11 +178,11 @@ target_compile_definitions(zisk_eth_guest.elf PRIVATE
   PROJECT_VERSION="0.21.0")          # normally injected by evmone's CMake
 target_compile_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
 target_link_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
-# runtime.cpp no longer defines mem* (those moved to dma/*.s), but it still has the
-# bump-allocator zero-fill/copy loops (calloc/realloc). Keep loop-distribute-patterns
-# + builtin idiom recognition disabled so those stay explicit loops — unchanged from
-# prior behavior. (Dropping these would let calloc/realloc lower to the DMA mem* too;
-# left out of scope here.)
+# runtime.cpp's calloc no longer zero-fills (the bump arena is fresh, ZisK-zero
+# RAM) and realloc copies via the DMA memcpy. -fno-builtin keeps that an
+# out-of-line call to the dma/*.s memcpy symbol rather than an inlined byte loop;
+# -fno-tree-loop-distribute-patterns keeps any other runtime.cpp loops (str*) from
+# being rewritten into mem* idioms.
 set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   TARGET_DIRECTORY zisk_eth_guest.elf PROPERTIES
   COMPILE_OPTIONS "-fno-tree-loop-distribute-patterns;-fno-builtin")

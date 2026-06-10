@@ -64,7 +64,7 @@ SECTIONS
 
   .data : { *(.data .data.* .sdata .sdata.*) } >ram AT>ram :data
 
-  .bss : {
+  .bss (NOLOAD) : {
     PROVIDE(_bss_start = .);
     *(.bss .bss.*);
     PROVIDE(_bss_end = .); # ... and one at the end
