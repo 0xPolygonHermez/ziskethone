@@ -46,14 +46,59 @@ inline void udivmod(const U256& a, const U256& b, U256& q, U256& r) {
 }
 
 // 0x01 ADD — pop a and b, push (a + b) mod 2^256.
+//
+// Fast path: when either operand is < 2^64 (its three high BE limbs are zero —
+// the overwhelmingly common case: counters, offsets, pointer bumps), the add
+// runs in the low 64-bit lane (one bswap64 per operand lane plus one for the
+// result) and the large operand's high lanes pass through verbatim in BE form —
+// no byteswap256 round-trip and no add256 precompile. A carry past bit 64 (an
+// all-0xFF lane) cascades one lane at a time; carry off the top lane drops
+// (mod 2^256). Only the both-large case takes the full LE path.
 bool op_add(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, s.stackPointer);
-    U256       b = ld_le(s, s.stackPointer + 1);
-    zeg::bi::add256(a.limbs, b.limbs, /*cin=*/0, b.limbs);  // b = a + b (mod 2^256)
-    st_le(s, s.stackPointer + 1, b);
+    const U256& sa = s.stack[s.stackPointer];      // a, BE slot (distinct from sb)
+    U256&       sb = s.stack[s.stackPointer + 1];  // b / result, BE slot
+
+    if ((sa.limbs[0] | sa.limbs[1] | sa.limbs[2]) == 0) {  // a < 2^64 (covers both-small)
+        if (sa.limbs[3] != 0) {                            // a == 0 -> result is b, in place
+            const uint64_t addend = bswap64(sa.limbs[3]);
+            const uint64_t t = bswap64(sb.limbs[3]);
+            const uint64_t r = t + addend;
+            sb.limbs[3] = bswap64(r);
+            bool carry = r < t;
+            for (int i = 2; carry && i >= 0; --i) {        // b's high lanes already in place
+                const uint64_t v = bswap64(sb.limbs[i]) + 1;
+                carry = (v == 0);
+                sb.limbs[i] = bswap64(v);
+            }
+        }
+    } else if ((sb.limbs[0] | sb.limbs[1] | sb.limbs[2]) == 0) {  // b < 2^64, a large
+        if (sb.limbs[3] == 0) {
+            sb = sa;                                       // x + 0: raw slot copy
+        } else {
+            const uint64_t addend = bswap64(sb.limbs[3]);
+            const uint64_t t = bswap64(sa.limbs[3]);
+            const uint64_t r = t + addend;
+            sb.limbs[3] = bswap64(r);
+            bool carry = r < t;
+            for (int i = 2; i >= 0; --i) {                 // no break: fill the slot from a
+                if (carry) {
+                    const uint64_t v = bswap64(sa.limbs[i]) + 1;
+                    carry = (v == 0);
+                    sb.limbs[i] = bswap64(v);
+                } else {
+                    sb.limbs[i] = sa.limbs[i];             // verbatim BE copy
+                }
+            }
+        }
+    } else {                                               // both >= 2^64: full LE path
+        const U256 a = ld_le(s, s.stackPointer);
+        U256       b = ld_le(s, s.stackPointer + 1);
+        zeg::bi::add256(a.limbs, b.limbs, /*cin=*/0, b.limbs);  // b = a + b (mod 2^256)
+        st_le(s, s.stackPointer + 1, b);
+    }
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -74,16 +119,46 @@ bool op_mul(EvmState& s) {
 }
 
 // 0x03 SUB — push (a - b) mod 2^256, where a is the top item.
+//
+// Fast path: when the subtrahend b is < 2^64 (the common `x - small_const`,
+// and any both-small case including the deliberate-underflow ones), the
+// subtract runs in the low 64-bit lane and a's high lanes are copied through
+// verbatim in BE form unless a borrow cascades (an all-zero lane of a turns
+// all-0xFF and the borrow continues — which builds the correct wrapped result
+// for a < b). Only b >= 2^64 (including small-minus-large) takes the LE path.
 bool op_sub(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, s.stackPointer);
-    U256       b = ld_le(s, s.stackPointer + 1);
-    // a - b == a + ~b + 1 (two's complement), via the accelerated adder.
-    const uint64_t nb[4] = {~b.limbs[0], ~b.limbs[1], ~b.limbs[2], ~b.limbs[3]};
-    zeg::bi::add256(a.limbs, nb, /*cin=*/1, b.limbs);
-    st_le(s, s.stackPointer + 1, b);
+    const U256& sa = s.stack[s.stackPointer];      // a, minuend (distinct from sb)
+    U256&       sb = s.stack[s.stackPointer + 1];  // b, subtrahend / result
+
+    if ((sb.limbs[0] | sb.limbs[1] | sb.limbs[2]) == 0) {  // b < 2^64
+        if (sb.limbs[3] == 0) {
+            sb = sa;                                       // a - 0: raw slot copy
+        } else {
+            const uint64_t bv = bswap64(sb.limbs[3]);
+            const uint64_t t  = bswap64(sa.limbs[3]);
+            sb.limbs[3] = bswap64(t - bv);
+            bool borrow = t < bv;
+            for (int i = 2; i >= 0; --i) {                 // no break: fill the slot from a
+                if (borrow) {
+                    const uint64_t v = bswap64(sa.limbs[i]);
+                    sb.limbs[i] = bswap64(v - 1);          // v==0 -> all-FF lane, borrow continues
+                    borrow = (v == 0);
+                } else {
+                    sb.limbs[i] = sa.limbs[i];             // verbatim BE copy
+                }
+            }
+        }
+    } else {                                               // b >= 2^64: full LE path
+        const U256 a = ld_le(s, s.stackPointer);
+        U256       b = ld_le(s, s.stackPointer + 1);
+        // a - b == a + ~b + 1 (two's complement), via the accelerated adder.
+        const uint64_t nb[4] = {~b.limbs[0], ~b.limbs[1], ~b.limbs[2], ~b.limbs[3]};
+        zeg::bi::add256(a.limbs, nb, /*cin=*/1, b.limbs);
+        st_le(s, s.stackPointer + 1, b);
+    }
     ++s.stackPointer;
     ++s.pc;
     return true;
