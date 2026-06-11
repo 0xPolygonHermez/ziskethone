@@ -27,10 +27,8 @@ bool op_keccak256(EvmState& s) {
 
     const uint32_t off_i  = s.stackPointer;
     const uint32_t size_i = s.stackPointer + 1;
-    to_le(s, off_i);
-    to_le(s, size_i);
-    const uint64_t off  = mem_arg(s.stack[off_i]);
-    const uint64_t size = mem_arg(s.stack[size_i]);
+    const uint64_t off  = mem_arg(ld_le(s, off_i));
+    const uint64_t size = mem_arg(ld_le(s, size_i));
 
     if (EVMMem::expand(static_cast<size_t>(off), static_cast<size_t>(size), &s.gas) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
@@ -42,7 +40,6 @@ bool op_keccak256(EvmState& s) {
     const uint8_t* data = size != 0 ? EVMMem::data(static_cast<size_t>(off)) : nullptr;
     const evmc_bytes32 digest = zeg::keccak256_bytes32(data, static_cast<size_t>(size));
     std::memcpy(&s.stack[size_i], digest.bytes, 32);  // digest is big-endian -> BE form
-    s.stackBE[size_i] = kBE;
 
     ++s.stackPointer;  // popped offset; result sits in the old size slot
     ++s.pc;

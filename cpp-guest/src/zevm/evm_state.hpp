@@ -55,18 +55,15 @@ struct EvmState {
     bool           ownsAnalysis;
 
     // ----- operand stack -----
-    // 256-bit words. stackPointer follows the spec's convention: it counts
-    // DOWN from kStackLimit (empty) toward 0 (full). A push pre-decrements,
-    // a pop post-increments. Number of live items == kStackLimit - stackPointer.
+    // 256-bit words, each held in big-endian wire form (the 32 memory/storage/
+    // PUSH bytes, stored as four little-endian words == byteswap256 of the
+    // value). Arithmetic/positional handlers convert to little-endian limbs
+    // locally via detail.hpp's ld_le/st_le; everything else touches these BE
+    // slots directly. stackPointer follows the spec's convention: it counts DOWN
+    // from kStackLimit (empty) toward 0 (full). A push pre-decrements, a pop
+    // post-increments. Number of live items == kStackLimit - stackPointer.
     U256           stack[kStackLimit];
     uint32_t       stackPointer;       // kStackLimit == empty
-
-    // Per-entry endianness of stack[i] (lazy-endianness optimization): 0 == LE
-    // (standard limbs, what zeg::bi consumes), 1 == BE (byteswap256 of the value
-    // — the 32 big-endian wire bytes loaded directly, what MLOAD/PUSH produce and
-    // MSTORE writes). Conversions are deferred until an op needs a given form.
-    // Only entries below stackPointer are live; the rest are stale.
-    uint8_t        stackBE[kStackLimit];
 
     // ----- memory -----
     // Handle into the static EVMMem manager (== this frame's call depth). The

@@ -4,8 +4,8 @@
 // These call back into the host (ZiskStateDB) through the evmc C interface for
 // the account whose storage is being accessed — the message recipient. Keys and
 // values are evmc_bytes32, i.e. 32 big-endian bytes, which is exactly the BE
-// stack representation: once a slot is in BE form its raw bytes *are* the
-// evmc_bytes32, so endianness conversion is just to_be + a memcpy.
+// stack representation: a slot's raw bytes *are* the evmc_bytes32, so there is no
+// endianness conversion at all — just a memcpy in or out.
 //
 // Gas matches evmone for Berlin..Prague (EIP-2929 warm/cold, EIP-2200 net
 // metering, EIP-3529 refunds, EIP-1706 sentry). SSTORE returns its
@@ -47,8 +47,8 @@ constexpr SStoreCost SSTORE_COST[] = {
     {WARM_STORAGE_READ_COST, SS_RESET - WARM_STORAGE_READ_COST},          // MODIFIED_RESTORED
 };
 
-// The 32 big-endian bytes of stack slot `i`. Caller must have made it BE; then
-// the slot's memory is the evmc_bytes32 already.
+// The 32 big-endian bytes of stack slot `i` — the slot's memory is the
+// evmc_bytes32 directly (stack words are stored big-endian).
 inline evmc_bytes32 slot_bytes(const EvmState& s, uint32_t i) {
     evmc_bytes32 b;
     std::memcpy(b.bytes, &s.stack[i], 32);
@@ -61,7 +61,6 @@ bool op_sload(EvmState& s) {
     s.gas -= WARM_STORAGE_READ_COST;
     if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    to_be(s, s.stackPointer);                       // key as big-endian bytes
     const evmc_bytes32 key = slot_bytes(s, s.stackPointer);
     if (s.rev >= EVMC_BERLIN &&
         s.host->access_storage(s.context, &s.evmcMsg->recipient, &key) == EVMC_ACCESS_COLD) {
@@ -71,7 +70,6 @@ bool op_sload(EvmState& s) {
     }
     const evmc_bytes32 v = s.host->get_storage(s.context, &s.evmcMsg->recipient, &key);
     std::memcpy(&s.stack[s.stackPointer], v.bytes, 32);  // value is big-endian -> BE form
-    s.stackBE[s.stackPointer] = kBE;
     ++s.pc;
     return true;
 }
@@ -84,8 +82,6 @@ bool op_sstore(EvmState& s) {
         s.status = EVMC_OUT_OF_GAS;  // EIP-1706 sentry
         return false;
     }
-    to_be(s, s.stackPointer);
-    to_be(s, s.stackPointer + 1);
     const evmc_bytes32 key   = slot_bytes(s, s.stackPointer);
     const evmc_bytes32 value = slot_bytes(s, s.stackPointer + 1);
 
@@ -113,12 +109,10 @@ bool op_tload(EvmState& s) {
     s.gas -= WARM_STORAGE_READ_COST;
     if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    to_be(s, s.stackPointer);
     const evmc_bytes32 key = slot_bytes(s, s.stackPointer);
     const evmc_bytes32 v =
         s.host->get_transient_storage(s.context, &s.evmcMsg->recipient, &key);
     std::memcpy(&s.stack[s.stackPointer], v.bytes, 32);
-    s.stackBE[s.stackPointer] = kBE;
     ++s.pc;
     return true;
 }
@@ -130,8 +124,6 @@ bool op_tstore(EvmState& s) {
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    to_be(s, s.stackPointer);
-    to_be(s, s.stackPointer + 1);
     const evmc_bytes32 key   = slot_bytes(s, s.stackPointer);
     const evmc_bytes32 value = slot_bytes(s, s.stackPointer + 1);
     s.host->set_transient_storage(s.context, &s.evmcMsg->recipient, &key, &value);

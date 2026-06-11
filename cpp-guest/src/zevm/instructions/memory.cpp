@@ -2,11 +2,11 @@
 // MSIZE 0x59, MCOPY 0x5e). Backed by the static EVMMem manager.
 //
 // Memory is big-endian, which is exactly the BE stack representation (the 32
-// wire bytes laid out as four little-endian limbs == the value's raw bytes). So
-// with lazy endianness MLOAD reads straight into the slot and tags it BE, and
-// MSTORE writes a BE value's bytes out with no conversion. The byte offset, by
-// contrast, is an integer, so it is forced to LE before use. An offset with any
-// high limb set addresses far beyond what gas could cover -> out-of-gas.
+// wire bytes laid out as four little-endian limbs == the slot's raw bytes). So
+// MLOAD reads straight into the slot and MSTORE writes a slot's bytes out with
+// no conversion. Byte offsets, by contrast, are integers, so they are loaded as
+// little-endian (ld_le) before use; an offset with any high limb set addresses
+// far beyond what gas could cover -> out-of-gas.
 
 #include "detail.hpp"
 
@@ -19,25 +19,25 @@ namespace zevm {
 
 namespace {
 
-// 0x51 MLOAD — push the 32 bytes at memory[offset..offset+32) (big-endian, so
-// the result is left in BE form).
+// 0x51 MLOAD — push the 32 bytes at memory[offset..offset+32) (big-endian, which
+// is the BE slot form directly).
 bool op_mload(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    to_le(s, s.stackPointer);             // offset as an integer
-    U256& slot = s.stack[s.stackPointer]; // offset, overwritten with the loaded word
-    if ((slot.limbs[1] | slot.limbs[2] | slot.limbs[3]) != 0) {
+    const U256 off = ld_le(s, s.stackPointer);  // offset as an integer
+    if ((off.limbs[1] | off.limbs[2] | off.limbs[3]) != 0) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
     }
-    const size_t addr = static_cast<size_t>(slot.limbs[0]);
+    const size_t addr = static_cast<size_t>(off.limbs[0]);
+    U256& slot = s.stack[s.stackPointer];  // overwritten with the loaded word
     if (EVMMem::readBytes(addr, reinterpret_cast<uint8_t*>(&slot), 32, &s.gas) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
     }
-    s.stackBE[s.stackPointer] = kBE;       // raw memory bytes are the BE form
+    // raw memory bytes are the BE form — slot is already correct, no swap
     ++s.pc;
     return true;
 }
@@ -48,16 +48,14 @@ bool op_mstore(EvmState& s) {
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    to_le(s, s.stackPointer);  // offset
-    const U256& off = s.stack[s.stackPointer];
+    const U256 off = ld_le(s, s.stackPointer);  // offset
     if ((off.limbs[1] | off.limbs[2] | off.limbs[3]) != 0) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
     }
     const size_t addr = static_cast<size_t>(off.limbs[0]);
 
-    to_be(s, s.stackPointer + 1);  // value -> big-endian bytes (no-op if already BE)
-    const U256& val = s.stack[s.stackPointer + 1];
+    const U256& val = s.stack[s.stackPointer + 1];  // already big-endian bytes
     if (EVMMem::writeBytes(addr, reinterpret_cast<const uint8_t*>(&val), 32, &s.gas) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
@@ -73,19 +71,17 @@ bool op_mstore8(EvmState& s) {
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    to_le(s, s.stackPointer);  // offset
-    const U256& off = s.stack[s.stackPointer];
+    const U256 off = ld_le(s, s.stackPointer);  // offset
     if ((off.limbs[1] | off.limbs[2] | off.limbs[3]) != 0) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
     }
     const size_t addr = static_cast<size_t>(off.limbs[0]);
 
-    // value mod 256 — the least-significant byte, wherever endianness puts it.
+    // value mod 256 — the least-significant byte, which in BE form is the last
+    // byte (high half of the top limb).
     const U256& val = s.stack[s.stackPointer + 1];
-    const uint8_t byte = s.stackBE[s.stackPointer + 1]
-                             ? static_cast<uint8_t>(val.limbs[3] >> 56)
-                             : static_cast<uint8_t>(val.limbs[0]);
+    const uint8_t byte = static_cast<uint8_t>(val.limbs[3] >> 56);
     if (EVMMem::writeByte(addr, byte, &s.gas) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
@@ -102,8 +98,7 @@ bool op_msize(EvmState& s) {
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
 
     --s.stackPointer;
-    s.stack[s.stackPointer] = U256{{static_cast<uint64_t>(EVMMem::size()), 0, 0, 0}};
-    s.stackBE[s.stackPointer] = kLE;  // a freshly computed integer
+    st_le(s, s.stackPointer, U256{{static_cast<uint64_t>(EVMMem::size()), 0, 0, 0}});
     ++s.pc;
     return true;
 }
@@ -115,10 +110,9 @@ bool op_mcopy(EvmState& s) {
     if (stack_depth(s) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
     const uint32_t sp = s.stackPointer;
-    to_le(s, sp); to_le(s, sp + 1); to_le(s, sp + 2);
-    const uint64_t dst  = mem_arg(s.stack[sp]);
-    const uint64_t src  = mem_arg(s.stack[sp + 1]);
-    const uint64_t size = mem_arg(s.stack[sp + 2]);
+    const uint64_t dst  = mem_arg(ld_le(s, sp));
+    const uint64_t src  = mem_arg(ld_le(s, sp + 1));
+    const uint64_t size = mem_arg(ld_le(s, sp + 2));
 
     // Grow once to cover both windows (the higher of dst/src + size).
     const uint64_t hi = dst > src ? dst : src;

@@ -4,7 +4,7 @@
 // the message recipient via host->emit_log. Gas: a base of 375*(1+n) (the
 // per-opcode cost, folding in the 375-per-topic charge) + 8 per data byte +
 // memory expansion. Disallowed in static mode. Topics are 256-bit words passed
-// as evmc_bytes32 (big-endian) — i.e. the BE stack form, so just to_be + memcpy.
+// as evmc_bytes32 (big-endian) — i.e. the BE stack form, so just a memcpy.
 
 #include "detail.hpp"
 
@@ -28,10 +28,8 @@ bool log_impl(EvmState& s, unsigned n) {
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
 
     const uint32_t sp = s.stackPointer;
-    to_le(s, sp);
-    to_le(s, sp + 1);
-    const uint64_t off  = mem_arg(s.stack[sp]);
-    const uint64_t size = mem_arg(s.stack[sp + 1]);
+    const uint64_t off  = mem_arg(ld_le(s, sp));
+    const uint64_t size = mem_arg(ld_le(s, sp + 1));
 
     if (EVMMem::expand(static_cast<size_t>(off), static_cast<size_t>(size), &s.gas) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
@@ -42,10 +40,8 @@ bool log_impl(EvmState& s, unsigned n) {
 
     // topics[i] is the word just below (offset, size): sp+2 .. sp+1+n, big-endian.
     evmc_bytes32 topics[4];
-    for (unsigned i = 0; i < n; ++i) {
-        to_be(s, sp + 2 + i);
+    for (unsigned i = 0; i < n; ++i)
         std::memcpy(topics[i].bytes, &s.stack[sp + 2 + i], 32);
-    }
 
     const uint8_t* data = size != 0 ? EVMMem::data(static_cast<size_t>(off)) : nullptr;
     s.host->emit_log(s.context, &s.evmcMsg->recipient, data, static_cast<size_t>(size),

@@ -1,13 +1,11 @@
 // push.cpp — PUSH0 (0x5f) and PUSH1..PUSH32 (0x60..0x7f).
 //
-// Lazy endianness: a PUSH value is left in big-endian form. The n immediate
-// bytes are big-endian and right-aligned in the 256-bit word, so the word's
-// memory bytes are [ (32-n) zero bytes ][ the n code bytes ] — exactly the BE
-// stack representation (the wire bytes as four little-endian limbs). We write
-// them straight in (no byteswap, no masks) and tag the entry BE; conversion to
-// LE is deferred until an arithmetic/comparison op consumes it. A PUSH whose
-// data runs past the end of code zero-pads the missing low-order bytes (avail).
-// See instructions/detail.hpp / EvmState::stackBE.
+// The stack stores big-endian wire words (see EvmState::stack), which is exactly
+// what a PUSH produces: the n immediate bytes are big-endian and right-aligned in
+// the 256-bit word, so the slot's memory bytes are [ (32-n) zero bytes ][ the n
+// code bytes ] — the BE representation verbatim. We write them straight in, no
+// byteswap and no masks. A PUSH whose data runs past the end of code zero-pads
+// the missing low-order bytes (avail). PUSH0 is the constant zero (BE == LE).
 
 #include "detail.hpp"
 
@@ -22,7 +20,6 @@ bool op_push0(EvmState& s) {
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
     s.stack[s.stackPointer] = U256{};
-    s.stackBE[s.stackPointer] = kLE;
     ++s.pc;
     return true;
 }
@@ -38,7 +35,6 @@ bool op_push1(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(1, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 1), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 1 + 1;
     return true;
 }
@@ -54,7 +50,6 @@ bool op_push2(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(2, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 2), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 2 + 1;
     return true;
 }
@@ -70,7 +65,6 @@ bool op_push3(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(3, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 3), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 3 + 1;
     return true;
 }
@@ -86,7 +80,6 @@ bool op_push4(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(4, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 4), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 4 + 1;
     return true;
 }
@@ -102,7 +95,6 @@ bool op_push5(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(5, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 5), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 5 + 1;
     return true;
 }
@@ -118,7 +110,6 @@ bool op_push6(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(6, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 6), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 6 + 1;
     return true;
 }
@@ -134,7 +125,6 @@ bool op_push7(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(7, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 7), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 7 + 1;
     return true;
 }
@@ -150,7 +140,6 @@ bool op_push8(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(8, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 8), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 8 + 1;
     return true;
 }
@@ -166,7 +155,6 @@ bool op_push9(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(9, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 9), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 9 + 1;
     return true;
 }
@@ -182,7 +170,6 @@ bool op_push10(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(10, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 10), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 10 + 1;
     return true;
 }
@@ -198,7 +185,6 @@ bool op_push11(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(11, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 11), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 11 + 1;
     return true;
 }
@@ -214,7 +200,6 @@ bool op_push12(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(12, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 12), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 12 + 1;
     return true;
 }
@@ -230,7 +215,6 @@ bool op_push13(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(13, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 13), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 13 + 1;
     return true;
 }
@@ -246,7 +230,6 @@ bool op_push14(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(14, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 14), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 14 + 1;
     return true;
 }
@@ -262,7 +245,6 @@ bool op_push15(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(15, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 15), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 15 + 1;
     return true;
 }
@@ -278,7 +260,6 @@ bool op_push16(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(16, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 16), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 16 + 1;
     return true;
 }
@@ -294,7 +275,6 @@ bool op_push17(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(17, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 17), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 17 + 1;
     return true;
 }
@@ -310,7 +290,6 @@ bool op_push18(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(18, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 18), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 18 + 1;
     return true;
 }
@@ -326,7 +305,6 @@ bool op_push19(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(19, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 19), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 19 + 1;
     return true;
 }
@@ -342,7 +320,6 @@ bool op_push20(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(20, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 20), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 20 + 1;
     return true;
 }
@@ -358,7 +335,6 @@ bool op_push21(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(21, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 21), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 21 + 1;
     return true;
 }
@@ -374,7 +350,6 @@ bool op_push22(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(22, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 22), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 22 + 1;
     return true;
 }
@@ -390,7 +365,6 @@ bool op_push23(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(23, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 23), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 23 + 1;
     return true;
 }
@@ -406,7 +380,6 @@ bool op_push24(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(24, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 24), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 24 + 1;
     return true;
 }
@@ -422,7 +395,6 @@ bool op_push25(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(25, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 25), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 25 + 1;
     return true;
 }
@@ -438,7 +410,6 @@ bool op_push26(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(26, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 26), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 26 + 1;
     return true;
 }
@@ -454,7 +425,6 @@ bool op_push27(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(27, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 27), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 27 + 1;
     return true;
 }
@@ -470,7 +440,6 @@ bool op_push28(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(28, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 28), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 28 + 1;
     return true;
 }
@@ -486,7 +455,6 @@ bool op_push29(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(29, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 29), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 29 + 1;
     return true;
 }
@@ -502,7 +470,6 @@ bool op_push30(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(30, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 30), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 30 + 1;
     return true;
 }
@@ -518,7 +485,6 @@ bool op_push31(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(31, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 31), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 31 + 1;
     return true;
 }
@@ -534,7 +500,6 @@ bool op_push32(EvmState& s) {
     const size_t pc1 = s.pc + 1;
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(32, s.codeSize - pc1) : 0;
     std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 32), s.code + pc1, avail);
-    s.stackBE[s.stackPointer] = kBE;
     s.pc += 32 + 1;
     return true;
 }

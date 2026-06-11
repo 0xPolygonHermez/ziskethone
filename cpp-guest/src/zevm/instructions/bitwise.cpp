@@ -1,16 +1,13 @@
 // bitwise.cpp — comparison & bitwise-logic opcodes (0x10..0x1e: LT, GT, SLT,
 // SGT, EQ, ISZERO, AND, OR, XOR, NOT, BYTE, SHL, SHR, SAR, CLZ).
 //
-// Endianness (see EvmState::stackBE):
-//   * LT/GT/SLT/SGT, SHL/SHR/SAR, BYTE — magnitude/positional, so operands are
-//     forced to LE and the result is LE.
-//   * AND/OR/XOR — bit-parallel, so endianness-agnostic *when both operands
-//     share it*: operate in place and keep that flag; if they differ, convert
-//     both to BE (the default) first.
-//   * NOT — bit-parallel and unary: complement in place, keep the flag.
-//   * ISZERO — zero is all-zero in either form: no conversion; result LE.
-//   * EQ — equal iff equal in a common form: convert only when flags differ;
-//     result LE.
+// Endianness (the stack is big-endian; see EvmState::stack):
+//   * LT/GT/SLT/SGT, SHL/SHR/SAR, BYTE, CLZ — magnitude/positional, so operands
+//     are loaded as little-endian (ld_le) and the result written back BE (st_le).
+//   * AND/OR/XOR/NOT — bit-parallel, so endianness-agnostic: operate on the BE
+//     slots in place, no conversion.
+//   * ISZERO/EQ — zero and equality are the same in either representation: test
+//     the BE slots directly; the 0/1 result is stored BE via st_le.
 // Binary ops take a = top, b = second and push the result into b's slot.
 
 #include "detail.hpp"
@@ -18,6 +15,10 @@
 namespace zevm {
 
 namespace {
+
+// The boolean results 0/1, big-endian (st_le of the integer). byteswap256 of a
+// constant folds, so these are compile-time constants.
+inline U256 bool_be(bool v) { return v ? U256{{0, 0, 0, 0x0100000000000000ULL}} : U256{}; }
 
 // Signed less-than (two's complement): differing signs decide it; same sign
 // falls back to the unsigned comparison (which preserves the ordering).
@@ -76,12 +77,9 @@ bool op_lt(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    to_le(s, s.stackPointer + 1);
-    const U256& a = s.stack[s.stackPointer];
-    U256&       b = s.stack[s.stackPointer + 1];
-    b = u256_lt(a, b) ? U256{{1, 0, 0, 0}} : U256{};
-    s.stackBE[s.stackPointer + 1] = kLE;
+    const U256 a = ld_le(s, s.stackPointer);
+    const U256 b = ld_le(s, s.stackPointer + 1);
+    s.stack[s.stackPointer + 1] = bool_be(u256_lt(a, b));
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -92,12 +90,9 @@ bool op_gt(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    to_le(s, s.stackPointer + 1);
-    const U256& a = s.stack[s.stackPointer];
-    U256&       b = s.stack[s.stackPointer + 1];
-    b = u256_lt(b, a) ? U256{{1, 0, 0, 0}} : U256{};
-    s.stackBE[s.stackPointer + 1] = kLE;
+    const U256 a = ld_le(s, s.stackPointer);
+    const U256 b = ld_le(s, s.stackPointer + 1);
+    s.stack[s.stackPointer + 1] = bool_be(u256_lt(b, a));
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -108,12 +103,9 @@ bool op_slt(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    to_le(s, s.stackPointer + 1);
-    const U256& a = s.stack[s.stackPointer];
-    U256&       b = s.stack[s.stackPointer + 1];
-    b = u256_slt(a, b) ? U256{{1, 0, 0, 0}} : U256{};
-    s.stackBE[s.stackPointer + 1] = kLE;
+    const U256 a = ld_le(s, s.stackPointer);
+    const U256 b = ld_le(s, s.stackPointer + 1);
+    s.stack[s.stackPointer + 1] = bool_be(u256_slt(a, b));
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -124,62 +116,46 @@ bool op_sgt(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    to_le(s, s.stackPointer + 1);
-    const U256& a = s.stack[s.stackPointer];
-    U256&       b = s.stack[s.stackPointer + 1];
-    b = u256_slt(b, a) ? U256{{1, 0, 0, 0}} : U256{};
-    s.stackBE[s.stackPointer + 1] = kLE;
+    const U256 a = ld_le(s, s.stackPointer);
+    const U256 b = ld_le(s, s.stackPointer + 1);
+    s.stack[s.stackPointer + 1] = bool_be(u256_slt(b, a));
     ++s.stackPointer;
     ++s.pc;
     return true;
 }
 
-// 0x14 EQ — a == b.
+// 0x14 EQ — a == b. Equality is representation-agnostic: compare BE slots.
 bool op_eq(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    if (s.stackBE[s.stackPointer] != s.stackBE[s.stackPointer + 1]) {
-        to_le(s, s.stackPointer);          // mismatched forms — bring to a common one
-        to_le(s, s.stackPointer + 1);
-    }
-    const U256& a = s.stack[s.stackPointer];
-    U256&       b = s.stack[s.stackPointer + 1];
-    b = u256_eq(a, b) ? U256{{1, 0, 0, 0}} : U256{};
-    s.stackBE[s.stackPointer + 1] = kLE;
+    const bool e = u256_eq(s.stack[s.stackPointer], s.stack[s.stackPointer + 1]);
+    s.stack[s.stackPointer + 1] = bool_be(e);
     ++s.stackPointer;
     ++s.pc;
     return true;
 }
 
-// 0x15 ISZERO — a == 0 (unary). Zero is the same in either representation.
+// 0x15 ISZERO — a == 0 (unary). Zero is all-zero in either representation.
 bool op_iszero(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    U256& a = s.stack[s.stackPointer];
-    a = u256_is_zero(a) ? U256{{1, 0, 0, 0}} : U256{};
-    s.stackBE[s.stackPointer] = kLE;
+    s.stack[s.stackPointer] = bool_be(u256_is_zero(s.stack[s.stackPointer]));
     ++s.pc;
     return true;
 }
 
-// Shared body for AND/OR/XOR: bit-parallel, so endianness-agnostic when both
-// operands share it (keep that flag); otherwise convert both to BE.
+// Shared body for AND/OR/XOR: bit-parallel, so endianness-agnostic — operate on
+// the big-endian slots in place; the result is big-endian too.
 template <class Op>
 inline bool binary_logic(EvmState& s, Op op) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    if (s.stackBE[s.stackPointer] != s.stackBE[s.stackPointer + 1]) {
-        to_be(s, s.stackPointer);          // default to BE on a mismatch
-        to_be(s, s.stackPointer + 1);
-    }
     const U256& a = s.stack[s.stackPointer];
     U256&       b = s.stack[s.stackPointer + 1];
     for (int i = 0; i < 4; ++i) b.limbs[i] = op(a.limbs[i], b.limbs[i]);
-    // b's slot keeps its (now shared) flag — the result's endianness.
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -190,7 +166,7 @@ bool op_and(EvmState& s) { return binary_logic(s, [](uint64_t x, uint64_t y) { r
 bool op_or (EvmState& s) { return binary_logic(s, [](uint64_t x, uint64_t y) { return x | y; }); }
 bool op_xor(EvmState& s) { return binary_logic(s, [](uint64_t x, uint64_t y) { return x ^ y; }); }
 
-// 0x19 NOT — bitwise complement (unary). Bit-parallel: keep the endianness flag.
+// 0x19 NOT — bitwise complement (unary). Bit-parallel: complement the BE slot.
 bool op_not(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
@@ -202,21 +178,19 @@ bool op_not(EvmState& s) {
 }
 
 // 0x1e CLZ — count leading zero bits of the 256-bit word (EIP-7939, Osaka).
-// clz(0) == 256. Positional, so the operand is forced to LE; result LE.
+// clz(0) == 256. Positional, so the operand is loaded LE; result LE -> BE.
 bool op_clz(EvmState& s) {
     if (s.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_LOW;
     if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    const U256& a = s.stack[s.stackPointer];
+    const U256 a = ld_le(s, s.stackPointer);
     uint64_t n;  // limb[3] is most significant; higher all-zero limbs add 64 each
     if (a.limbs[3] != 0)      n =       static_cast<uint64_t>(__builtin_clzll(a.limbs[3]));
     else if (a.limbs[2] != 0) n =  64 + static_cast<uint64_t>(__builtin_clzll(a.limbs[2]));
     else if (a.limbs[1] != 0) n = 128 + static_cast<uint64_t>(__builtin_clzll(a.limbs[1]));
     else if (a.limbs[0] != 0) n = 192 + static_cast<uint64_t>(__builtin_clzll(a.limbs[0]));
     else                      n = 256;
-    s.stack[s.stackPointer] = U256{{n, 0, 0, 0}};
-    s.stackBE[s.stackPointer] = kLE;
+    st_le(s, s.stackPointer, U256{{n, 0, 0, 0}});
     ++s.pc;
     return true;
 }
@@ -227,18 +201,15 @@ bool op_byte(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    to_le(s, s.stackPointer + 1);
-    const U256& i = s.stack[s.stackPointer];
-    U256&       x = s.stack[s.stackPointer + 1];
+    const U256 i = ld_le(s, s.stackPointer);
+    const U256 x = ld_le(s, s.stackPointer + 1);
     U256 r{};
     if ((i.limbs[1] | i.limbs[2] | i.limbs[3]) == 0 && i.limbs[0] <= 31) {
         const unsigned idx = static_cast<unsigned>(i.limbs[0]);  // 0 = most significant
         const unsigned pos = 31 - idx;                           // byte index from LSB
         r.limbs[0] = (x.limbs[pos >> 3] >> ((pos & 7) * 8)) & 0xFFULL;
     }
-    x = r;
-    s.stackBE[s.stackPointer + 1] = kLE;
+    st_le(s, s.stackPointer + 1, r);
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -249,12 +220,9 @@ bool op_shl(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    to_le(s, s.stackPointer + 1);
-    const U256& sh = s.stack[s.stackPointer];
-    U256&       v  = s.stack[s.stackPointer + 1];
-    v = shl(v, shift_amount(sh));
-    s.stackBE[s.stackPointer + 1] = kLE;
+    const U256 sh = ld_le(s, s.stackPointer);
+    const U256 v  = ld_le(s, s.stackPointer + 1);
+    st_le(s, s.stackPointer + 1, shl(v, shift_amount(sh)));
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -265,12 +233,9 @@ bool op_shr(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    to_le(s, s.stackPointer + 1);
-    const U256& sh = s.stack[s.stackPointer];
-    U256&       v  = s.stack[s.stackPointer + 1];
-    v = shr(v, shift_amount(sh));
-    s.stackBE[s.stackPointer + 1] = kLE;
+    const U256 sh = ld_le(s, s.stackPointer);
+    const U256 v  = ld_le(s, s.stackPointer + 1);
+    st_le(s, s.stackPointer + 1, shr(v, shift_amount(sh)));
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -281,12 +246,9 @@ bool op_sar(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    to_le(s, s.stackPointer + 1);
-    const U256& sh = s.stack[s.stackPointer];
-    U256&       v  = s.stack[s.stackPointer + 1];
-    v = sar(v, shift_amount(sh));
-    s.stackBE[s.stackPointer + 1] = kLE;
+    const U256 sh = ld_le(s, s.stackPointer);
+    const U256 v  = ld_le(s, s.stackPointer + 1);
+    st_le(s, s.stackPointer + 1, sar(v, shift_amount(sh)));
     ++s.stackPointer;
     ++s.pc;
     return true;
