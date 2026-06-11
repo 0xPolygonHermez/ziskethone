@@ -2,12 +2,15 @@
 // SGT, EQ, ISZERO, AND, OR, XOR, NOT, BYTE, SHL, SHR, SAR, CLZ).
 //
 // Endianness (the stack is big-endian; see EvmState::stack):
-//   * LT/GT/SLT/SGT, CLZ — magnitude/positional, so operands are loaded as
-//     little-endian (ld_le) and the result written back BE (st_le).
+//   * CLZ — positional, so the operand is loaded little-endian (ld_le) and the
+//     result written back BE (st_le).
 //   * AND/OR/XOR/NOT — bit-parallel, so endianness-agnostic: operate on the BE
 //     slots in place, no conversion.
 //   * ISZERO/EQ — zero and equality are the same in either representation: test
 //     the BE slots directly; the 0/1 result is stored BE via st_le.
+//   * LT/GT/SLT/SGT — ordering is decided on the BE slots directly (be_lt /
+//     be_slt): the most-significant differing limb decides, byteswapping only
+//     that one limb instead of the whole 256-bit operand.
 //   * SHL/SHR/SAR, BYTE — the shift amount / byte index is read straight off the
 //     BE slot (low_scalar_be); a shift by a whole number of bytes is a byte move
 //     (memmove + memset) on the BE bytes, and BYTE just copies one byte — all
@@ -26,12 +29,27 @@ namespace {
 // constant folds, so these are compile-time constants.
 inline U256 bool_be(bool v) { return v ? U256{{0, 0, 0, 0x0100000000000000ULL}} : U256{}; }
 
-// Signed less-than (two's complement): differing signs decide it; same sign
-// falls back to the unsigned comparison (which preserves the ordering).
-inline bool u256_slt(const U256& a, const U256& b) {
-    const bool sa = u256_sign(a), sb = u256_sign(b);
+// Unsigned a < b on big-endian slots. limbs[0] is the most-significant 8-byte
+// group; the first limb that differs decides the order, and a single bswap64 of
+// that limb recovers its magnitude (the limb is stored byte-reversed vs. its
+// big-endian significance). At most one byteswap per operand, vs. a full
+// byteswap256 to compare in little-endian.
+inline bool be_lt(const U256& a, const U256& b) {
+    for (int i = 0; i < 4; ++i)
+        if (a.limbs[i] != b.limbs[i])
+            return bswap64(a.limbs[i]) < bswap64(b.limbs[i]);
+    return false;  // equal -> not less-than
+}
+
+// Sign bit of a big-endian slot: the value's top bit is bit 7 of limbs[0].
+inline bool be_sign(const U256& a) { return (a.limbs[0] >> 7) & 1ULL; }
+
+// Signed a < b on big-endian slots (two's complement): differing signs decide
+// it (negative < non-negative); same sign falls back to the unsigned order.
+inline bool be_slt(const U256& a, const U256& b) {
+    const bool sa = be_sign(a), sb = be_sign(b);
     if (sa != sb) return sa;          // a negative, b non-negative => a < b
-    return u256_lt(a, b);
+    return be_lt(a, b);
 }
 
 // Logical left shift by n (0..255); bits shifted out the top are dropped.
@@ -108,9 +126,8 @@ bool op_lt(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, s.stackPointer);
-    const U256 b = ld_le(s, s.stackPointer + 1);
-    s.stack[s.stackPointer + 1] = bool_be(u256_lt(a, b));
+    s.stack[s.stackPointer + 1] =
+        bool_be(be_lt(s.stack[s.stackPointer], s.stack[s.stackPointer + 1]));
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -121,9 +138,8 @@ bool op_gt(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, s.stackPointer);
-    const U256 b = ld_le(s, s.stackPointer + 1);
-    s.stack[s.stackPointer + 1] = bool_be(u256_lt(b, a));
+    s.stack[s.stackPointer + 1] =
+        bool_be(be_lt(s.stack[s.stackPointer + 1], s.stack[s.stackPointer]));
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -134,9 +150,8 @@ bool op_slt(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, s.stackPointer);
-    const U256 b = ld_le(s, s.stackPointer + 1);
-    s.stack[s.stackPointer + 1] = bool_be(u256_slt(a, b));
+    s.stack[s.stackPointer + 1] =
+        bool_be(be_slt(s.stack[s.stackPointer], s.stack[s.stackPointer + 1]));
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -147,9 +162,8 @@ bool op_sgt(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, s.stackPointer);
-    const U256 b = ld_le(s, s.stackPointer + 1);
-    s.stack[s.stackPointer + 1] = bool_be(u256_slt(b, a));
+    s.stack[s.stackPointer + 1] =
+        bool_be(be_slt(s.stack[s.stackPointer + 1], s.stack[s.stackPointer]));
     ++s.stackPointer;
     ++s.pc;
     return true;
