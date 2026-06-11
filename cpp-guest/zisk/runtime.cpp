@@ -130,8 +130,16 @@ uint32_t __bswapsi2(uint32_t x) {
 }
 
 int __clzdi2(uint64_t x) {          // x != 0 (undefined for 0, per libgcc)
+    // Binary search instead of a shift loop: 6 mask-tests (~25 steps) flat,
+    // where the loop cost grew with the leading-zero count — up to ~190 steps
+    // for small values, the common case.
     int n = 0;
-    while (!(x & (1ull << 63))) { x <<= 1; ++n; }
+    if (!(x & 0xFFFFFFFF00000000ull)) { n += 32; x <<= 32; }
+    if (!(x & 0xFFFF000000000000ull)) { n += 16; x <<= 16; }
+    if (!(x & 0xFF00000000000000ull)) { n += 8;  x <<= 8; }
+    if (!(x & 0xF000000000000000ull)) { n += 4;  x <<= 4; }
+    if (!(x & 0xC000000000000000ull)) { n += 2;  x <<= 2; }
+    if (!(x & 0x8000000000000000ull)) { n += 1; }
     return n;
 }
 
