@@ -86,10 +86,10 @@ bool call_impl(EvmState& s, evmc_call_kind kind, bool has_value, bool static_for
         std::memcpy(value_be.bytes, &s.stack[iVal], 32);  // slot is big-endian
     }
 
-    const uint64_t in_off   = mem_arg(ld_le(s, iInOff));
-    const uint64_t in_size  = mem_arg(ld_le(s, iInSize));
-    const uint64_t out_off  = mem_arg(ld_le(s, iOutOff));
-    const uint64_t out_size = mem_arg(ld_le(s, iOutSize));
+    const uint64_t in_off   = mem_arg(s.stack[iInOff]);
+    const uint64_t in_size  = mem_arg(s.stack[iInSize]);
+    const uint64_t out_off  = mem_arg(s.stack[iOutOff]);
+    const uint64_t out_size = mem_arg(s.stack[iOutSize]);
 
     // Supersede any prior return data (releasing it if it was heap-owned).
     if (s.returnDataOwner.release) s.returnDataOwner.release(&s.returnDataOwner);
@@ -244,8 +244,8 @@ bool create_impl(EvmState& s, evmc_call_kind kind) {
     evmc_uint256be value_be;
     std::memcpy(value_be.bytes, &s.stack[iVal], 32);  // slot is big-endian
 
-    const uint64_t off  = mem_arg(ld_le(s, iOff));
-    const uint64_t size = mem_arg(ld_le(s, iSize));
+    const uint64_t off  = mem_arg(s.stack[iOff]);
+    const uint64_t size = mem_arg(s.stack[iSize]);
 
     evmc_bytes32 salt{};
     if (is2)
@@ -321,8 +321,8 @@ bool op_create2(EvmState& s) { return create_impl(s, EVMC_CREATE2); }
 // RETURN (success) / REVERT — set the frame's output window and halt.
 bool return_impl(EvmState& s, evmc_status_code st) {
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const uint64_t off  = mem_arg(ld_le(s, s.stackPointer));
-    const uint64_t size = mem_arg(ld_le(s, s.stackPointer + 1));
+    const uint64_t off  = mem_arg(s.stack[s.stackPointer]);
+    const uint64_t size = mem_arg(s.stack[s.stackPointer + 1]);
     if (size > 0) {
         if (EVMMem::expand(static_cast<size_t>(off), static_cast<size_t>(size), &s.gas) != MemError::Ok) {
             s.status = EVMC_OUT_OF_GAS;
@@ -356,9 +356,9 @@ bool op_returndatacopy(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const uint64_t mem_off = mem_arg(ld_le(s, s.stackPointer));
-    const uint64_t ret_off = mem_arg(ld_le(s, s.stackPointer + 1));
-    const uint64_t size    = mem_arg(ld_le(s, s.stackPointer + 2));
+    const uint64_t mem_off = mem_arg(s.stack[s.stackPointer]);
+    const uint64_t ret_off = mem_arg(s.stack[s.stackPointer + 1]);
+    const uint64_t size    = mem_arg(s.stack[s.stackPointer + 2]);
 
     if (EVMMem::expand(static_cast<size_t>(mem_off), static_cast<size_t>(size), &s.gas) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS;

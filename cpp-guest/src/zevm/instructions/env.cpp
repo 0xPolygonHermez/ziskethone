@@ -88,9 +88,9 @@ inline bool data_copy(EvmState& s, const uint8_t* data, uint64_t dataLen) {
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const uint32_t sp = s.stackPointer;
-    const uint64_t dst  = mem_arg(ld_le(s, sp));
-    const uint64_t src  = mem_arg(ld_le(s, sp + 1));
-    const uint64_t size = mem_arg(ld_le(s, sp + 2));
+    const uint64_t dst  = mem_arg(s.stack[sp]);
+    const uint64_t src  = mem_arg(s.stack[sp + 1]);
+    const uint64_t size = mem_arg(s.stack[sp + 2]);
     if (EVMMem::expand(static_cast<size_t>(dst), static_cast<size_t>(size), &s.gas) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
     }
@@ -221,7 +221,7 @@ bool op_calldataload(EvmState& s) {
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const uint32_t i = s.stackPointer;
-    const uint64_t idx        = mem_arg(ld_le(s, i));
+    const uint64_t idx        = mem_arg(s.stack[i]);
     const uint64_t input_size = s.evmcMsg->input_size;
     uint8_t buf[32] = {};
     if (idx < input_size) {
@@ -289,9 +289,9 @@ bool op_extcodecopy(EvmState& s) {
     if (stack_depth(s) < 4) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const uint32_t sp = s.stackPointer;
     const evmc_address addr = addr_arg(s, sp);  // top
-    const uint64_t dst  = mem_arg(ld_le(s, sp + 1));
-    const uint64_t src  = mem_arg(ld_le(s, sp + 2));
-    const uint64_t size = mem_arg(ld_le(s, sp + 3));
+    const uint64_t dst  = mem_arg(s.stack[sp + 1]);
+    const uint64_t src  = mem_arg(s.stack[sp + 2]);
+    const uint64_t size = mem_arg(s.stack[sp + 3]);
     if (EVMMem::expand(static_cast<size_t>(dst), static_cast<size_t>(size), &s.gas) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
     }

@@ -26,12 +26,12 @@ bool op_mload(EvmState& s) {
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    const U256 off = ld_le(s, s.stackPointer);  // offset as an integer
-    if ((off.limbs[1] | off.limbs[2] | off.limbs[3]) != 0) {
+    const U256& off = s.stack[s.stackPointer];  // offset (big-endian slot)
+    if ((off.limbs[0] | off.limbs[1] | off.limbs[2]) != 0) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
     }
-    const size_t addr = static_cast<size_t>(off.limbs[0]);
+    const size_t addr = static_cast<size_t>(bswap64(off.limbs[3]));
     U256& slot = s.stack[s.stackPointer];  // overwritten with the loaded word
     if (EVMMem::readBytes(addr, reinterpret_cast<uint8_t*>(&slot), 32, &s.gas) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS;
@@ -48,12 +48,12 @@ bool op_mstore(EvmState& s) {
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    const U256 off = ld_le(s, s.stackPointer);  // offset
-    if ((off.limbs[1] | off.limbs[2] | off.limbs[3]) != 0) {
+    const U256& off = s.stack[s.stackPointer];  // offset (big-endian slot)
+    if ((off.limbs[0] | off.limbs[1] | off.limbs[2]) != 0) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
     }
-    const size_t addr = static_cast<size_t>(off.limbs[0]);
+    const size_t addr = static_cast<size_t>(bswap64(off.limbs[3]));
 
     const U256& val = s.stack[s.stackPointer + 1];  // already big-endian bytes
     if (EVMMem::writeBytes(addr, reinterpret_cast<const uint8_t*>(&val), 32, &s.gas) != MemError::Ok) {
@@ -71,12 +71,12 @@ bool op_mstore8(EvmState& s) {
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    const U256 off = ld_le(s, s.stackPointer);  // offset
-    if ((off.limbs[1] | off.limbs[2] | off.limbs[3]) != 0) {
+    const U256& off = s.stack[s.stackPointer];  // offset (big-endian slot)
+    if ((off.limbs[0] | off.limbs[1] | off.limbs[2]) != 0) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
     }
-    const size_t addr = static_cast<size_t>(off.limbs[0]);
+    const size_t addr = static_cast<size_t>(bswap64(off.limbs[3]));
 
     // value mod 256 — the least-significant byte, which in BE form is the last
     // byte (high half of the top limb).
@@ -110,9 +110,9 @@ bool op_mcopy(EvmState& s) {
     if (stack_depth(s) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
     const uint32_t sp = s.stackPointer;
-    const uint64_t dst  = mem_arg(ld_le(s, sp));
-    const uint64_t src  = mem_arg(ld_le(s, sp + 1));
-    const uint64_t size = mem_arg(ld_le(s, sp + 2));
+    const uint64_t dst  = mem_arg(s.stack[sp]);
+    const uint64_t src  = mem_arg(s.stack[sp + 1]);
+    const uint64_t size = mem_arg(s.stack[sp + 2]);
 
     // Grow once to cover both windows (the higher of dst/src + size).
     const uint64_t hi = dst > src ? dst : src;

@@ -27,8 +27,8 @@ bool op_keccak256(EvmState& s) {
 
     const uint32_t off_i  = s.stackPointer;
     const uint32_t size_i = s.stackPointer + 1;
-    const uint64_t off  = mem_arg(ld_le(s, off_i));
-    const uint64_t size = mem_arg(ld_le(s, size_i));
+    const uint64_t off  = mem_arg(s.stack[off_i]);
+    const uint64_t size = mem_arg(s.stack[size_i]);
 
     if (EVMMem::expand(static_cast<size_t>(off), static_cast<size_t>(size), &s.gas) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
