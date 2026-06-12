@@ -27,13 +27,13 @@ inline constexpr size_t kStackLimit = 1024;
 // the message's call depth, the same index EVMMem uses for its zones.
 inline constexpr size_t kMaxCallDepth = 1024;
 
-// Fill `out` (ceil(codeSize/32) bytes) with the per-32-byte-chunk first-
-// instruction map: out[w] is the offset (0..31) of the first real opcode in
-// chunk w, or 32 if the chunk is entirely PUSH continuation. With `code` this
-// decides valid JUMPDESTs by a short local parse (see EvmState::is_jumpdest).
-// Shared by EvmState's own analysis and by the evmc2 `prepare` path, which
-// precomputes it once per distinct bytecode.
-void mark_first_instruction_in_word(const uint8_t* code, size_t codeSize, uint8_t* out);
+// Fill `out` (ceil(codeSize/64) u64 words) with the JUMPDEST bitset: bit i is
+// set iff code[i] is a valid jump target — a JUMPDEST (0x5b) opcode that is not
+// inside PUSH immediate data. With this, is_jumpdest is two loads + a shift &
+// mask instead of a per-jump local re-parse. Built 64 bytes per aligned u64
+// store (see evm_state.cpp). Shared by EvmState's own analysis and by the evmc2
+// `prepare` path, which precomputes it once per distinct bytecode.
+void build_jumpdest_bitset(const uint8_t* code, size_t codeSize, uint64_t* out);
 
 // All the mutable state of a single call frame. Frames are preallocated, one per
 // call depth, in run()'s static g_frames array and reused across calls — so
@@ -46,13 +46,12 @@ struct EvmState {
     const uint8_t* code;               // borrowed; owned by the caller
     size_t         codeSize;
 
-    // First-instruction-per-chunk map (ceil(codeSize/32) bytes): analyzedCode[w]
-    // is the offset of chunk w's first opcode, or 32 if none (see
-    // mark_first_instruction_in_word). With `code` it decides valid JUMPDESTs
-    // (see is_jumpdest). Either borrowed from a precomputed evmc2 analysis or
-    // owned (allocated + filled by reset(), freed by teardown()).
-    const uint8_t* analyzedCode;
-    bool           ownsAnalysis;
+    // JUMPDEST bitset (ceil(codeSize/64) u64 words): bit i set iff code[i] is a
+    // valid jump target (see build_jumpdest_bitset / is_jumpdest). Either
+    // borrowed from a precomputed evmc2 analysis or owned (allocated + filled by
+    // reset(), freed by teardown()).
+    const uint64_t* jumpdestBitset;
+    bool            ownsAnalysis;
 
     // ----- operand stack -----
     // 256-bit words, each held in big-endian wire form (the 32 memory/storage/
@@ -107,43 +106,26 @@ struct EvmState {
     evmc_status_code status;
 
     // Is `pos` a valid jump target — in code, a JUMPDEST (0x5b) opcode, and not
-    // inside PUSH data? Quick-rejects non-0x5b, then parses forward from the
-    // first instruction of pos's chunk; if that instruction is past pos (pos is
-    // PUSH continuation), the covering PUSH started in the previous chunk, so one
-    // step back always lands on a real instruction <= pos. pos is a real opcode
-    // iff the parse lands exactly on it. Used by JUMP / JUMPI.
+    // inside PUSH data? A single bitset probe: the bit is set only for real
+    // jump-destination opcodes (build_jumpdest_bitset). Used by JUMP / JUMPI.
     bool is_jumpdest(size_t pos) const {
-        if (pos >= codeSize || code[pos] != 0x5b)
-            return false;
-        size_t chunk = pos >> 5;       // pos / 32
-        size_t base  = chunk << 5;     // chunk * 32
-        if (base + analyzedCode[chunk] > pos) {  // first instruction past pos -> back up one chunk
-            --chunk;
-            base -= 32;
-        }
-        size_t p = base + analyzedCode[chunk];
-        while (p < pos) {
-            const uint8_t op = code[p];
-            p += (static_cast<int8_t>(op) >= static_cast<int8_t>(0x60))
-                     ? static_cast<size_t>(op - 0x60) + 2
-                     : 1;
-        }
-        return p == pos;
+        return pos < codeSize &&
+               ((jumpdestBitset[pos >> 6] >> (pos & 63)) & 1ULL) != 0;
     }
 
     // (Re)initialize this frame for a new call: sets every field (a reused slot
     // has stale values), borrows or builds the chunk map, and pushes a fresh
     // EVMMem frame. `code`/`msg`/`host`/`ctx`/`prebuilt_analysis` are borrowed and
     // must outlive the frame. When `prebuilt_analysis` is non-null it is borrowed
-    // as the chunk map (from a prior evmc2 prepare); else the map is built/owned.
+    // as the JUMPDEST bitset (from a prior evmc2 prepare); else it is built/owned.
     void reset(const evmc_message* msg,
                const uint8_t* code, size_t codeSize,
                const evmc_host_interface* host,
                evmc_host_context* ctx,
                evmc_revision rev,
-               const uint8_t* prebuilt_analysis = nullptr);
+               const uint64_t* prebuilt_analysis = nullptr);
 
-    // Release the frame: pop its EVMMem frame, free an owned chunk map, release a
+    // Release the frame: pop its EVMMem frame, free an owned bitset, release a
     // held sub-call result. Idempotent (guarded by memHandle).
     void teardown();
 
@@ -157,7 +139,7 @@ struct EvmState {
              const evmc_host_interface* host,
              evmc_host_context* ctx,
              evmc_revision rev,
-             const uint8_t* prebuilt_analysis = nullptr) {
+             const uint64_t* prebuilt_analysis = nullptr) {
         reset(msg, code, codeSize, host, ctx, rev, prebuilt_analysis);
     }
 
