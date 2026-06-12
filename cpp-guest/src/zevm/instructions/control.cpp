@@ -18,7 +18,7 @@ bool op_stop(EvmState& s) {
 }
 
 // The jump target as a code offset: any high limb set (or a value past code) is
-// out of range, which is_jumpdest rejects. Caller must to_le the slot first.
+// out of range, which is_jumpdest rejects. Takes a little-endian value (ld_le).
 inline size_t jump_target(const U256& d) {
     return (d.limbs[1] | d.limbs[2] | d.limbs[3]) != 0 ? SIZE_MAX
                                                        : static_cast<size_t>(d.limbs[0]);
@@ -29,8 +29,7 @@ bool op_jump(EvmState& s) {
     if (s.gas < GAS_MID) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_MID;
     if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    const size_t dest = jump_target(s.stack[s.stackPointer]);
+    const size_t dest = jump_target(ld_le(s, s.stackPointer));
     ++s.stackPointer;  // pop the target
     if (!s.is_jumpdest(dest)) { s.status = EVMC_BAD_JUMP_DESTINATION; return false; }
     s.pc = dest;
@@ -42,8 +41,8 @@ bool op_jumpi(EvmState& s) {
     if (s.gas < GAS_HIGH) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_HIGH;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);  // target (the condition is endianness-independent)
-    const size_t dest = jump_target(s.stack[s.stackPointer]);
+    // target (the condition is endianness-independent — zero is zero in BE too)
+    const size_t dest = jump_target(ld_le(s, s.stackPointer));
     const bool   take = !u256_is_zero(s.stack[s.stackPointer + 1]);  // cond != 0
     s.stackPointer += 2;  // pop target and condition
     if (take) {
@@ -79,8 +78,7 @@ bool op_pc(EvmState& s) {
     s.gas -= GAS_BASE;
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
-    s.stack[s.stackPointer] = U256{{static_cast<uint64_t>(s.pc), 0, 0, 0}};
-    s.stackBE[s.stackPointer] = kLE;
+    st_le(s, s.stackPointer, U256{{static_cast<uint64_t>(s.pc), 0, 0, 0}});
     ++s.pc;
     return true;
 }
@@ -91,8 +89,7 @@ bool op_gas(EvmState& s) {
     s.gas -= GAS_BASE;
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
-    s.stack[s.stackPointer] = U256{{static_cast<uint64_t>(s.gas), 0, 0, 0}};
-    s.stackBE[s.stackPointer] = kLE;
+    st_le(s, s.stackPointer, U256{{static_cast<uint64_t>(s.gas), 0, 0, 0}});
     ++s.pc;
     return true;
 }

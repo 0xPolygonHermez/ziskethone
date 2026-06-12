@@ -67,33 +67,29 @@ bool call_impl(EvmState& s, evmc_call_kind kind, bool has_value, bool static_for
     const uint32_t iResult  = iOutSize;               // last popped slot -> pushed result
 
     // ----- read operands (captured before any host call / overwrite) -----
-    to_le(s, iGas);
     int64_t req_gas;
     {
-        const U256& g = s.stack[iGas];
+        const U256 g = ld_le(s, iGas);
         req_gas = ((g.limbs[1] | g.limbs[2] | g.limbs[3]) != 0 ||
                    g.limbs[0] > static_cast<uint64_t>(INT64_MAX))
                       ? INT64_MAX
                       : static_cast<int64_t>(g.limbs[0]);
     }
 
-    to_be(s, iDst);  // address = low 20 big-endian bytes of the word
-    evmc_address dst;
+    evmc_address dst;  // address = low 20 big-endian bytes of the word (slot is BE)
     std::memcpy(dst.bytes, reinterpret_cast<const uint8_t*>(&s.stack[iDst]) + 12, 20);
 
     bool nonzero_value = false;
     evmc_uint256be value_be{};
     if (has_value) {
         nonzero_value = !u256_is_zero(s.stack[iVal]);
-        to_be(s, iVal);
-        std::memcpy(value_be.bytes, &s.stack[iVal], 32);
+        std::memcpy(value_be.bytes, &s.stack[iVal], 32);  // slot is big-endian
     }
 
-    to_le(s, iInOff); to_le(s, iInSize); to_le(s, iOutOff); to_le(s, iOutSize);
-    const uint64_t in_off   = mem_arg(s.stack[iInOff]);
-    const uint64_t in_size  = mem_arg(s.stack[iInSize]);
-    const uint64_t out_off  = mem_arg(s.stack[iOutOff]);
-    const uint64_t out_size = mem_arg(s.stack[iOutSize]);
+    const uint64_t in_off   = mem_arg(ld_le(s, iInOff));
+    const uint64_t in_size  = mem_arg(ld_le(s, iInSize));
+    const uint64_t out_off  = mem_arg(ld_le(s, iOutOff));
+    const uint64_t out_size = mem_arg(ld_le(s, iOutSize));
 
     // Supersede any prior return data (releasing it if it was heap-owned).
     if (s.returnDataOwner.release) s.returnDataOwner.release(&s.returnDataOwner);
@@ -101,8 +97,7 @@ bool call_impl(EvmState& s, evmc_call_kind kind, bool has_value, bool static_for
 
     // "light" failure (insufficient balance / depth): push 0 and continue.
     auto finish_light = [&]() {
-        s.stack[iResult] = U256{};
-        s.stackBE[iResult] = kLE;
+        s.stack[iResult] = U256{};  // zero is BE-agnostic
         s.stackPointer = iResult;
         ++s.pc;
         return true;
@@ -200,8 +195,7 @@ bool call_impl(EvmState& s, evmc_call_kind kind, bool has_value, bool static_for
     // ----- run the child frame via the host -----
     evmc_result r = s.host->call(s.context, &msg);
 
-    s.stack[iResult] = (r.status_code == EVMC_SUCCESS) ? U256{{1, 0, 0, 0}} : U256{};
-    s.stackBE[iResult] = kLE;
+    st_le(s, iResult, (r.status_code == EVMC_SUCCESS) ? U256{{1, 0, 0, 0}} : U256{});
 
     if (const size_t copy = std::min<size_t>(static_cast<size_t>(out_size), r.output_size); copy > 0)
         std::memcpy(EVMMem::data(static_cast<size_t>(out_off)), r.output_data, copy);
@@ -247,28 +241,22 @@ bool create_impl(EvmState& s, evmc_call_kind kind) {
     const uint32_t iResult = is2 ? sp + 3 : sp + 2;
 
     const bool nonzero_value = !u256_is_zero(s.stack[iVal]);
-    to_be(s, iVal);
     evmc_uint256be value_be;
-    std::memcpy(value_be.bytes, &s.stack[iVal], 32);
+    std::memcpy(value_be.bytes, &s.stack[iVal], 32);  // slot is big-endian
 
-    to_le(s, iOff);
-    to_le(s, iSize);
-    const uint64_t off  = mem_arg(s.stack[iOff]);
-    const uint64_t size = mem_arg(s.stack[iSize]);
+    const uint64_t off  = mem_arg(ld_le(s, iOff));
+    const uint64_t size = mem_arg(ld_le(s, iSize));
 
     evmc_bytes32 salt{};
-    if (is2) {
-        to_be(s, iSalt);
-        std::memcpy(salt.bytes, &s.stack[iSalt], 32);
-    }
+    if (is2)
+        std::memcpy(salt.bytes, &s.stack[iSalt], 32);  // slot is big-endian
 
     // Supersede any prior return data (releasing it if it was heap-owned).
     if (s.returnDataOwner.release) s.returnDataOwner.release(&s.returnDataOwner);
     s.returnDataOwner = evmc_result{};
 
     auto finish_fail = [&]() {  // "light" failure (depth / balance): push 0, continue
-        s.stack[iResult] = U256{};
-        s.stackBE[iResult] = kLE;
+        s.stack[iResult] = U256{};  // zero is BE-agnostic
         s.stackPointer = iResult;
         ++s.pc;
         return true;
@@ -319,10 +307,8 @@ bool create_impl(EvmState& s, evmc_call_kind kind) {
         U256 a{};
         std::memcpy(reinterpret_cast<uint8_t*>(&a) + 12, r.create_address.bytes, 20);
         s.stack[iResult] = a;
-        s.stackBE[iResult] = kBE;
     } else {
-        s.stack[iResult] = U256{};
-        s.stackBE[iResult] = kLE;
+        s.stack[iResult] = U256{};  // zero is BE-agnostic
     }
     s.stackPointer = iResult;
     ++s.pc;
@@ -335,10 +321,8 @@ bool op_create2(EvmState& s) { return create_impl(s, EVMC_CREATE2); }
 // RETURN (success) / REVERT — set the frame's output window and halt.
 bool return_impl(EvmState& s, evmc_status_code st) {
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    to_le(s, s.stackPointer + 1);
-    const uint64_t off  = mem_arg(s.stack[s.stackPointer]);
-    const uint64_t size = mem_arg(s.stack[s.stackPointer + 1]);
+    const uint64_t off  = mem_arg(ld_le(s, s.stackPointer));
+    const uint64_t size = mem_arg(ld_le(s, s.stackPointer + 1));
     if (size > 0) {
         if (EVMMem::expand(static_cast<size_t>(off), static_cast<size_t>(size), &s.gas) != MemError::Ok) {
             s.status = EVMC_OUT_OF_GAS;
@@ -362,8 +346,7 @@ bool op_returndatasize(EvmState& s) {
     s.gas -= GAS_BASE;
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
-    s.stack[s.stackPointer] = U256{{static_cast<uint64_t>(s.returnDataOwner.output_size), 0, 0, 0}};
-    s.stackBE[s.stackPointer] = kLE;
+    st_le(s, s.stackPointer, U256{{static_cast<uint64_t>(s.returnDataOwner.output_size), 0, 0, 0}});
     ++s.pc;
     return true;
 }
@@ -373,12 +356,9 @@ bool op_returndatacopy(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    to_le(s, s.stackPointer + 1);
-    to_le(s, s.stackPointer + 2);
-    const uint64_t mem_off = mem_arg(s.stack[s.stackPointer]);
-    const uint64_t ret_off = mem_arg(s.stack[s.stackPointer + 1]);
-    const uint64_t size    = mem_arg(s.stack[s.stackPointer + 2]);
+    const uint64_t mem_off = mem_arg(ld_le(s, s.stackPointer));
+    const uint64_t ret_off = mem_arg(ld_le(s, s.stackPointer + 1));
+    const uint64_t size    = mem_arg(ld_le(s, s.stackPointer + 2));
 
     if (EVMMem::expand(static_cast<size_t>(mem_off), static_cast<size_t>(size), &s.gas) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS;
@@ -416,8 +396,7 @@ bool op_selfdestruct(EvmState& s) {
     if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
 
-    to_be(s, s.stackPointer);
-    evmc_address ben;
+    evmc_address ben;  // low 20 big-endian bytes of the word (slot is BE)
     std::memcpy(ben.bytes, reinterpret_cast<const uint8_t*>(&s.stack[s.stackPointer]) + 12, 20);
 
     // Cold beneficiary access (Berlin+): the full 2600 (no warm base for SELFDESTRUCT).

@@ -48,8 +48,8 @@ void EvmState::reset(const evmc_message* msg,
                      const uint8_t* prebuilt_analysis) {
     // Every field is set explicitly: a slot reused from run()'s static frame
     // array carries the previous frame's values, and EvmState has no in-class
-    // member initializers. stack[]/stackBE[] are intentionally left untouched —
-    // only entries below stackPointer are read, and pushes write them first.
+    // member initializers. stack[] is intentionally left untouched — only
+    // entries below stackPointer are read, and pushes write them first.
     pc            = 0;
     code          = code_;
     codeSize      = codeSize_;

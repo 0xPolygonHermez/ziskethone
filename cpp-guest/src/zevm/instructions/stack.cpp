@@ -4,8 +4,8 @@
 // DUPn copies the n-th item from the top onto the top (depth + 1); SWAPn swaps
 // the top with the (n+1)-th item (depth unchanged). Each costs GAS_VERYLOW. The
 // stack grows downward: the top is stack[stackPointer], the i-th-from-top is
-// stack[stackPointer + i], and depth == kStackLimit - stackPointer. Both move the
-// value and its endianness flag (stackBE) together — no conversion.
+// stack[stackPointer + i], and depth == kStackLimit - stackPointer. The slots are
+// big-endian wire words moved verbatim — DUP/SWAP are endianness-agnostic.
 
 #include "detail.hpp"
 
@@ -21,7 +21,6 @@ bool op_dup1(EvmState& s) {
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
     s.stack[s.stackPointer]   = s.stack[s.stackPointer + 1];
-    s.stackBE[s.stackPointer] = s.stackBE[s.stackPointer + 1];
     ++s.pc;
     return true;
 }
@@ -34,7 +33,6 @@ bool op_dup2(EvmState& s) {
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
     s.stack[s.stackPointer]   = s.stack[s.stackPointer + 2];
-    s.stackBE[s.stackPointer] = s.stackBE[s.stackPointer + 2];
     ++s.pc;
     return true;
 }
@@ -47,7 +45,6 @@ bool op_dup3(EvmState& s) {
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
     s.stack[s.stackPointer]   = s.stack[s.stackPointer + 3];
-    s.stackBE[s.stackPointer] = s.stackBE[s.stackPointer + 3];
     ++s.pc;
     return true;
 }
@@ -60,7 +57,6 @@ bool op_dup4(EvmState& s) {
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
     s.stack[s.stackPointer]   = s.stack[s.stackPointer + 4];
-    s.stackBE[s.stackPointer] = s.stackBE[s.stackPointer + 4];
     ++s.pc;
     return true;
 }
@@ -73,7 +69,6 @@ bool op_dup5(EvmState& s) {
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
     s.stack[s.stackPointer]   = s.stack[s.stackPointer + 5];
-    s.stackBE[s.stackPointer] = s.stackBE[s.stackPointer + 5];
     ++s.pc;
     return true;
 }
@@ -86,7 +81,6 @@ bool op_dup6(EvmState& s) {
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
     s.stack[s.stackPointer]   = s.stack[s.stackPointer + 6];
-    s.stackBE[s.stackPointer] = s.stackBE[s.stackPointer + 6];
     ++s.pc;
     return true;
 }
@@ -99,7 +93,6 @@ bool op_dup7(EvmState& s) {
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
     s.stack[s.stackPointer]   = s.stack[s.stackPointer + 7];
-    s.stackBE[s.stackPointer] = s.stackBE[s.stackPointer + 7];
     ++s.pc;
     return true;
 }
@@ -112,7 +105,6 @@ bool op_dup8(EvmState& s) {
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
     s.stack[s.stackPointer]   = s.stack[s.stackPointer + 8];
-    s.stackBE[s.stackPointer] = s.stackBE[s.stackPointer + 8];
     ++s.pc;
     return true;
 }
@@ -125,7 +117,6 @@ bool op_dup9(EvmState& s) {
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
     s.stack[s.stackPointer]   = s.stack[s.stackPointer + 9];
-    s.stackBE[s.stackPointer] = s.stackBE[s.stackPointer + 9];
     ++s.pc;
     return true;
 }
@@ -138,7 +129,6 @@ bool op_dup10(EvmState& s) {
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
     s.stack[s.stackPointer]   = s.stack[s.stackPointer + 10];
-    s.stackBE[s.stackPointer] = s.stackBE[s.stackPointer + 10];
     ++s.pc;
     return true;
 }
@@ -151,7 +141,6 @@ bool op_dup11(EvmState& s) {
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
     s.stack[s.stackPointer]   = s.stack[s.stackPointer + 11];
-    s.stackBE[s.stackPointer] = s.stackBE[s.stackPointer + 11];
     ++s.pc;
     return true;
 }
@@ -164,7 +153,6 @@ bool op_dup12(EvmState& s) {
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
     s.stack[s.stackPointer]   = s.stack[s.stackPointer + 12];
-    s.stackBE[s.stackPointer] = s.stackBE[s.stackPointer + 12];
     ++s.pc;
     return true;
 }
@@ -177,7 +165,6 @@ bool op_dup13(EvmState& s) {
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
     s.stack[s.stackPointer]   = s.stack[s.stackPointer + 13];
-    s.stackBE[s.stackPointer] = s.stackBE[s.stackPointer + 13];
     ++s.pc;
     return true;
 }
@@ -190,7 +177,6 @@ bool op_dup14(EvmState& s) {
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
     s.stack[s.stackPointer]   = s.stack[s.stackPointer + 14];
-    s.stackBE[s.stackPointer] = s.stackBE[s.stackPointer + 14];
     ++s.pc;
     return true;
 }
@@ -203,7 +189,6 @@ bool op_dup15(EvmState& s) {
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
     s.stack[s.stackPointer]   = s.stack[s.stackPointer + 15];
-    s.stackBE[s.stackPointer] = s.stackBE[s.stackPointer + 15];
     ++s.pc;
     return true;
 }
@@ -216,7 +201,6 @@ bool op_dup16(EvmState& s) {
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
     s.stack[s.stackPointer]   = s.stack[s.stackPointer + 16];
-    s.stackBE[s.stackPointer] = s.stackBE[s.stackPointer + 16];
     ++s.pc;
     return true;
 }
@@ -229,9 +213,6 @@ bool op_swap1(EvmState& s) {
     const U256 t = s.stack[s.stackPointer];
     s.stack[s.stackPointer]      = s.stack[s.stackPointer + 1];
     s.stack[s.stackPointer + 1] = t;
-    const uint8_t tf = s.stackBE[s.stackPointer];
-    s.stackBE[s.stackPointer]      = s.stackBE[s.stackPointer + 1];
-    s.stackBE[s.stackPointer + 1] = tf;
     ++s.pc;
     return true;
 }
@@ -244,9 +225,6 @@ bool op_swap2(EvmState& s) {
     const U256 t = s.stack[s.stackPointer];
     s.stack[s.stackPointer]      = s.stack[s.stackPointer + 2];
     s.stack[s.stackPointer + 2] = t;
-    const uint8_t tf = s.stackBE[s.stackPointer];
-    s.stackBE[s.stackPointer]      = s.stackBE[s.stackPointer + 2];
-    s.stackBE[s.stackPointer + 2] = tf;
     ++s.pc;
     return true;
 }
@@ -259,9 +237,6 @@ bool op_swap3(EvmState& s) {
     const U256 t = s.stack[s.stackPointer];
     s.stack[s.stackPointer]      = s.stack[s.stackPointer + 3];
     s.stack[s.stackPointer + 3] = t;
-    const uint8_t tf = s.stackBE[s.stackPointer];
-    s.stackBE[s.stackPointer]      = s.stackBE[s.stackPointer + 3];
-    s.stackBE[s.stackPointer + 3] = tf;
     ++s.pc;
     return true;
 }
@@ -274,9 +249,6 @@ bool op_swap4(EvmState& s) {
     const U256 t = s.stack[s.stackPointer];
     s.stack[s.stackPointer]      = s.stack[s.stackPointer + 4];
     s.stack[s.stackPointer + 4] = t;
-    const uint8_t tf = s.stackBE[s.stackPointer];
-    s.stackBE[s.stackPointer]      = s.stackBE[s.stackPointer + 4];
-    s.stackBE[s.stackPointer + 4] = tf;
     ++s.pc;
     return true;
 }
@@ -289,9 +261,6 @@ bool op_swap5(EvmState& s) {
     const U256 t = s.stack[s.stackPointer];
     s.stack[s.stackPointer]      = s.stack[s.stackPointer + 5];
     s.stack[s.stackPointer + 5] = t;
-    const uint8_t tf = s.stackBE[s.stackPointer];
-    s.stackBE[s.stackPointer]      = s.stackBE[s.stackPointer + 5];
-    s.stackBE[s.stackPointer + 5] = tf;
     ++s.pc;
     return true;
 }
@@ -304,9 +273,6 @@ bool op_swap6(EvmState& s) {
     const U256 t = s.stack[s.stackPointer];
     s.stack[s.stackPointer]      = s.stack[s.stackPointer + 6];
     s.stack[s.stackPointer + 6] = t;
-    const uint8_t tf = s.stackBE[s.stackPointer];
-    s.stackBE[s.stackPointer]      = s.stackBE[s.stackPointer + 6];
-    s.stackBE[s.stackPointer + 6] = tf;
     ++s.pc;
     return true;
 }
@@ -319,9 +285,6 @@ bool op_swap7(EvmState& s) {
     const U256 t = s.stack[s.stackPointer];
     s.stack[s.stackPointer]      = s.stack[s.stackPointer + 7];
     s.stack[s.stackPointer + 7] = t;
-    const uint8_t tf = s.stackBE[s.stackPointer];
-    s.stackBE[s.stackPointer]      = s.stackBE[s.stackPointer + 7];
-    s.stackBE[s.stackPointer + 7] = tf;
     ++s.pc;
     return true;
 }
@@ -334,9 +297,6 @@ bool op_swap8(EvmState& s) {
     const U256 t = s.stack[s.stackPointer];
     s.stack[s.stackPointer]      = s.stack[s.stackPointer + 8];
     s.stack[s.stackPointer + 8] = t;
-    const uint8_t tf = s.stackBE[s.stackPointer];
-    s.stackBE[s.stackPointer]      = s.stackBE[s.stackPointer + 8];
-    s.stackBE[s.stackPointer + 8] = tf;
     ++s.pc;
     return true;
 }
@@ -349,9 +309,6 @@ bool op_swap9(EvmState& s) {
     const U256 t = s.stack[s.stackPointer];
     s.stack[s.stackPointer]      = s.stack[s.stackPointer + 9];
     s.stack[s.stackPointer + 9] = t;
-    const uint8_t tf = s.stackBE[s.stackPointer];
-    s.stackBE[s.stackPointer]      = s.stackBE[s.stackPointer + 9];
-    s.stackBE[s.stackPointer + 9] = tf;
     ++s.pc;
     return true;
 }
@@ -364,9 +321,6 @@ bool op_swap10(EvmState& s) {
     const U256 t = s.stack[s.stackPointer];
     s.stack[s.stackPointer]      = s.stack[s.stackPointer + 10];
     s.stack[s.stackPointer + 10] = t;
-    const uint8_t tf = s.stackBE[s.stackPointer];
-    s.stackBE[s.stackPointer]      = s.stackBE[s.stackPointer + 10];
-    s.stackBE[s.stackPointer + 10] = tf;
     ++s.pc;
     return true;
 }
@@ -379,9 +333,6 @@ bool op_swap11(EvmState& s) {
     const U256 t = s.stack[s.stackPointer];
     s.stack[s.stackPointer]      = s.stack[s.stackPointer + 11];
     s.stack[s.stackPointer + 11] = t;
-    const uint8_t tf = s.stackBE[s.stackPointer];
-    s.stackBE[s.stackPointer]      = s.stackBE[s.stackPointer + 11];
-    s.stackBE[s.stackPointer + 11] = tf;
     ++s.pc;
     return true;
 }
@@ -394,9 +345,6 @@ bool op_swap12(EvmState& s) {
     const U256 t = s.stack[s.stackPointer];
     s.stack[s.stackPointer]      = s.stack[s.stackPointer + 12];
     s.stack[s.stackPointer + 12] = t;
-    const uint8_t tf = s.stackBE[s.stackPointer];
-    s.stackBE[s.stackPointer]      = s.stackBE[s.stackPointer + 12];
-    s.stackBE[s.stackPointer + 12] = tf;
     ++s.pc;
     return true;
 }
@@ -409,9 +357,6 @@ bool op_swap13(EvmState& s) {
     const U256 t = s.stack[s.stackPointer];
     s.stack[s.stackPointer]      = s.stack[s.stackPointer + 13];
     s.stack[s.stackPointer + 13] = t;
-    const uint8_t tf = s.stackBE[s.stackPointer];
-    s.stackBE[s.stackPointer]      = s.stackBE[s.stackPointer + 13];
-    s.stackBE[s.stackPointer + 13] = tf;
     ++s.pc;
     return true;
 }
@@ -424,9 +369,6 @@ bool op_swap14(EvmState& s) {
     const U256 t = s.stack[s.stackPointer];
     s.stack[s.stackPointer]      = s.stack[s.stackPointer + 14];
     s.stack[s.stackPointer + 14] = t;
-    const uint8_t tf = s.stackBE[s.stackPointer];
-    s.stackBE[s.stackPointer]      = s.stackBE[s.stackPointer + 14];
-    s.stackBE[s.stackPointer + 14] = tf;
     ++s.pc;
     return true;
 }
@@ -439,9 +381,6 @@ bool op_swap15(EvmState& s) {
     const U256 t = s.stack[s.stackPointer];
     s.stack[s.stackPointer]      = s.stack[s.stackPointer + 15];
     s.stack[s.stackPointer + 15] = t;
-    const uint8_t tf = s.stackBE[s.stackPointer];
-    s.stackBE[s.stackPointer]      = s.stackBE[s.stackPointer + 15];
-    s.stackBE[s.stackPointer + 15] = tf;
     ++s.pc;
     return true;
 }
@@ -454,9 +393,6 @@ bool op_swap16(EvmState& s) {
     const U256 t = s.stack[s.stackPointer];
     s.stack[s.stackPointer]      = s.stack[s.stackPointer + 16];
     s.stack[s.stackPointer + 16] = t;
-    const uint8_t tf = s.stackBE[s.stackPointer];
-    s.stackBE[s.stackPointer]      = s.stackBE[s.stackPointer + 16];
-    s.stackBE[s.stackPointer + 16] = tf;
     ++s.pc;
     return true;
 }

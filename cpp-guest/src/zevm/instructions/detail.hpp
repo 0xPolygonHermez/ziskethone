@@ -14,7 +14,7 @@
 
 #include "evm_state.hpp"     // EvmState, kStackLimit
 #include "instructions.hpp"  // InstrFn, InstrTable
-#include "u256.hpp"          // U256, u256_from_be/to_be, bswap64
+#include "u256.hpp"          // U256, byteswap256, u256_* value helpers
 
 namespace zevm {
 
@@ -41,20 +41,21 @@ inline uint64_t load_u64(const uint8_t* p) {
     return v;
 }
 
-// Stack-entry endianness flags (EvmState::stackBE values).
-enum : uint8_t { kLE = 0, kBE = 1 };
+// Stack representation: every slot holds its value in big-endian wire form (the
+// 32 bytes memory / storage / PUSH / the host's evmc_bytes32 use, stored as four
+// little-endian words == byteswap256 of the integer value). That makes the
+// common ops — DUP/SWAP/POP, MLOAD/MSTORE, SLOAD/SSTORE, addresses, hashes —
+// conversion-free, since they're already BE. Only the arithmetic and positional
+// ops need little-endian limbs (what zeg::bi and the integer helpers consume):
+// they load a local LE copy with ld_le, compute, and write the result back as BE
+// with st_le. The bit-parallel ops (AND/OR/XOR/NOT) and zero/equality tests
+// (ISZERO/EQ) are representation-agnostic and work on the BE slots directly.
 
-// Convert stack entry `i` to little-endian (the form zeg::bi and the integer
-// helpers expect); no-op if already LE.
-inline void to_le(EvmState& s, uint32_t i) {
-    if (s.stackBE[i]) { s.stack[i] = byteswap256(s.stack[i]); s.stackBE[i] = kLE; }
-}
+// Big-endian stack slot `i` -> its little-endian value (a copy; slot unchanged).
+inline U256 ld_le(const EvmState& s, uint32_t i) { return byteswap256(s.stack[i]); }
 
-// Convert stack entry `i` to big-endian (the form memory wants); no-op if already
-// BE.
-inline void to_be(EvmState& s, uint32_t i) {
-    if (!s.stackBE[i]) { s.stack[i] = byteswap256(s.stack[i]); s.stackBE[i] = kBE; }
-}
+// Store a little-endian value into slot `i` in big-endian form.
+inline void st_le(EvmState& s, uint32_t i, const U256& v) { s.stack[i] = byteswap256(v); }
 
 // A 256-bit stack value used as a memory offset/size: its integer value, or
 // UINT64_MAX when any high limb is set (which forces an out-of-gas in

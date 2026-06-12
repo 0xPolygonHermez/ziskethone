@@ -1,30 +1,55 @@
 // bitwise.cpp — comparison & bitwise-logic opcodes (0x10..0x1e: LT, GT, SLT,
 // SGT, EQ, ISZERO, AND, OR, XOR, NOT, BYTE, SHL, SHR, SAR, CLZ).
 //
-// Endianness (see EvmState::stackBE):
-//   * LT/GT/SLT/SGT, SHL/SHR/SAR, BYTE — magnitude/positional, so operands are
-//     forced to LE and the result is LE.
-//   * AND/OR/XOR — bit-parallel, so endianness-agnostic *when both operands
-//     share it*: operate in place and keep that flag; if they differ, convert
-//     both to BE (the default) first.
-//   * NOT — bit-parallel and unary: complement in place, keep the flag.
-//   * ISZERO — zero is all-zero in either form: no conversion; result LE.
-//   * EQ — equal iff equal in a common form: convert only when flags differ;
-//     result LE.
+// Endianness (the stack is big-endian; see EvmState::stack):
+//   * CLZ — positional, so the operand is loaded little-endian (ld_le) and the
+//     result written back BE (st_le).
+//   * AND/OR/XOR/NOT — bit-parallel, so endianness-agnostic: operate on the BE
+//     slots in place, no conversion.
+//   * ISZERO/EQ — zero and equality are the same in either representation: test
+//     the BE slots directly; the 0/1 result is stored BE via st_le.
+//   * LT/GT/SLT/SGT — ordering is decided on the BE slots directly (be_lt /
+//     be_slt): the most-significant differing limb decides, byteswapping only
+//     that one limb instead of the whole 256-bit operand.
+//   * SHL/SHR/SAR, BYTE — the shift amount / byte index is read straight off the
+//     BE slot (low_scalar_be); a shift by a whole number of bytes is a byte move
+//     (memmove + memset) on the BE bytes, and BYTE just copies one byte — all
+//     byteswap-free. Only an off-byte shift amount falls back to the LE path.
 // Binary ops take a = top, b = second and push the result into b's slot.
 
 #include "detail.hpp"
+
+#include <cstring>  // std::memmove / std::memset (byte-granular shifts)
 
 namespace zevm {
 
 namespace {
 
-// Signed less-than (two's complement): differing signs decide it; same sign
-// falls back to the unsigned comparison (which preserves the ordering).
-inline bool u256_slt(const U256& a, const U256& b) {
-    const bool sa = u256_sign(a), sb = u256_sign(b);
+// The boolean results 0/1, big-endian (st_le of the integer). byteswap256 of a
+// constant folds, so these are compile-time constants.
+inline U256 bool_be(bool v) { return v ? U256{{0, 0, 0, 0x0100000000000000ULL}} : U256{}; }
+
+// Unsigned a < b on big-endian slots. limbs[0] is the most-significant 8-byte
+// group; the first limb that differs decides the order, and a single bswap64 of
+// that limb recovers its magnitude (the limb is stored byte-reversed vs. its
+// big-endian significance). At most one byteswap per operand, vs. a full
+// byteswap256 to compare in little-endian.
+inline bool be_lt(const U256& a, const U256& b) {
+    for (int i = 0; i < 4; ++i)
+        if (a.limbs[i] != b.limbs[i])
+            return bswap64(a.limbs[i]) < bswap64(b.limbs[i]);
+    return false;  // equal -> not less-than
+}
+
+// Sign bit of a big-endian slot: the value's top bit is bit 7 of limbs[0].
+inline bool be_sign(const U256& a) { return (a.limbs[0] >> 7) & 1ULL; }
+
+// Signed a < b on big-endian slots (two's complement): differing signs decide
+// it (negative < non-negative); same sign falls back to the unsigned order.
+inline bool be_slt(const U256& a, const U256& b) {
+    const bool sa = be_sign(a), sb = be_sign(b);
     if (sa != sb) return sa;          // a negative, b non-negative => a < b
-    return u256_lt(a, b);
+    return be_lt(a, b);
 }
 
 // Logical left shift by n (0..255); bits shifted out the top are dropped.
@@ -65,10 +90,35 @@ inline U256 sar(const U256& a, unsigned n) {
     return r;
 }
 
-// Shift amount as a clamped int: anything >= 256 is treated as 256.
-inline unsigned shift_amount(const U256& s) {
-    if ((s.limbs[1] | s.limbs[2] | s.limbs[3]) != 0 || s.limbs[0] >= 256) return 256;
-    return static_cast<unsigned>(s.limbs[0]);
+// A small scalar (shift amount / byte index) read directly off a big-endian
+// slot: < 256 iff every byte but the last is zero, in which case the value is
+// that last byte (raw byte[31] == limbs[3] >> 56). Returns 256 otherwise, which
+// the shift handlers treat as out-of-range and BYTE as >= 32.
+inline unsigned low_scalar_be(const U256& be) {
+    if ((be.limbs[0] | be.limbs[1] | be.limbs[2] |
+         (be.limbs[3] & 0x00FFFFFFFFFFFFFFULL)) != 0)
+        return 256;
+    return static_cast<unsigned>(be.limbs[3] >> 56);
+}
+
+// Byte-granular shifts on a big-endian slot in place (k bytes, 1..31). The BE
+// byte array runs MSB (byte 0) .. LSB (byte 31), so SHL moves bytes toward byte
+// 0 and SHR/SAR toward byte 31; the vacated end is zero-filled (SAR sign-filled).
+inline void byte_shl(U256& v, unsigned k) {
+    uint8_t* b = reinterpret_cast<uint8_t*>(&v);
+    std::memmove(b, b + k, 32 - k);
+    std::memset(b + (32 - k), 0, k);
+}
+inline void byte_shr(U256& v, unsigned k) {
+    uint8_t* b = reinterpret_cast<uint8_t*>(&v);
+    std::memmove(b + k, b, 32 - k);
+    std::memset(b, 0, k);
+}
+inline void byte_sar(U256& v, unsigned k) {
+    uint8_t* b = reinterpret_cast<uint8_t*>(&v);
+    const uint8_t fill = (b[0] & 0x80) ? 0xFF : 0x00;  // sign byte (before the move)
+    std::memmove(b + k, b, 32 - k);
+    std::memset(b, fill, k);
 }
 
 // 0x10 LT — unsigned a < b.
@@ -76,12 +126,8 @@ bool op_lt(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    to_le(s, s.stackPointer + 1);
-    const U256& a = s.stack[s.stackPointer];
-    U256&       b = s.stack[s.stackPointer + 1];
-    b = u256_lt(a, b) ? U256{{1, 0, 0, 0}} : U256{};
-    s.stackBE[s.stackPointer + 1] = kLE;
+    s.stack[s.stackPointer + 1] =
+        bool_be(be_lt(s.stack[s.stackPointer], s.stack[s.stackPointer + 1]));
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -92,12 +138,8 @@ bool op_gt(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    to_le(s, s.stackPointer + 1);
-    const U256& a = s.stack[s.stackPointer];
-    U256&       b = s.stack[s.stackPointer + 1];
-    b = u256_lt(b, a) ? U256{{1, 0, 0, 0}} : U256{};
-    s.stackBE[s.stackPointer + 1] = kLE;
+    s.stack[s.stackPointer + 1] =
+        bool_be(be_lt(s.stack[s.stackPointer + 1], s.stack[s.stackPointer]));
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -108,12 +150,8 @@ bool op_slt(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    to_le(s, s.stackPointer + 1);
-    const U256& a = s.stack[s.stackPointer];
-    U256&       b = s.stack[s.stackPointer + 1];
-    b = u256_slt(a, b) ? U256{{1, 0, 0, 0}} : U256{};
-    s.stackBE[s.stackPointer + 1] = kLE;
+    s.stack[s.stackPointer + 1] =
+        bool_be(be_slt(s.stack[s.stackPointer], s.stack[s.stackPointer + 1]));
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -124,62 +162,45 @@ bool op_sgt(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    to_le(s, s.stackPointer + 1);
-    const U256& a = s.stack[s.stackPointer];
-    U256&       b = s.stack[s.stackPointer + 1];
-    b = u256_slt(b, a) ? U256{{1, 0, 0, 0}} : U256{};
-    s.stackBE[s.stackPointer + 1] = kLE;
+    s.stack[s.stackPointer + 1] =
+        bool_be(be_slt(s.stack[s.stackPointer + 1], s.stack[s.stackPointer]));
     ++s.stackPointer;
     ++s.pc;
     return true;
 }
 
-// 0x14 EQ — a == b.
+// 0x14 EQ — a == b. Equality is representation-agnostic: compare BE slots.
 bool op_eq(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    if (s.stackBE[s.stackPointer] != s.stackBE[s.stackPointer + 1]) {
-        to_le(s, s.stackPointer);          // mismatched forms — bring to a common one
-        to_le(s, s.stackPointer + 1);
-    }
-    const U256& a = s.stack[s.stackPointer];
-    U256&       b = s.stack[s.stackPointer + 1];
-    b = u256_eq(a, b) ? U256{{1, 0, 0, 0}} : U256{};
-    s.stackBE[s.stackPointer + 1] = kLE;
+    const bool e = u256_eq(s.stack[s.stackPointer], s.stack[s.stackPointer + 1]);
+    s.stack[s.stackPointer + 1] = bool_be(e);
     ++s.stackPointer;
     ++s.pc;
     return true;
 }
 
-// 0x15 ISZERO — a == 0 (unary). Zero is the same in either representation.
+// 0x15 ISZERO — a == 0 (unary). Zero is all-zero in either representation.
 bool op_iszero(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    U256& a = s.stack[s.stackPointer];
-    a = u256_is_zero(a) ? U256{{1, 0, 0, 0}} : U256{};
-    s.stackBE[s.stackPointer] = kLE;
+    s.stack[s.stackPointer] = bool_be(u256_is_zero(s.stack[s.stackPointer]));
     ++s.pc;
     return true;
 }
 
-// Shared body for AND/OR/XOR: bit-parallel, so endianness-agnostic when both
-// operands share it (keep that flag); otherwise convert both to BE.
+// Shared body for AND/OR/XOR: bit-parallel, so endianness-agnostic — operate on
+// the big-endian slots in place; the result is big-endian too.
 template <class Op>
 inline bool binary_logic(EvmState& s, Op op) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    if (s.stackBE[s.stackPointer] != s.stackBE[s.stackPointer + 1]) {
-        to_be(s, s.stackPointer);          // default to BE on a mismatch
-        to_be(s, s.stackPointer + 1);
-    }
     const U256& a = s.stack[s.stackPointer];
     U256&       b = s.stack[s.stackPointer + 1];
     for (int i = 0; i < 4; ++i) b.limbs[i] = op(a.limbs[i], b.limbs[i]);
-    // b's slot keeps its (now shared) flag — the result's endianness.
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -190,7 +211,7 @@ bool op_and(EvmState& s) { return binary_logic(s, [](uint64_t x, uint64_t y) { r
 bool op_or (EvmState& s) { return binary_logic(s, [](uint64_t x, uint64_t y) { return x | y; }); }
 bool op_xor(EvmState& s) { return binary_logic(s, [](uint64_t x, uint64_t y) { return x ^ y; }); }
 
-// 0x19 NOT — bitwise complement (unary). Bit-parallel: keep the endianness flag.
+// 0x19 NOT — bitwise complement (unary). Bit-parallel: complement the BE slot.
 bool op_not(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
@@ -202,43 +223,37 @@ bool op_not(EvmState& s) {
 }
 
 // 0x1e CLZ — count leading zero bits of the 256-bit word (EIP-7939, Osaka).
-// clz(0) == 256. Positional, so the operand is forced to LE; result LE.
+// clz(0) == 256. Positional, so the operand is loaded LE; result LE -> BE.
 bool op_clz(EvmState& s) {
     if (s.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_LOW;
     if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    const U256& a = s.stack[s.stackPointer];
+    const U256 a = ld_le(s, s.stackPointer);
     uint64_t n;  // limb[3] is most significant; higher all-zero limbs add 64 each
     if (a.limbs[3] != 0)      n =       static_cast<uint64_t>(__builtin_clzll(a.limbs[3]));
     else if (a.limbs[2] != 0) n =  64 + static_cast<uint64_t>(__builtin_clzll(a.limbs[2]));
     else if (a.limbs[1] != 0) n = 128 + static_cast<uint64_t>(__builtin_clzll(a.limbs[1]));
     else if (a.limbs[0] != 0) n = 192 + static_cast<uint64_t>(__builtin_clzll(a.limbs[0]));
     else                      n = 256;
-    s.stack[s.stackPointer] = U256{{n, 0, 0, 0}};
-    s.stackBE[s.stackPointer] = kLE;
+    st_le(s, s.stackPointer, U256{{n, 0, 0, 0}});
     ++s.pc;
     return true;
 }
 
 // 0x1a BYTE — the i-th byte of x, counting from the most significant (i = 0).
-// i >= 32 yields 0. Stack: i = top, x = second.
+// i >= 32 yields 0. Stack: i = top, x = second. The index reads straight off the
+// BE slot, and byte i of x is just raw byte[i] of x's BE slot.
 bool op_byte(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    to_le(s, s.stackPointer + 1);
-    const U256& i = s.stack[s.stackPointer];
-    U256&       x = s.stack[s.stackPointer + 1];
+    const unsigned idx = low_scalar_be(s.stack[s.stackPointer]);  // 0 = most significant
     U256 r{};
-    if ((i.limbs[1] | i.limbs[2] | i.limbs[3]) == 0 && i.limbs[0] <= 31) {
-        const unsigned idx = static_cast<unsigned>(i.limbs[0]);  // 0 = most significant
-        const unsigned pos = 31 - idx;                           // byte index from LSB
-        r.limbs[0] = (x.limbs[pos >> 3] >> ((pos & 7) * 8)) & 0xFFULL;
+    if (idx < 32) {
+        const uint8_t byte = reinterpret_cast<const uint8_t*>(&s.stack[s.stackPointer + 1])[idx];
+        r.limbs[3] = static_cast<uint64_t>(byte) << 56;  // result value at BE byte[31]
     }
-    x = r;
-    s.stackBE[s.stackPointer + 1] = kLE;
+    s.stack[s.stackPointer + 1] = r;  // already big-endian
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -249,12 +264,12 @@ bool op_shl(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    to_le(s, s.stackPointer + 1);
-    const U256& sh = s.stack[s.stackPointer];
-    U256&       v  = s.stack[s.stackPointer + 1];
-    v = shl(v, shift_amount(sh));
-    s.stackBE[s.stackPointer + 1] = kLE;
+    const unsigned n = low_scalar_be(s.stack[s.stackPointer]);
+    U256& v = s.stack[s.stackPointer + 1];
+    if (n >= 256)        v = U256{};
+    else if (n == 0)     { /* unchanged */ }
+    else if (n % 8 == 0) byte_shl(v, n / 8);
+    else                 st_le(s, s.stackPointer + 1, shl(ld_le(s, s.stackPointer + 1), n));
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -265,12 +280,12 @@ bool op_shr(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    to_le(s, s.stackPointer + 1);
-    const U256& sh = s.stack[s.stackPointer];
-    U256&       v  = s.stack[s.stackPointer + 1];
-    v = shr(v, shift_amount(sh));
-    s.stackBE[s.stackPointer + 1] = kLE;
+    const unsigned n = low_scalar_be(s.stack[s.stackPointer]);
+    U256& v = s.stack[s.stackPointer + 1];
+    if (n >= 256)        v = U256{};
+    else if (n == 0)     { /* unchanged */ }
+    else if (n % 8 == 0) byte_shr(v, n / 8);
+    else                 st_le(s, s.stackPointer + 1, shr(ld_le(s, s.stackPointer + 1), n));
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -281,12 +296,15 @@ bool op_sar(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    to_le(s, s.stackPointer);
-    to_le(s, s.stackPointer + 1);
-    const U256& sh = s.stack[s.stackPointer];
-    U256&       v  = s.stack[s.stackPointer + 1];
-    v = sar(v, shift_amount(sh));
-    s.stackBE[s.stackPointer + 1] = kLE;
+    const unsigned n = low_scalar_be(s.stack[s.stackPointer]);
+    U256& v = s.stack[s.stackPointer + 1];
+    if (n >= 256) {
+        // out-of-range: every bit becomes the sign bit (raw byte[0] high bit)
+        const uint8_t fill = (reinterpret_cast<const uint8_t*>(&v)[0] & 0x80) ? 0xFF : 0x00;
+        std::memset(&v, fill, 32);
+    } else if (n == 0)   { /* unchanged */ }
+    else if (n % 8 == 0) byte_sar(v, n / 8);
+    else                 st_le(s, s.stackPointer + 1, sar(ld_le(s, s.stackPointer + 1), n));
     ++s.stackPointer;
     ++s.pc;
     return true;
