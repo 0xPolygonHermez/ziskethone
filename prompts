@@ -290,3 +290,20 @@ Clean (set to zero) if needed
 
 This idx represents the depth. and even idx should point to the first memory block and odd idx to the second memory.
 
+-----
+
+We have an issue. riscV is little endian and the EVM is big endian.
+
+We wont to minimize the endianness as much as we can.
+
+Operations are done in le, memory is in be. So what we will do is to add a flag to each entry on the stack indicating if it's le/be
+
+The idea is to postpone the conversion untill it's really necessary.
+
+For example when we load from memory or from a pushXX, we just set the BE flag.
+When we do an operation, we be convert the operants to le and do the operation and setting it to le
+When we store again we convert to le if needed.
+There are some bitwise operations that don't depend on indianness (AND, OR, XOR, NOT) those we don't change the indianness if both are the same endianness. We change only if they are different. Lets default to BE if they are different.
+
+---
+
