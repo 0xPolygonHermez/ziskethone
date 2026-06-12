@@ -297,24 +297,40 @@ bool op_mulmod(EvmState& s) {
 }
 
 // 0x0a EXP — a ** b mod 2^256. Gas is dynamic: 10 + 50 per byte of exponent.
+//
+// The exponent is read straight off its big-endian slot — only its bit pattern
+// matters, so no ld_le. Its lanes run most-significant first (e.limbs[0] is the
+// top 8 bytes); the highest set bit is found by the first non-zero lane plus a
+// clz on that lane's value (bswap64) — no 256-iteration scan. The square-and-
+// multiply then walks the bits top..0 lane by lane, byteswapping only the lanes
+// it actually visits (the leading all-zero lanes are skipped).
 bool op_exp(EvmState& s) {
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 base = ld_le(s, s.stackPointer);
-    const U256 exp  = ld_le(s, s.stackPointer + 1);
+    const U256  base = ld_le(s, s.stackPointer);
+    const U256& e    = s.stack[s.stackPointer + 1];  // exponent, big-endian slot
 
-    int top = -1;  // highest set bit of the exponent
-    for (int i = 255; i >= 0; --i)
-        if ((exp.limbs[i >> 6] >> (i & 63)) & 1ULL) { top = i; break; }
+    // Highest set bit: first non-zero lane (MS first) + clz on its true value.
+    int top = -1;
+    for (int k = 0; k < 4; ++k)
+        if (e.limbs[k] != 0) {
+            top = (3 - k) * 64 + (63 - __builtin_clzll(bswap64(e.limbs[k])));
+            break;
+        }
     const int64_t byte_len = top < 0 ? 0 : (top / 8 + 1);
     const int64_t cost = GAS_EXP + GAS_EXPBYTE * byte_len;
     if (s.gas < cost) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= cost;
 
-    // Square-and-multiply, MSB -> LSB (skips the exponent's leading zero bits).
+    // Square-and-multiply, MSB -> LSB, lane by lane (value lane vl == e.limbs
+    // [3 - vl] byteswapped). top < 0 (exponent 0) runs zero iterations -> 1.
     U256 result{{1, 0, 0, 0}};
-    for (int i = top; i >= 0; --i) {
-        result = mul_low(result, result);
-        if ((exp.limbs[i >> 6] >> (i & 63)) & 1ULL) result = mul_low(result, base);
+    const int topLane = top >> 6;
+    for (int vl = topLane; vl >= 0; --vl) {
+        const uint64_t lane = bswap64(e.limbs[3 - vl]);
+        for (int b = (vl == topLane ? (top & 63) : 63); b >= 0; --b) {
+            result = mul_low(result, result);
+            if ((lane >> b) & 1ULL) result = mul_low(result, base);
+        }
     }
     st_le(s, s.stackPointer + 1, result);
     ++s.stackPointer;
