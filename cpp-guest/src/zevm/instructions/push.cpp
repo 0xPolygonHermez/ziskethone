@@ -6,12 +6,44 @@
 // code bytes ] — the BE representation verbatim. We write them straight in, no
 // byteswap and no masks. A PUSH whose data runs past the end of code zero-pads
 // the missing low-order bytes (avail). PUSH0 is the constant zero (BE == LE).
+//
+// PUSH1..PUSH8 take a fast path: their value fits the low 64-bit lane (limbs[3]
+// in BE form; the other limbs are zero). Instead of a variable-length memcpy we
+// do one 8-byte load and a compile-time shift to right-align the N bytes — the
+// load reads the N immediate bytes (and a few following opcodes), and the left
+// shift by (8-N)*8 discards those trailing bytes while clearing the low ones. It
+// needs 8 readable bytes; a PUSH whose immediate is truncated at code end (only
+// possible in the last few bytes) falls back to the zero-padding memcpy.
 
 #include "detail.hpp"
 
 namespace zevm {
 
 namespace {
+
+// Shared PUSH1..PUSH8 fast path (N = 1..8). See the file header.
+template <unsigned N>
+inline bool push_small(EvmState& s) {
+    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    s.gas -= GAS_VERYLOW;
+    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --s.stackPointer;
+    U256& w = s.stack[s.stackPointer];
+    w.limbs[0] = 0; w.limbs[1] = 0; w.limbs[2] = 0;
+    const size_t pc1 = s.pc + 1;
+    if (pc1 + 8 <= s.codeSize) {
+        // 8 bytes safely readable: load them, shift the wanted N up to the top of
+        // the lane (big-endian), discarding the trailing over-read bytes.
+        w.limbs[3] = load_u64(s.code + pc1) << ((8 - N) * 8);
+    } else {
+        // Near code end: the immediate may be truncated -> zero-pad. Rare.
+        w.limbs[3] = 0;
+        const size_t avail = pc1 < s.codeSize ? std::min<size_t>(N, s.codeSize - pc1) : 0;
+        std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - N), s.code + pc1, avail);
+    }
+    s.pc += N + 1;
+    return true;
+}
 
 // 0x5f PUSH0 (Shanghai, EIP-3855) — push the constant zero.
 bool op_push0(EvmState& s) {
@@ -24,125 +56,15 @@ bool op_push0(EvmState& s) {
     return true;
 }
 
-// 0x60 PUSH1.
-bool op_push1(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    U256& w = s.stack[s.stackPointer];
-    w = U256{};
-    const size_t pc1 = s.pc + 1;
-    const size_t avail = pc1 < s.codeSize ? std::min<size_t>(1, s.codeSize - pc1) : 0;
-    std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 1), s.code + pc1, avail);
-    s.pc += 1 + 1;
-    return true;
-}
-
-// 0x61 PUSH2.
-bool op_push2(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    U256& w = s.stack[s.stackPointer];
-    w = U256{};
-    const size_t pc1 = s.pc + 1;
-    const size_t avail = pc1 < s.codeSize ? std::min<size_t>(2, s.codeSize - pc1) : 0;
-    std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 2), s.code + pc1, avail);
-    s.pc += 2 + 1;
-    return true;
-}
-
-// 0x62 PUSH3.
-bool op_push3(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    U256& w = s.stack[s.stackPointer];
-    w = U256{};
-    const size_t pc1 = s.pc + 1;
-    const size_t avail = pc1 < s.codeSize ? std::min<size_t>(3, s.codeSize - pc1) : 0;
-    std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 3), s.code + pc1, avail);
-    s.pc += 3 + 1;
-    return true;
-}
-
-// 0x63 PUSH4.
-bool op_push4(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    U256& w = s.stack[s.stackPointer];
-    w = U256{};
-    const size_t pc1 = s.pc + 1;
-    const size_t avail = pc1 < s.codeSize ? std::min<size_t>(4, s.codeSize - pc1) : 0;
-    std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 4), s.code + pc1, avail);
-    s.pc += 4 + 1;
-    return true;
-}
-
-// 0x64 PUSH5.
-bool op_push5(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    U256& w = s.stack[s.stackPointer];
-    w = U256{};
-    const size_t pc1 = s.pc + 1;
-    const size_t avail = pc1 < s.codeSize ? std::min<size_t>(5, s.codeSize - pc1) : 0;
-    std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 5), s.code + pc1, avail);
-    s.pc += 5 + 1;
-    return true;
-}
-
-// 0x65 PUSH6.
-bool op_push6(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    U256& w = s.stack[s.stackPointer];
-    w = U256{};
-    const size_t pc1 = s.pc + 1;
-    const size_t avail = pc1 < s.codeSize ? std::min<size_t>(6, s.codeSize - pc1) : 0;
-    std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 6), s.code + pc1, avail);
-    s.pc += 6 + 1;
-    return true;
-}
-
-// 0x66 PUSH7.
-bool op_push7(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    U256& w = s.stack[s.stackPointer];
-    w = U256{};
-    const size_t pc1 = s.pc + 1;
-    const size_t avail = pc1 < s.codeSize ? std::min<size_t>(7, s.codeSize - pc1) : 0;
-    std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 7), s.code + pc1, avail);
-    s.pc += 7 + 1;
-    return true;
-}
-
-// 0x67 PUSH8.
-bool op_push8(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    U256& w = s.stack[s.stackPointer];
-    w = U256{};
-    const size_t pc1 = s.pc + 1;
-    const size_t avail = pc1 < s.codeSize ? std::min<size_t>(8, s.codeSize - pc1) : 0;
-    std::memcpy(reinterpret_cast<uint8_t*>(&w) + (32 - 8), s.code + pc1, avail);
-    s.pc += 8 + 1;
-    return true;
-}
+// 0x60..0x67 PUSH1..PUSH8 — value fits the low lane (see push_small).
+bool op_push1(EvmState& s) { return push_small<1>(s); }
+bool op_push2(EvmState& s) { return push_small<2>(s); }
+bool op_push3(EvmState& s) { return push_small<3>(s); }
+bool op_push4(EvmState& s) { return push_small<4>(s); }
+bool op_push5(EvmState& s) { return push_small<5>(s); }
+bool op_push6(EvmState& s) { return push_small<6>(s); }
+bool op_push7(EvmState& s) { return push_small<7>(s); }
+bool op_push8(EvmState& s) { return push_small<8>(s); }
 
 // 0x68 PUSH9.
 bool op_push9(EvmState& s) {

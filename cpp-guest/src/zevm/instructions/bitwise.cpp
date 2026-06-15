@@ -181,35 +181,72 @@ bool op_eq(EvmState& s) {
     return true;
 }
 
-// 0x15 ISZERO — a == 0 (unary). Zero is all-zero in either representation.
+// 0x15 ISZERO — a == 0 (unary). Zero is all-zero in either representation; the
+// operand is a big-endian slot, so test from its least-significant lane
+// (limbs[3]) first and short-circuit — a small nonzero operand (the common case)
+// exits on the first lane.
 bool op_iszero(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    s.stack[s.stackPointer] = bool_be(u256_is_zero(s.stack[s.stackPointer]));
+    const U256& a = s.stack[s.stackPointer];
+    const bool z = a.limbs[3] == 0 && a.limbs[2] == 0 && a.limbs[1] == 0 && a.limbs[0] == 0;
+    s.stack[s.stackPointer] = bool_be(z);
     ++s.pc;
     return true;
 }
 
-// Shared body for AND/OR/XOR: bit-parallel, so endianness-agnostic — operate on
-// the big-endian slots in place; the result is big-endian too.
-template <class Op>
-inline bool binary_logic(EvmState& s, Op op) {
+// AND/OR/XOR are bit-parallel, so endianness-agnostic — operate on the
+// big-endian slots in place (the result is big-endian too). Each is its own
+// function with the four limbs unrolled, rather than a shared template.
+
+// 0x16 AND.
+bool op_and(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256& a = s.stack[s.stackPointer];
     U256&       b = s.stack[s.stackPointer + 1];
-    for (int i = 0; i < 4; ++i) b.limbs[i] = op(a.limbs[i], b.limbs[i]);
+    b.limbs[0] &= a.limbs[0];
+    b.limbs[1] &= a.limbs[1];
+    b.limbs[2] &= a.limbs[2];
+    b.limbs[3] &= a.limbs[3];
     ++s.stackPointer;
     ++s.pc;
     return true;
 }
 
-// 0x16 AND / 0x17 OR / 0x18 XOR.
-bool op_and(EvmState& s) { return binary_logic(s, [](uint64_t x, uint64_t y) { return x & y; }); }
-bool op_or (EvmState& s) { return binary_logic(s, [](uint64_t x, uint64_t y) { return x | y; }); }
-bool op_xor(EvmState& s) { return binary_logic(s, [](uint64_t x, uint64_t y) { return x ^ y; }); }
+// 0x17 OR.
+bool op_or(EvmState& s) {
+    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    s.gas -= GAS_VERYLOW;
+    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256& a = s.stack[s.stackPointer];
+    U256&       b = s.stack[s.stackPointer + 1];
+    b.limbs[0] |= a.limbs[0];
+    b.limbs[1] |= a.limbs[1];
+    b.limbs[2] |= a.limbs[2];
+    b.limbs[3] |= a.limbs[3];
+    ++s.stackPointer;
+    ++s.pc;
+    return true;
+}
+
+// 0x18 XOR.
+bool op_xor(EvmState& s) {
+    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    s.gas -= GAS_VERYLOW;
+    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256& a = s.stack[s.stackPointer];
+    U256&       b = s.stack[s.stackPointer + 1];
+    b.limbs[0] ^= a.limbs[0];
+    b.limbs[1] ^= a.limbs[1];
+    b.limbs[2] ^= a.limbs[2];
+    b.limbs[3] ^= a.limbs[3];
+    ++s.stackPointer;
+    ++s.pc;
+    return true;
+}
 
 // 0x19 NOT — bitwise complement (unary). Bit-parallel: complement the BE slot.
 bool op_not(EvmState& s) {

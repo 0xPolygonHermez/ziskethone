@@ -20,10 +20,10 @@ namespace zevm {
 
 namespace {
 
-// zevm's evmc2_pre_execution handle IS the first-instruction-per-32-byte-chunk
-// map itself: ceil(code_size/32) malloc'd bytes (see
-// mark_first_instruction_in_word), cast to/from the opaque handle type — no
-// wrapper struct. Null when code_size == 0 (nothing to analyze).
+// zevm's evmc2_pre_execution handle IS the JUMPDEST bitset itself:
+// ceil(code_size/64) malloc'd u64 words (see build_jumpdest_bitset), cast
+// to/from the opaque handle type — no wrapper struct. Null when code_size == 0
+// (nothing to analyze).
 
 // One preallocated frame per call depth, reused across calls (the call stack has
 // exactly one live frame per depth). Static (not heap): the trivial EvmState
@@ -33,12 +33,12 @@ namespace {
 EvmState g_frames[kMaxCallDepth];
 
 // Run one frame to completion and build its evmc_result. `prebuilt` is an
-// optional JUMPDEST map borrowed for this frame; when null, EvmState builds its
-// own.
+// optional JUMPDEST bitset borrowed for this frame; when null, EvmState builds
+// its own.
 evmc_result run(const evmc_host_interface* host, evmc_host_context* context,
                 evmc_revision rev, const evmc_message* msg,
                 const uint8_t* code, size_t code_size,
-                const uint8_t* prebuilt) noexcept {
+                const uint64_t* prebuilt) noexcept {
     // Use this depth's preallocated frame and reset it for the call. EvmState is
     // large (~34 KB — it embeds the 1024-entry operand stack); the static array
     // keeps it off both the native C++ stack (a nested CALL re-enters run()
@@ -104,10 +104,11 @@ evmc2_pre_execution* w_prepare(evmc_vm* /*vm*/, const uint8_t* code,
                                size_t code_size) noexcept {
     if (code_size == 0)
         return nullptr;
-    // malloc (not calloc): mark_first_instruction_in_word writes every byte.
-    auto* map = static_cast<uint8_t*>(std::malloc((code_size + 31) / 32));
-    mark_first_instruction_in_word(code, code_size, map);
-    return reinterpret_cast<evmc2_pre_execution*>(map);
+    // malloc (not calloc): build_jumpdest_bitset writes every word.
+    const size_t nWords = (code_size + 63) / 64;
+    auto* bitset = static_cast<uint64_t*>(std::malloc(nWords * sizeof(uint64_t)));
+    build_jumpdest_bitset(code, code_size, bitset);
+    return reinterpret_cast<evmc2_pre_execution*>(bitset);
 }
 
 void w_release(evmc_vm* /*vm*/, evmc2_pre_execution* pre) noexcept {
@@ -119,7 +120,7 @@ evmc_result w_execute2(evmc_vm* /*vm*/, const evmc_host_interface* host,
                        const evmc_message* msg, const uint8_t* code,
                        size_t code_size, evmc2_pre_execution* pre) noexcept {
     return run(host, context, rev, msg, code, code_size,
-               reinterpret_cast<const uint8_t*>(pre));
+               reinterpret_cast<const uint64_t*>(pre));
 }
 
 }  // namespace

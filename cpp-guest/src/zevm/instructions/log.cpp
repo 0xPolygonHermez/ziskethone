@@ -28,8 +28,8 @@ bool log_impl(EvmState& s, unsigned n) {
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
 
     const uint32_t sp = s.stackPointer;
-    const uint64_t off  = mem_arg(ld_le(s, sp));
-    const uint64_t size = mem_arg(ld_le(s, sp + 1));
+    const uint64_t off  = mem_arg(s.stack[sp]);
+    const uint64_t size = mem_arg(s.stack[sp + 1]);
 
     if (EVMMem::expand(static_cast<size_t>(off), static_cast<size_t>(size), &s.gas) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
