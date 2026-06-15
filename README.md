@@ -70,6 +70,41 @@ Outputs:
 - `cpp-guest/build/zisk_eth_guest`
 - `eest-witness-gen/target/release/eest-witness-gen`
 
+### EVM backend — `evmone` (default) or `zevm`
+
+The guest drives the EVM through the swappable evmc2 interface, so the
+interpreter is a build-time choice via the `EVM_BACKEND` CMake option:
+
+- **`evmone`** — the upstream evmone baseline interpreter. **This is the current
+  standard: it is the default everywhere and the backend used by all the
+  verification and conformance flows below.**
+- **`zevm`** — the in-tree hand-written interpreter (`cpp-guest/src/zevm/`),
+  selected only when explicitly requested with `-DEVM_BACKEND=zevm`.
+
+`make cpp` builds the host guest with the default (`evmone`) into
+`cpp-guest/build`. To choose a backend explicitly, configure with
+`-DEVM_BACKEND=…`; use a separate build directory per backend so both stay
+configured (the option is cached — switching it in an existing directory
+requires reconfiguring that directory):
+
+```bash
+# Host guest (native)
+cmake -S cpp-guest -B cpp-guest/build      -DEVM_BACKEND=evmone   # == make cpp
+cmake --build cpp-guest/build
+cmake -S cpp-guest -B cpp-guest/build-zevm -DEVM_BACKEND=zevm
+cmake --build cpp-guest/build-zevm
+```
+
+For the ZisK zkVM ELF (RISC-V cross-build) pass the toolchain file and the same
+option, one build directory per backend:
+
+```bash
+cmake -S cpp-guest/zisk -B cpp-guest/zisk/build-evmone \
+  -DCMAKE_TOOLCHAIN_FILE=$(pwd)/cpp-guest/zisk/toolchain.cmake \
+  -DCMAKE_BUILD_TYPE=Release -DEVM_BACKEND=evmone        # or -DEVM_BACKEND=zevm
+cmake --build cpp-guest/zisk/build-evmone --target zisk_eth_guest.elf
+```
+
 ## Verifying a single mainnet block
 
 End-to-end, fetch a block and reproduce its hash inside cpp-guest:
