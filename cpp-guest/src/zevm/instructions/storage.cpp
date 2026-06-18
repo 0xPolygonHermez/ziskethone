@@ -3,9 +3,8 @@
 //
 // These call back into the host (ZiskStateDB) through the evmc C interface for
 // the account whose storage is being accessed — the message recipient. Keys and
-// values are evmc_bytes32, i.e. 32 big-endian bytes, which is exactly the BE
-// stack representation: a slot's raw bytes *are* the evmc_bytes32, so there is no
-// endianness conversion at all — just a memcpy in or out.
+// values are evmc_bytes32, i.e. 32 big-endian bytes; the stack stores little-
+// endian integers, so they are byteswapped in/out via u256_from_be / u256_to_be.
 //
 // Gas matches evmone for Berlin..Prague (EIP-2929 warm/cold, EIP-2200 net
 // metering, EIP-3529 refunds, EIP-1706 sentry). SSTORE returns its
@@ -47,11 +46,11 @@ constexpr SStoreCost SSTORE_COST[] = {
     {WARM_STORAGE_READ_COST, SS_RESET - WARM_STORAGE_READ_COST},          // MODIFIED_RESTORED
 };
 
-// The 32 big-endian bytes of stack slot `i` — the slot's memory is the
-// evmc_bytes32 directly (stack words are stored big-endian).
+// The 32 big-endian bytes of stack slot `i` (its LE integer value byteswapped to
+// the on-wire evmc_bytes32 form the host expects for keys/values).
 inline evmc_bytes32 slot_bytes(const EvmState& s, uint32_t i) {
     evmc_bytes32 b;
-    std::memcpy(b.bytes, &s.stack[i], 32);
+    u256_to_be(s.stack[i], b.bytes);
     return b;
 }
 
@@ -69,7 +68,7 @@ bool op_sload(EvmState& s) {
         s.gas -= extra;
     }
     const evmc_bytes32 v = s.host->get_storage(s.context, &s.evmcMsg->recipient, &key);
-    std::memcpy(&s.stack[s.stackPointer], v.bytes, 32);  // value is big-endian -> BE form
+    s.stack[s.stackPointer] = u256_from_be(v.bytes);  // BE value -> LE slot
     ++s.pc;
     return true;
 }
@@ -112,7 +111,7 @@ bool op_tload(EvmState& s) {
     const evmc_bytes32 key = slot_bytes(s, s.stackPointer);
     const evmc_bytes32 v =
         s.host->get_transient_storage(s.context, &s.evmcMsg->recipient, &key);
-    std::memcpy(&s.stack[s.stackPointer], v.bytes, 32);
+    s.stack[s.stackPointer] = u256_from_be(v.bytes);  // BE value -> LE slot
     ++s.pc;
     return true;
 }

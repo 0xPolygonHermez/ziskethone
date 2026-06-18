@@ -76,14 +76,13 @@ bool call_impl(EvmState& s, evmc_call_kind kind, bool has_value, bool static_for
                       : static_cast<int64_t>(g.limbs[0]);
     }
 
-    evmc_address dst;  // address = low 20 big-endian bytes of the word (slot is BE)
-    std::memcpy(dst.bytes, reinterpret_cast<const uint8_t*>(&s.stack[iDst]) + 12, 20);
+    const evmc_address dst = addr_from_slot(s.stack[iDst]);  // low 20 bytes of the value
 
     bool nonzero_value = false;
     evmc_uint256be value_be{};
     if (has_value) {
         nonzero_value = !u256_is_zero(s.stack[iVal]);
-        std::memcpy(value_be.bytes, &s.stack[iVal], 32);  // slot is big-endian
+        u256_to_be(s.stack[iVal], value_be.bytes);  // LE slot -> BE wire value
     }
 
     const uint64_t in_off   = mem_arg(s.stack[iInOff]);
@@ -242,14 +241,14 @@ bool create_impl(EvmState& s, evmc_call_kind kind) {
 
     const bool nonzero_value = !u256_is_zero(s.stack[iVal]);
     evmc_uint256be value_be;
-    std::memcpy(value_be.bytes, &s.stack[iVal], 32);  // slot is big-endian
+    u256_to_be(s.stack[iVal], value_be.bytes);  // LE slot -> BE wire value
 
     const uint64_t off  = mem_arg(s.stack[iOff]);
     const uint64_t size = mem_arg(s.stack[iSize]);
 
     evmc_bytes32 salt{};
     if (is2)
-        std::memcpy(salt.bytes, &s.stack[iSalt], 32);  // slot is big-endian
+        u256_to_be(s.stack[iSalt], salt.bytes);  // LE slot -> BE wire salt
 
     // Supersede any prior return data (releasing it if it was heap-owned).
     if (s.returnDataOwner.release) s.returnDataOwner.release(&s.returnDataOwner);
@@ -303,10 +302,7 @@ bool create_impl(EvmState& s, evmc_call_kind kind) {
     s.returnDataOwner = r;  // keep revert output (empty on success) as return data
 
     if (r.status_code == EVMC_SUCCESS) {
-        // the 20-byte address, right-aligned in the 256-bit word -> BE form
-        U256 a{};
-        std::memcpy(reinterpret_cast<uint8_t*>(&a) + 12, r.create_address.bytes, 20);
-        s.stack[iResult] = a;
+        s.stack[iResult] = slot_from_address(r.create_address);  // 20-byte address -> LE slot
     } else {
         s.stack[iResult] = U256{};  // zero is BE-agnostic
     }
@@ -396,8 +392,7 @@ bool op_selfdestruct(EvmState& s) {
     if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
 
-    evmc_address ben;  // low 20 big-endian bytes of the word (slot is BE)
-    std::memcpy(ben.bytes, reinterpret_cast<const uint8_t*>(&s.stack[s.stackPointer]) + 12, 20);
+    const evmc_address ben = addr_from_slot(s.stack[s.stackPointer]);  // low 20 bytes of the value
 
     // Cold beneficiary access (Berlin+): the full 2600 (no warm base for SELFDESTRUCT).
     if (s.rev >= EVMC_BERLIN &&

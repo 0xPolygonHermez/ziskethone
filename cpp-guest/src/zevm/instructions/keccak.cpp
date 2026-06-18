@@ -2,7 +2,8 @@
 //
 // Hashes a memory window [offset, offset+size) and pushes the 32-byte digest.
 // Gas: 30 base + 6 per 32-byte word + memory expansion. The digest is big-endian
-// bytes, i.e. the BE stack form. (A candidate for the ZisK Keccak precompile.)
+// bytes, byteswapped into the little-endian slot. (A candidate for the ZisK
+// Keccak precompile.)
 
 #include "detail.hpp"
 
@@ -39,7 +40,7 @@ bool op_keccak256(EvmState& s) {
 
     const uint8_t* data = size != 0 ? EVMMem::data(static_cast<size_t>(off)) : nullptr;
     const evmc_bytes32 digest = zeg::keccak256_bytes32(data, static_cast<size_t>(size));
-    std::memcpy(&s.stack[size_i], digest.bytes, 32);  // digest is big-endian -> BE form
+    s.stack[size_i] = u256_from_be(digest.bytes);  // BE digest -> LE slot
 
     ++s.stackPointer;  // popped offset; result sits in the old size slot
     ++s.pc;

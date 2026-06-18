@@ -1,12 +1,11 @@
 // memory.cpp — memory opcodes (MLOAD 0x51, MSTORE 0x52, MSTORE8 0x53,
 // MSIZE 0x59, MCOPY 0x5e). Backed by the static EVMMem manager.
 //
-// Memory is big-endian, which is exactly the BE stack representation (the 32
-// wire bytes laid out as four little-endian limbs == the slot's raw bytes). So
-// MLOAD reads straight into the slot and MSTORE writes a slot's bytes out with
-// no conversion. Byte offsets, by contrast, are integers, so they are loaded as
-// little-endian (ld_le) before use; an offset with any high limb set addresses
-// far beyond what gas could cover -> out-of-gas.
+// Memory is big-endian; the stack stores little-endian integers, so MLOAD
+// byteswaps the 32 wire bytes into the slot (u256_from_be) and MSTORE byteswaps
+// the slot back out (u256_to_be). Byte offsets are integers held in the low lane:
+// an offset with any high limb set addresses far beyond what gas could cover ->
+// out-of-gas.
 
 #include "detail.hpp"
 
@@ -19,44 +18,45 @@ namespace zevm {
 
 namespace {
 
-// 0x51 MLOAD — push the 32 bytes at memory[offset..offset+32) (big-endian, which
-// is the BE slot form directly).
+// 0x51 MLOAD — push the 32 bytes at memory[offset..offset+32); the wire bytes are
+// big-endian, byteswapped into the little-endian slot.
 bool op_mload(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    const U256& off = s.stack[s.stackPointer];  // offset (big-endian slot)
-    if ((off.limbs[0] | off.limbs[1] | off.limbs[2]) != 0) {
+    const U256& off = s.stack[s.stackPointer];  // offset (little-endian slot)
+    if ((off.limbs[1] | off.limbs[2] | off.limbs[3]) != 0) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
     }
-    const size_t addr = static_cast<size_t>(bswap64(off.limbs[3]));
-    U256& slot = s.stack[s.stackPointer];  // overwritten with the loaded word
-    if (EVMMem::readBytes(addr, reinterpret_cast<uint8_t*>(&slot), 32, &s.gas) != MemError::Ok) {
+    const size_t addr = static_cast<size_t>(off.limbs[0]);
+    uint8_t be[32];
+    if (EVMMem::readBytes(addr, be, 32, &s.gas) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
     }
-    // raw memory bytes are the BE form — slot is already correct, no swap
+    s.stack[s.stackPointer] = u256_from_be(be);  // BE wire bytes -> LE slot
     ++s.pc;
     return true;
 }
 
-// 0x52 MSTORE — write value (big-endian) to memory[offset..offset+32).
+// 0x52 MSTORE — write value to memory[offset..offset+32) as 32 big-endian bytes.
 bool op_mstore(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    const U256& off = s.stack[s.stackPointer];  // offset (big-endian slot)
-    if ((off.limbs[0] | off.limbs[1] | off.limbs[2]) != 0) {
+    const U256& off = s.stack[s.stackPointer];  // offset (little-endian slot)
+    if ((off.limbs[1] | off.limbs[2] | off.limbs[3]) != 0) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
     }
-    const size_t addr = static_cast<size_t>(bswap64(off.limbs[3]));
+    const size_t addr = static_cast<size_t>(off.limbs[0]);
 
-    const U256& val = s.stack[s.stackPointer + 1];  // already big-endian bytes
-    if (EVMMem::writeBytes(addr, reinterpret_cast<const uint8_t*>(&val), 32, &s.gas) != MemError::Ok) {
+    uint8_t be[32];
+    u256_to_be(s.stack[s.stackPointer + 1], be);  // LE slot -> BE wire bytes
+    if (EVMMem::writeBytes(addr, be, 32, &s.gas) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
     }
@@ -71,17 +71,17 @@ bool op_mstore8(EvmState& s) {
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    const U256& off = s.stack[s.stackPointer];  // offset (big-endian slot)
-    if ((off.limbs[0] | off.limbs[1] | off.limbs[2]) != 0) {
+    const U256& off = s.stack[s.stackPointer];  // offset (little-endian slot)
+    if ((off.limbs[1] | off.limbs[2] | off.limbs[3]) != 0) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
     }
-    const size_t addr = static_cast<size_t>(bswap64(off.limbs[3]));
+    const size_t addr = static_cast<size_t>(off.limbs[0]);
 
-    // value mod 256 — the least-significant byte, which in BE form is the last
-    // byte (high half of the top limb).
+    // value mod 256 — the least-significant byte, which in LE form is the low
+    // byte of the low lane.
     const U256& val = s.stack[s.stackPointer + 1];
-    const uint8_t byte = static_cast<uint8_t>(val.limbs[3] >> 56);
+    const uint8_t byte = static_cast<uint8_t>(val.limbs[0] & 0xFF);
     if (EVMMem::writeByte(addr, byte, &s.gas) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS;
         return false;

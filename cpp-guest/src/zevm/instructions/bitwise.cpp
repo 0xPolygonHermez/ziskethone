@@ -1,20 +1,17 @@
 // bitwise.cpp — comparison & bitwise-logic opcodes (0x10..0x1e: LT, GT, SLT,
 // SGT, EQ, ISZERO, AND, OR, XOR, NOT, BYTE, SHL, SHR, SAR, CLZ).
 //
-// Endianness (the stack is big-endian; see EvmState::stack):
-//   * CLZ — positional, so the operand is loaded little-endian (ld_le) and the
-//     result written back BE (st_le).
-//   * AND/OR/XOR/NOT — bit-parallel, so endianness-agnostic: operate on the BE
-//     slots in place, no conversion.
+// Endianness (the stack is little-endian; see EvmState::stack):
+//   * CLZ — positional; operates on the LE limbs directly (ld_le/st_le identity).
+//   * AND/OR/XOR/NOT — bit-parallel, so endianness-agnostic: operate on the slots
+//     in place, no conversion.
 //   * ISZERO/EQ — zero and equality are the same in either representation: test
-//     the BE slots directly; the 0/1 result is stored BE via st_le.
-//   * LT/GT/SLT/SGT — ordering is decided on the BE slots directly (be_lt /
-//     be_slt): the most-significant differing limb decides, byteswapping only
-//     that one limb instead of the whole 256-bit operand.
-//   * SHL/SHR/SAR, BYTE — the shift amount / byte index is read straight off the
-//     BE slot (low_scalar_be); a shift by a whole number of bytes is a byte move
-//     (memmove + memset) on the BE bytes, and BYTE just copies one byte — all
-//     byteswap-free. Only an off-byte shift amount falls back to the LE path.
+//     the slots directly; the 0/1 result is stored via st_le.
+//   * LT/GT/SLT/SGT — ordering uses the LE-native u256_lt / u256_sign helpers.
+//   * SHL/SHR/SAR, BYTE — the shift amount / byte index is the low byte of the LE
+//     slot (low_scalar); a shift by a whole number of bytes is a byte move
+//     (memmove + memset) on the LE bytes, and BYTE just copies one byte. Only an
+//     off-byte shift amount falls back to the limb path.
 // Binary ops take a = top, b = second and push the result into b's slot.
 
 #include "detail.hpp"
@@ -25,31 +22,15 @@ namespace zevm {
 
 namespace {
 
-// The boolean results 0/1, big-endian (st_le of the integer). byteswap256 of a
-// constant folds, so these are compile-time constants.
-inline U256 bool_be(bool v) { return v ? U256{{0, 0, 0, 0x0100000000000000ULL}} : U256{}; }
+// The boolean results 0/1 as a little-endian word. Compile-time constants.
+inline U256 bool_word(bool v) { return v ? U256{{1, 0, 0, 0}} : U256{}; }
 
-// Unsigned a < b on big-endian slots. limbs[0] is the most-significant 8-byte
-// group; the first limb that differs decides the order, and a single bswap64 of
-// that limb recovers its magnitude (the limb is stored byte-reversed vs. its
-// big-endian significance). At most one byteswap per operand, vs. a full
-// byteswap256 to compare in little-endian.
-inline bool be_lt(const U256& a, const U256& b) {
-    for (int i = 0; i < 4; ++i)
-        if (a.limbs[i] != b.limbs[i])
-            return bswap64(a.limbs[i]) < bswap64(b.limbs[i]);
-    return false;  // equal -> not less-than
-}
-
-// Sign bit of a big-endian slot: the value's top bit is bit 7 of limbs[0].
-inline bool be_sign(const U256& a) { return (a.limbs[0] >> 7) & 1ULL; }
-
-// Signed a < b on big-endian slots (two's complement): differing signs decide
-// it (negative < non-negative); same sign falls back to the unsigned order.
-inline bool be_slt(const U256& a, const U256& b) {
-    const bool sa = be_sign(a), sb = be_sign(b);
+// Signed a < b (two's complement): differing signs decide it (negative < non-
+// negative); same sign falls back to the unsigned order (u256_lt).
+inline bool slt(const U256& a, const U256& b) {
+    const bool sa = u256_sign(a), sb = u256_sign(b);
     if (sa != sb) return sa;          // a negative, b non-negative => a < b
-    return be_lt(a, b);
+    return u256_lt(a, b);
 }
 
 // Logical left shift by n (0..255); bits shifted out the top are dropped.
@@ -90,35 +71,35 @@ inline U256 sar(const U256& a, unsigned n) {
     return r;
 }
 
-// A small scalar (shift amount / byte index) read directly off a big-endian
-// slot: < 256 iff every byte but the last is zero, in which case the value is
-// that last byte (raw byte[31] == limbs[3] >> 56). Returns 256 otherwise, which
-// the shift handlers treat as out-of-range and BYTE as >= 32.
-inline unsigned low_scalar_be(const U256& be) {
-    if ((be.limbs[0] | be.limbs[1] | be.limbs[2] |
-         (be.limbs[3] & 0x00FFFFFFFFFFFFFFULL)) != 0)
+// A small scalar (shift amount / byte index) read off a little-endian slot:
+// < 256 iff every byte but the lowest is zero, in which case the value is that
+// low byte (limbs[0] & 0xFF). Returns 256 otherwise, which the shift handlers
+// treat as out-of-range and BYTE as >= 32.
+inline unsigned low_scalar(const U256& v) {
+    if ((v.limbs[1] | v.limbs[2] | v.limbs[3] |
+         (v.limbs[0] & ~0xFFULL)) != 0)
         return 256;
-    return static_cast<unsigned>(be.limbs[3] >> 56);
+    return static_cast<unsigned>(v.limbs[0] & 0xFF);
 }
 
-// Byte-granular shifts on a big-endian slot in place (k bytes, 1..31). The BE
-// byte array runs MSB (byte 0) .. LSB (byte 31), so SHL moves bytes toward byte
-// 0 and SHR/SAR toward byte 31; the vacated end is zero-filled (SAR sign-filled).
+// Byte-granular shifts on a little-endian slot in place (k bytes, 1..31). The LE
+// byte array runs LSB (byte 0) .. MSB (byte 31), so SHL moves bytes toward byte
+// 31 and SHR/SAR toward byte 0; the vacated end is zero-filled (SAR sign-filled).
 inline void byte_shl(U256& v, unsigned k) {
-    uint8_t* b = reinterpret_cast<uint8_t*>(&v);
-    std::memmove(b, b + k, 32 - k);
-    std::memset(b + (32 - k), 0, k);
-}
-inline void byte_shr(U256& v, unsigned k) {
     uint8_t* b = reinterpret_cast<uint8_t*>(&v);
     std::memmove(b + k, b, 32 - k);
     std::memset(b, 0, k);
 }
+inline void byte_shr(U256& v, unsigned k) {
+    uint8_t* b = reinterpret_cast<uint8_t*>(&v);
+    std::memmove(b, b + k, 32 - k);
+    std::memset(b + (32 - k), 0, k);
+}
 inline void byte_sar(U256& v, unsigned k) {
     uint8_t* b = reinterpret_cast<uint8_t*>(&v);
-    const uint8_t fill = (b[0] & 0x80) ? 0xFF : 0x00;  // sign byte (before the move)
-    std::memmove(b + k, b, 32 - k);
-    std::memset(b, fill, k);
+    const uint8_t fill = (b[31] & 0x80) ? 0xFF : 0x00;  // sign byte (MSB = byte 31)
+    std::memmove(b, b + k, 32 - k);
+    std::memset(b + (32 - k), fill, k);
 }
 
 // 0x10 LT — unsigned a < b.
@@ -127,7 +108,7 @@ bool op_lt(EvmState& s) {
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     s.stack[s.stackPointer + 1] =
-        bool_be(be_lt(s.stack[s.stackPointer], s.stack[s.stackPointer + 1]));
+        bool_word(u256_lt(s.stack[s.stackPointer], s.stack[s.stackPointer + 1]));
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -139,7 +120,7 @@ bool op_gt(EvmState& s) {
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     s.stack[s.stackPointer + 1] =
-        bool_be(be_lt(s.stack[s.stackPointer + 1], s.stack[s.stackPointer]));
+        bool_word(u256_lt(s.stack[s.stackPointer + 1], s.stack[s.stackPointer]));
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -151,7 +132,7 @@ bool op_slt(EvmState& s) {
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     s.stack[s.stackPointer + 1] =
-        bool_be(be_slt(s.stack[s.stackPointer], s.stack[s.stackPointer + 1]));
+        bool_word(slt(s.stack[s.stackPointer], s.stack[s.stackPointer + 1]));
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -163,7 +144,7 @@ bool op_sgt(EvmState& s) {
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     s.stack[s.stackPointer + 1] =
-        bool_be(be_slt(s.stack[s.stackPointer + 1], s.stack[s.stackPointer]));
+        bool_word(slt(s.stack[s.stackPointer + 1], s.stack[s.stackPointer]));
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -175,23 +156,23 @@ bool op_eq(EvmState& s) {
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const bool e = u256_eq(s.stack[s.stackPointer], s.stack[s.stackPointer + 1]);
-    s.stack[s.stackPointer + 1] = bool_be(e);
+    s.stack[s.stackPointer + 1] = bool_word(e);
     ++s.stackPointer;
     ++s.pc;
     return true;
 }
 
 // 0x15 ISZERO — a == 0 (unary). Zero is all-zero in either representation; the
-// operand is a big-endian slot, so test from its least-significant lane
-// (limbs[3]) first and short-circuit — a small nonzero operand (the common case)
+// operand is a little-endian slot, so test from its least-significant lane
+// (limbs[0]) first and short-circuit — a small nonzero operand (the common case)
 // exits on the first lane.
 bool op_iszero(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256& a = s.stack[s.stackPointer];
-    const bool z = a.limbs[3] == 0 && a.limbs[2] == 0 && a.limbs[1] == 0 && a.limbs[0] == 0;
-    s.stack[s.stackPointer] = bool_be(z);
+    const bool z = a.limbs[0] == 0 && a.limbs[1] == 0 && a.limbs[2] == 0 && a.limbs[3] == 0;
+    s.stack[s.stackPointer] = bool_word(z);
     ++s.pc;
     return true;
 }
@@ -260,7 +241,7 @@ bool op_not(EvmState& s) {
 }
 
 // 0x1e CLZ — count leading zero bits of the 256-bit word (EIP-7939, Osaka).
-// clz(0) == 256. Positional, so the operand is loaded LE; result LE -> BE.
+// clz(0) == 256. Positional; operates on the LE limbs directly (ld_le identity).
 bool op_clz(EvmState& s) {
     if (s.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_LOW;
@@ -278,19 +259,19 @@ bool op_clz(EvmState& s) {
 }
 
 // 0x1a BYTE — the i-th byte of x, counting from the most significant (i = 0).
-// i >= 32 yields 0. Stack: i = top, x = second. The index reads straight off the
-// BE slot, and byte i of x is just raw byte[i] of x's BE slot.
+// i >= 32 yields 0. Stack: i = top, x = second. In the LE slot the most-
+// significant byte (i = 0) is raw byte[31], so byte i of x is raw byte[31 - i].
 bool op_byte(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const unsigned idx = low_scalar_be(s.stack[s.stackPointer]);  // 0 = most significant
+    const unsigned idx = low_scalar(s.stack[s.stackPointer]);  // 0 = most significant
     U256 r{};
     if (idx < 32) {
-        const uint8_t byte = reinterpret_cast<const uint8_t*>(&s.stack[s.stackPointer + 1])[idx];
-        r.limbs[3] = static_cast<uint64_t>(byte) << 56;  // result value at BE byte[31]
+        const uint8_t byte = reinterpret_cast<const uint8_t*>(&s.stack[s.stackPointer + 1])[31 - idx];
+        r.limbs[0] = static_cast<uint64_t>(byte);  // result value in the low lane
     }
-    s.stack[s.stackPointer + 1] = r;  // already big-endian
+    s.stack[s.stackPointer + 1] = r;
     ++s.stackPointer;
     ++s.pc;
     return true;
@@ -301,7 +282,7 @@ bool op_shl(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const unsigned n = low_scalar_be(s.stack[s.stackPointer]);
+    const unsigned n = low_scalar(s.stack[s.stackPointer]);
     U256& v = s.stack[s.stackPointer + 1];
     if (n >= 256)        v = U256{};
     else if (n == 0)     { /* unchanged */ }
@@ -317,7 +298,7 @@ bool op_shr(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const unsigned n = low_scalar_be(s.stack[s.stackPointer]);
+    const unsigned n = low_scalar(s.stack[s.stackPointer]);
     U256& v = s.stack[s.stackPointer + 1];
     if (n >= 256)        v = U256{};
     else if (n == 0)     { /* unchanged */ }
@@ -333,11 +314,11 @@ bool op_sar(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const unsigned n = low_scalar_be(s.stack[s.stackPointer]);
+    const unsigned n = low_scalar(s.stack[s.stackPointer]);
     U256& v = s.stack[s.stackPointer + 1];
     if (n >= 256) {
-        // out-of-range: every bit becomes the sign bit (raw byte[0] high bit)
-        const uint8_t fill = (reinterpret_cast<const uint8_t*>(&v)[0] & 0x80) ? 0xFF : 0x00;
+        // out-of-range: every bit becomes the sign bit (raw byte[31] high bit)
+        const uint8_t fill = (reinterpret_cast<const uint8_t*>(&v)[31] & 0x80) ? 0xFF : 0x00;
         std::memset(&v, fill, 32);
     } else if (n == 0)   { /* unchanged */ }
     else if (n % 8 == 0) byte_sar(v, n / 8);

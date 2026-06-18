@@ -5,7 +5,7 @@
 // the top with the (n+1)-th item (depth unchanged). Each costs GAS_VERYLOW. The
 // stack grows downward: the top is stack[stackPointer], the i-th-from-top is
 // stack[stackPointer + i], and depth == kStackLimit - stackPointer. The slots are
-// big-endian wire words moved verbatim — DUP/SWAP are endianness-agnostic.
+// 256-bit words moved verbatim — DUP/SWAP are endianness-agnostic.
 
 #include "detail.hpp"
 

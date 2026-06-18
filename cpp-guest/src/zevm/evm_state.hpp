@@ -54,13 +54,14 @@ struct EvmState {
     bool            ownsAnalysis;
 
     // ----- operand stack -----
-    // 256-bit words, each held in big-endian wire form (the 32 memory/storage/
-    // PUSH bytes, stored as four little-endian words == byteswap256 of the
-    // value). Arithmetic/positional handlers convert to little-endian limbs
-    // locally via detail.hpp's ld_le/st_le; everything else touches these BE
-    // slots directly. stackPointer follows the spec's convention: it counts DOWN
-    // from kStackLimit (empty) toward 0 (full). A push pre-decrements, a pop
-    // post-increments. Number of live items == kStackLimit - stackPointer.
+    // 256-bit words, each held as a little-endian integer (limbs[0] = least
+    // significant) — the limb layout zeg::bi and the u256_* helpers consume, so
+    // arithmetic and positional handlers touch the slots directly (ld_le/st_le
+    // are identity). The wire-facing ops (memory/storage/PUSH/addresses/hashes)
+    // byteswap into/out of this form via u256_from_be / u256_to_be. stackPointer
+    // follows the spec's convention: it counts DOWN from kStackLimit (empty)
+    // toward 0 (full). A push pre-decrements, a pop post-increments. Number of
+    // live items == kStackLimit - stackPointer.
     U256           stack[kStackLimit];
     uint32_t       stackPointer;       // kStackLimit == empty
 

@@ -4,7 +4,7 @@
 // the message recipient via host->emit_log. Gas: a base of 375*(1+n) (the
 // per-opcode cost, folding in the 375-per-topic charge) + 8 per data byte +
 // memory expansion. Disallowed in static mode. Topics are 256-bit words passed
-// as evmc_bytes32 (big-endian) — i.e. the BE stack form, so just a memcpy.
+// as evmc_bytes32 (big-endian), byteswapped out of the little-endian slots.
 
 #include "detail.hpp"
 
@@ -38,10 +38,10 @@ bool log_impl(EvmState& s, unsigned n) {
     if (s.gas < data_cost) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= data_cost;
 
-    // topics[i] is the word just below (offset, size): sp+2 .. sp+1+n, big-endian.
+    // topics[i] is the word just below (offset, size): sp+2 .. sp+1+n.
     evmc_bytes32 topics[4];
     for (unsigned i = 0; i < n; ++i)
-        std::memcpy(topics[i].bytes, &s.stack[sp + 2 + i], 32);
+        u256_to_be(s.stack[sp + 2 + i], topics[i].bytes);  // LE slot -> BE wire topic
 
     const uint8_t* data = size != 0 ? EVMMem::data(static_cast<size_t>(off)) : nullptr;
     s.host->emit_log(s.context, &s.evmcMsg->recipient, data, static_cast<size_t>(size),

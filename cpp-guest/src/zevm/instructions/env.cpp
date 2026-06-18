@@ -7,9 +7,9 @@
 // Values come from the frame's message (recipient/sender/value/input/code), the
 // host's get_tx_context (origin, block fields), or per-account host calls
 // (balance/code size/hash, with EIP-2929 cold/warm access gas). The stack stores
-// big-endian wire words: addresses and 256-bit wire values are already BE, so
-// they go in with a memcpy; plain integers (sizes, block number/timestamp/gas
-// limit) are byteswapped to BE on the way in via st_le.
+// little-endian integers: addresses and 256-bit wire values arrive big-endian and
+// are byteswapped in (u256_from_be / slot_from_address); plain integers (sizes,
+// block number/timestamp/gas limit) go in directly via st_le.
 
 #include "detail.hpp"
 
@@ -31,31 +31,27 @@ constexpr int64_t GAS_BLOCKHASH  = 20;
 inline bool push_u64(EvmState& s, uint64_t v) {
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
-    st_le(s, s.stackPointer, U256{{v, 0, 0, 0}});  // integer -> big-endian slot
+    st_le(s, s.stackPointer, U256{{v, 0, 0, 0}});  // integer -> little-endian slot
     return true;
 }
 
 inline bool push_be32(EvmState& s, const uint8_t* be) {  // 32 big-endian bytes
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
-    std::memcpy(&s.stack[s.stackPointer], be, 32);  // already BE
+    s.stack[s.stackPointer] = u256_from_be(be);  // BE wire bytes -> LE slot
     return true;
 }
 
 inline bool push_address(EvmState& s, const evmc_address& a) {  // 20 bytes, right-aligned
     if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --s.stackPointer;
-    s.stack[s.stackPointer] = U256{};
-    std::memcpy(reinterpret_cast<uint8_t*>(&s.stack[s.stackPointer]) + 12, a.bytes, 20);  // BE
+    s.stack[s.stackPointer] = slot_from_address(a);
     return true;
 }
 
-// The address operand in stack slot `i`: its low 20 big-endian bytes (the slot
-// is already big-endian, so the low 20 bytes are at offset 12).
+// The address operand in stack slot `i`: the low 20 big-endian bytes of its value.
 inline evmc_address addr_arg(EvmState& s, uint32_t i) {
-    evmc_address a;
-    std::memcpy(a.bytes, reinterpret_cast<const uint8_t*>(&s.stack[i]) + 12, 20);
-    return a;
+    return addr_from_slot(s.stack[i]);
 }
 
 // EIP-2929 cold-account surcharge (Berlin+). Returns false on out-of-gas.
@@ -229,7 +225,7 @@ bool op_calldataload(EvmState& s) {
         const size_t n     = std::min<size_t>(32, static_cast<size_t>(input_size) - begin);
         std::memcpy(buf, s.evmcMsg->input_data + begin, n);
     }
-    std::memcpy(&s.stack[i], buf, 32);  // calldata bytes in order -> BE form
+    s.stack[i] = u256_from_be(buf);  // calldata BE bytes -> LE slot
     ++s.pc; return true;
 }
 
@@ -252,7 +248,7 @@ bool op_balance(EvmState& s) {
     const evmc_address addr = addr_arg(s, i);
     if (!charge_account_access(s, addr)) return false;
     const evmc_uint256be bal = s.host->get_balance(s.context, &addr);
-    std::memcpy(&s.stack[i], bal.bytes, 32);  // balance is big-endian -> BE form
+    s.stack[i] = u256_from_be(bal.bytes);  // BE balance -> LE slot
     ++s.pc; return true;
 }
 
@@ -277,7 +273,7 @@ bool op_extcodehash(EvmState& s) {
     const evmc_address addr = addr_arg(s, i);
     if (!charge_account_access(s, addr)) return false;
     const evmc_bytes32 h = s.host->get_code_hash(s.context, &addr);
-    std::memcpy(&s.stack[i], h.bytes, 32);  // code hash is big-endian -> BE form
+    s.stack[i] = u256_from_be(h.bytes);  // BE code hash -> LE slot
     ++s.pc; return true;
 }
 
@@ -326,7 +322,7 @@ bool op_blockhash(EvmState& s) {
         static_cast<int64_t>(v.limbs[0]) >= lower) {
         h = s.host->get_block_hash(s.context, static_cast<int64_t>(v.limbs[0]));
     }
-    std::memcpy(&s.stack[i], h.bytes, 32);  // block hash is big-endian -> BE form
+    s.stack[i] = u256_from_be(h.bytes);  // BE block hash -> LE slot
     ++s.pc; return true;
 }
 
@@ -341,7 +337,7 @@ bool op_blobhash(EvmState& s) {
     evmc_bytes32 h{};
     if ((v.limbs[1] | v.limbs[2] | v.limbs[3]) == 0 && v.limbs[0] < tx.blob_hashes_count)
         h = tx.blob_hashes[static_cast<size_t>(v.limbs[0])];
-    std::memcpy(&s.stack[i], h.bytes, 32);  // versioned hash is big-endian -> BE form
+    s.stack[i] = u256_from_be(h.bytes);  // BE versioned hash -> LE slot
     ++s.pc; return true;
 }
 

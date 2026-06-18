@@ -4,11 +4,11 @@
 // The 256-bit heavy lifting routes through the ZisK-accelerated zeg::bi backend:
 // add256 (ADD/SUB), arith256 (MUL and EXP's square-and-multiply), arith256_mod
 // (ADDMOD/MULMOD), and fcall_bigint_div (DIV/MOD, and the magnitude step of the
-// signed variants). All of it works on little-endian limbs; the stack stores
-// big-endian, so each operand is loaded as a local LE value (ld_le) and the
-// result is written back big-endian (st_le). Sign handling, the divide-by-zero
-// guards, and SIGNEXTEND are plain limb work. Binary ops take a = top, b =
-// second, push a OP b into b's slot.
+// signed variants). All of it works on little-endian limbs — and the stack now
+// stores little-endian integers, so ld_le/st_le are identity and the operands
+// feed straight in with no byteswap. Sign handling, the divide-by-zero guards,
+// and SIGNEXTEND are plain limb work. Binary ops take a = top, b = second, push
+// a OP b into b's slot.
 
 #include "detail.hpp"
 
@@ -47,53 +47,47 @@ inline void udivmod(const U256& a, const U256& b, U256& q, U256& r) {
 
 // 0x01 ADD — pop a and b, push (a + b) mod 2^256.
 //
-// Fast path: when either operand is < 2^64 (its three high BE limbs are zero —
-// the overwhelmingly common case: counters, offsets, pointer bumps), the add
-// runs in the low 64-bit lane (one bswap64 per operand lane plus one for the
-// result) and the large operand's high lanes pass through verbatim in BE form —
-// no byteswap256 round-trip and no add256 precompile. A carry past bit 64 (an
-// all-0xFF lane) cascades one lane at a time; carry off the top lane drops
-// (mod 2^256). Only the both-large case takes the full LE path.
+// Fast path: when either operand is < 2^64 (its three high limbs are zero — the
+// overwhelmingly common case: counters, offsets, pointer bumps), the add runs in
+// the low 64-bit lane and the large operand's high lanes pass through verbatim —
+// no add256 precompile. A carry past bit 64 cascades one lane at a time; carry
+// off the top lane drops (mod 2^256). Only the both-large case takes add256.
 bool op_add(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256& sa = s.stack[s.stackPointer];      // a, BE slot (distinct from sb)
-    U256&       sb = s.stack[s.stackPointer + 1];  // b / result, BE slot
+    const U256& sa = s.stack[s.stackPointer];      // a, LE slot (distinct from sb)
+    U256&       sb = s.stack[s.stackPointer + 1];  // b / result, LE slot
 
-    if ((sa.limbs[0] | sa.limbs[1] | sa.limbs[2]) == 0) {  // a < 2^64 (covers both-small)
-        if (sa.limbs[3] != 0) {                            // a == 0 -> result is b, in place
-            const uint64_t addend = bswap64(sa.limbs[3]);
-            const uint64_t t = bswap64(sb.limbs[3]);
-            const uint64_t r = t + addend;
-            sb.limbs[3] = bswap64(r);
+    if ((sa.limbs[1] | sa.limbs[2] | sa.limbs[3]) == 0) {  // a < 2^64 (covers both-small)
+        if (sa.limbs[0] != 0) {                            // a == 0 -> result is b, in place
+            const uint64_t t = sb.limbs[0];
+            const uint64_t r = t + sa.limbs[0];
+            sb.limbs[0] = r;
             bool carry = r < t;
-            for (int i = 2; carry && i >= 0; --i) {        // b's high lanes already in place
-                const uint64_t v = bswap64(sb.limbs[i]) + 1;
-                carry = (v == 0);
-                sb.limbs[i] = bswap64(v);
+            for (int i = 1; carry && i < 4; ++i) {         // b's high lanes already in place
+                sb.limbs[i] += 1;
+                carry = (sb.limbs[i] == 0);
             }
         }
-    } else if ((sb.limbs[0] | sb.limbs[1] | sb.limbs[2]) == 0) {  // b < 2^64, a large
-        if (sb.limbs[3] == 0) {
+    } else if ((sb.limbs[1] | sb.limbs[2] | sb.limbs[3]) == 0) {  // b < 2^64, a large
+        if (sb.limbs[0] == 0) {
             sb = sa;                                       // x + 0: raw slot copy
         } else {
-            const uint64_t addend = bswap64(sb.limbs[3]);
-            const uint64_t t = bswap64(sa.limbs[3]);
-            const uint64_t r = t + addend;
-            sb.limbs[3] = bswap64(r);
+            const uint64_t t = sa.limbs[0];
+            const uint64_t r = t + sb.limbs[0];
+            sb.limbs[0] = r;
             bool carry = r < t;
-            for (int i = 2; i >= 0; --i) {                 // no break: fill the slot from a
+            for (int i = 1; i < 4; ++i) {                  // no break: fill the slot from a
                 if (carry) {
-                    const uint64_t v = bswap64(sa.limbs[i]) + 1;
-                    carry = (v == 0);
-                    sb.limbs[i] = bswap64(v);
+                    sb.limbs[i] = sa.limbs[i] + 1;
+                    carry = (sb.limbs[i] == 0);
                 } else {
-                    sb.limbs[i] = sa.limbs[i];             // verbatim BE copy
+                    sb.limbs[i] = sa.limbs[i];             // verbatim copy
                 }
             }
         }
-    } else {                                               // both >= 2^64: full LE path
+    } else {                                               // both >= 2^64: full path
         const U256 a = ld_le(s, s.stackPointer);
         U256       b = ld_le(s, s.stackPointer + 1);
         zeg::bi::add256(a.limbs, b.limbs, /*cin=*/0, b.limbs);  // b = a + b (mod 2^256)
@@ -123,9 +117,9 @@ bool op_mul(EvmState& s) {
 // Fast path: when the subtrahend b is < 2^64 (the common `x - small_const`,
 // and any both-small case including the deliberate-underflow ones), the
 // subtract runs in the low 64-bit lane and a's high lanes are copied through
-// verbatim in BE form unless a borrow cascades (an all-zero lane of a turns
-// all-0xFF and the borrow continues — which builds the correct wrapped result
-// for a < b). Only b >= 2^64 (including small-minus-large) takes the LE path.
+// verbatim unless a borrow cascades (an all-zero lane of a turns all-0xFF and
+// the borrow continues — which builds the correct wrapped result for a < b).
+// Only b >= 2^64 (including small-minus-large) takes the full path.
 bool op_sub(EvmState& s) {
     if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= GAS_VERYLOW;
@@ -133,21 +127,20 @@ bool op_sub(EvmState& s) {
     const U256& sa = s.stack[s.stackPointer];      // a, minuend (distinct from sb)
     U256&       sb = s.stack[s.stackPointer + 1];  // b, subtrahend / result
 
-    if ((sb.limbs[0] | sb.limbs[1] | sb.limbs[2]) == 0) {  // b < 2^64
-        if (sb.limbs[3] == 0) {
+    if ((sb.limbs[1] | sb.limbs[2] | sb.limbs[3]) == 0) {  // b < 2^64
+        if (sb.limbs[0] == 0) {
             sb = sa;                                       // a - 0: raw slot copy
         } else {
-            const uint64_t bv = bswap64(sb.limbs[3]);
-            const uint64_t t  = bswap64(sa.limbs[3]);
-            sb.limbs[3] = bswap64(t - bv);
+            const uint64_t bv = sb.limbs[0];
+            const uint64_t t  = sa.limbs[0];
+            sb.limbs[0] = t - bv;
             bool borrow = t < bv;
-            for (int i = 2; i >= 0; --i) {                 // no break: fill the slot from a
+            for (int i = 1; i < 4; ++i) {                  // no break: fill the slot from a
                 if (borrow) {
-                    const uint64_t v = bswap64(sa.limbs[i]);
-                    sb.limbs[i] = bswap64(v - 1);          // v==0 -> all-FF lane, borrow continues
-                    borrow = (v == 0);
+                    sb.limbs[i] = sa.limbs[i] - 1;         // a-lane 0 -> all-FF, borrow continues
+                    borrow = (sa.limbs[i] == 0);
                 } else {
-                    sb.limbs[i] = sa.limbs[i];             // verbatim BE copy
+                    sb.limbs[i] = sa.limbs[i];             // verbatim copy
                 }
             }
         }
@@ -298,22 +291,21 @@ bool op_mulmod(EvmState& s) {
 
 // 0x0a EXP — a ** b mod 2^256. Gas is dynamic: 10 + 50 per byte of exponent.
 //
-// The exponent is read straight off its big-endian slot — only its bit pattern
-// matters, so no ld_le. Its lanes run most-significant first (e.limbs[0] is the
-// top 8 bytes); the highest set bit is found by the first non-zero lane plus a
-// clz on that lane's value (bswap64) — no 256-iteration scan. The square-and-
-// multiply then walks the bits top..0 lane by lane, byteswapping only the lanes
-// it actually visits (the leading all-zero lanes are skipped).
+// The exponent is read straight off its little-endian slot — only its bit
+// pattern matters. Its lanes run least-significant first (e.limbs[0] is the low
+// 8 bytes); the highest set bit is found by the first non-zero lane from the top
+// (limbs[3]) plus a clz on it — no 256-iteration scan. The square-and-multiply
+// then walks the bits top..0 lane by lane, skipping the leading all-zero lanes.
 bool op_exp(EvmState& s) {
     if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256  base = ld_le(s, s.stackPointer);
-    const U256& e    = s.stack[s.stackPointer + 1];  // exponent, big-endian slot
+    const U256& e    = s.stack[s.stackPointer + 1];  // exponent, little-endian slot
 
-    // Highest set bit: first non-zero lane (MS first) + clz on its true value.
+    // Highest set bit: first non-zero lane (MS first) + clz on it.
     int top = -1;
-    for (int k = 0; k < 4; ++k)
+    for (int k = 3; k >= 0; --k)
         if (e.limbs[k] != 0) {
-            top = (3 - k) * 64 + (63 - __builtin_clzll(bswap64(e.limbs[k])));
+            top = k * 64 + (63 - __builtin_clzll(e.limbs[k]));
             break;
         }
     const int64_t byte_len = top < 0 ? 0 : (top / 8 + 1);
@@ -321,12 +313,12 @@ bool op_exp(EvmState& s) {
     if (s.gas < cost) { s.status = EVMC_OUT_OF_GAS; return false; }
     s.gas -= cost;
 
-    // Square-and-multiply, MSB -> LSB, lane by lane (value lane vl == e.limbs
-    // [3 - vl] byteswapped). top < 0 (exponent 0) runs zero iterations -> 1.
+    // Square-and-multiply, MSB -> LSB, lane by lane (lane vl == e.limbs[vl]).
+    // top < 0 (exponent 0) runs zero iterations -> 1.
     U256 result{{1, 0, 0, 0}};
     const int topLane = top >> 6;
     for (int vl = topLane; vl >= 0; --vl) {
-        const uint64_t lane = bswap64(e.limbs[3 - vl]);
+        const uint64_t lane = e.limbs[vl];
         for (int b = (vl == topLane ? (top & 63) : 63); b >= 0; --b) {
             result = mul_low(result, result);
             if ((lane >> b) & 1ULL) result = mul_low(result, base);

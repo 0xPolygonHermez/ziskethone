@@ -41,31 +41,46 @@ inline uint64_t load_u64(const uint8_t* p) {
     return v;
 }
 
-// Stack representation: every slot holds its value in big-endian wire form (the
-// 32 bytes memory / storage / PUSH / the host's evmc_bytes32 use, stored as four
-// little-endian words == byteswap256 of the integer value). That makes the
-// common ops — DUP/SWAP/POP, MLOAD/MSTORE, SLOAD/SSTORE, addresses, hashes —
-// conversion-free, since they're already BE. Only the arithmetic and positional
-// ops need little-endian limbs (what zeg::bi and the integer helpers consume):
-// they load a local LE copy with ld_le, compute, and write the result back as BE
-// with st_le. The bit-parallel ops (AND/OR/XOR/NOT) and zero/equality tests
-// (ISZERO/EQ) are representation-agnostic and work on the BE slots directly.
+// Stack representation: every slot holds its value as a little-endian integer
+// (limbs[0] = least significant, exactly the limb layout zeg::bi and the u256_*
+// integer helpers consume). That makes the arithmetic and positional ops
+// conversion-free — ld_le/st_le below are now identity. The cost moves to the
+// *wire boundary*: memory / storage / PUSH / addresses / hashes are big-endian on
+// the wire, so they byteswap into/out of the slot via u256_from_be / u256_to_be.
+// The bit-parallel ops (AND/OR/XOR/NOT) and zero/equality tests (ISZERO/EQ) are
+// representation-agnostic and work on the slots directly.
 
-// Big-endian stack slot `i` -> its little-endian value (a copy; slot unchanged).
-inline U256 ld_le(const EvmState& s, uint32_t i) { return byteswap256(s.stack[i]); }
+// Stack slot `i` as a little-endian value. The slot already holds LE limbs, so
+// this is just a copy (kept as a named accessor so the arithmetic handlers read
+// clearly and to localize the representation choice).
+inline U256 ld_le(const EvmState& s, uint32_t i) { return s.stack[i]; }
 
-// Store a little-endian value into slot `i` in big-endian form.
-inline void st_le(EvmState& s, uint32_t i, const U256& v) { s.stack[i] = byteswap256(v); }
+// Store a little-endian value into slot `i` (the slot is LE — a plain copy).
+inline void st_le(EvmState& s, uint32_t i, const U256& v) { s.stack[i] = v; }
 
-// A 256-bit big-endian stack slot used as a memory offset/size: its integer
-// value when it fits in 64 bits, or UINT64_MAX when any higher byte is set
-// (which forces an out-of-gas in EVMMem::expand, matching the EVM "offset too
-// large" behaviour). Reads the slot directly — only the low lane (limbs[3], the
-// big-endian least-significant 8 bytes) is byteswapped, and the three high lanes
-// just have to be zero — rather than a full byteswap256 via ld_le.
-inline uint64_t mem_arg(const U256& be) {
-    return (be.limbs[0] | be.limbs[1] | be.limbs[2]) != 0 ? UINT64_MAX
-                                                          : bswap64(be.limbs[3]);
+// A 256-bit little-endian stack slot used as a memory offset/size: its integer
+// value when it fits in 64 bits (the low lane), or UINT64_MAX when any higher
+// lane is set (which forces an out-of-gas in EVMMem::expand, matching the EVM
+// "offset too large" behaviour).
+inline uint64_t mem_arg(const U256& v) {
+    return (v.limbs[1] | v.limbs[2] | v.limbs[3]) != 0 ? UINT64_MAX : v.limbs[0];
+}
+
+// The 20-byte address held in stack slot value `v` (its low 160 bits): the
+// value's big-endian bytes with the high 12 dropped.
+inline evmc_address addr_from_slot(const U256& v) {
+    uint8_t be[32];
+    u256_to_be(v, be);
+    evmc_address a;
+    std::memcpy(a.bytes, be + 12, 20);
+    return a;
+}
+
+// A stack slot value holding a 20-byte address right-aligned in the low 160 bits.
+inline U256 slot_from_address(const evmc_address& a) {
+    uint8_t be[32] = {};
+    std::memcpy(be + 12, a.bytes, 20);
+    return u256_from_be(be);
 }
 
 // Number of 32-byte EVM words spanned by `n` bytes.
