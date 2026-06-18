@@ -15,386 +15,386 @@ namespace zevm {
 namespace stack_ops {
 
 // 0x80 DUP1 — duplicate the 1st-from-top item.
-bool op_dup1(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    s.stack[s.stackPointer]   = s.stack[s.stackPointer + 1];
-    ++s.pc;
+bool op_dup1(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.sp;
+    s.stack[R.sp]   = s.stack[R.sp + 1];
+    ++R.pc;
     return true;
 }
 
 // 0x81 DUP2 — duplicate the 2nd-from-top item.
-bool op_dup2(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    s.stack[s.stackPointer]   = s.stack[s.stackPointer + 2];
-    ++s.pc;
+bool op_dup2(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.sp;
+    s.stack[R.sp]   = s.stack[R.sp + 2];
+    ++R.pc;
     return true;
 }
 
 // 0x82 DUP3 — duplicate the 3rd-from-top item.
-bool op_dup3(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    s.stack[s.stackPointer]   = s.stack[s.stackPointer + 3];
-    ++s.pc;
+bool op_dup3(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.sp;
+    s.stack[R.sp]   = s.stack[R.sp + 3];
+    ++R.pc;
     return true;
 }
 
 // 0x83 DUP4 — duplicate the 4th-from-top item.
-bool op_dup4(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 4) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    s.stack[s.stackPointer]   = s.stack[s.stackPointer + 4];
-    ++s.pc;
+bool op_dup4(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 4) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.sp;
+    s.stack[R.sp]   = s.stack[R.sp + 4];
+    ++R.pc;
     return true;
 }
 
 // 0x84 DUP5 — duplicate the 5th-from-top item.
-bool op_dup5(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 5) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    s.stack[s.stackPointer]   = s.stack[s.stackPointer + 5];
-    ++s.pc;
+bool op_dup5(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 5) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.sp;
+    s.stack[R.sp]   = s.stack[R.sp + 5];
+    ++R.pc;
     return true;
 }
 
 // 0x85 DUP6 — duplicate the 6th-from-top item.
-bool op_dup6(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 6) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    s.stack[s.stackPointer]   = s.stack[s.stackPointer + 6];
-    ++s.pc;
+bool op_dup6(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 6) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.sp;
+    s.stack[R.sp]   = s.stack[R.sp + 6];
+    ++R.pc;
     return true;
 }
 
 // 0x86 DUP7 — duplicate the 7th-from-top item.
-bool op_dup7(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 7) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    s.stack[s.stackPointer]   = s.stack[s.stackPointer + 7];
-    ++s.pc;
+bool op_dup7(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 7) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.sp;
+    s.stack[R.sp]   = s.stack[R.sp + 7];
+    ++R.pc;
     return true;
 }
 
 // 0x87 DUP8 — duplicate the 8th-from-top item.
-bool op_dup8(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 8) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    s.stack[s.stackPointer]   = s.stack[s.stackPointer + 8];
-    ++s.pc;
+bool op_dup8(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 8) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.sp;
+    s.stack[R.sp]   = s.stack[R.sp + 8];
+    ++R.pc;
     return true;
 }
 
 // 0x88 DUP9 — duplicate the 9th-from-top item.
-bool op_dup9(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 9) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    s.stack[s.stackPointer]   = s.stack[s.stackPointer + 9];
-    ++s.pc;
+bool op_dup9(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 9) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.sp;
+    s.stack[R.sp]   = s.stack[R.sp + 9];
+    ++R.pc;
     return true;
 }
 
 // 0x89 DUP10 — duplicate the 10th-from-top item.
-bool op_dup10(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 10) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    s.stack[s.stackPointer]   = s.stack[s.stackPointer + 10];
-    ++s.pc;
+bool op_dup10(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 10) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.sp;
+    s.stack[R.sp]   = s.stack[R.sp + 10];
+    ++R.pc;
     return true;
 }
 
 // 0x8a DUP11 — duplicate the 11th-from-top item.
-bool op_dup11(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 11) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    s.stack[s.stackPointer]   = s.stack[s.stackPointer + 11];
-    ++s.pc;
+bool op_dup11(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 11) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.sp;
+    s.stack[R.sp]   = s.stack[R.sp + 11];
+    ++R.pc;
     return true;
 }
 
 // 0x8b DUP12 — duplicate the 12th-from-top item.
-bool op_dup12(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 12) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    s.stack[s.stackPointer]   = s.stack[s.stackPointer + 12];
-    ++s.pc;
+bool op_dup12(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 12) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.sp;
+    s.stack[R.sp]   = s.stack[R.sp + 12];
+    ++R.pc;
     return true;
 }
 
 // 0x8c DUP13 — duplicate the 13th-from-top item.
-bool op_dup13(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 13) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    s.stack[s.stackPointer]   = s.stack[s.stackPointer + 13];
-    ++s.pc;
+bool op_dup13(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 13) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.sp;
+    s.stack[R.sp]   = s.stack[R.sp + 13];
+    ++R.pc;
     return true;
 }
 
 // 0x8d DUP14 — duplicate the 14th-from-top item.
-bool op_dup14(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 14) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    s.stack[s.stackPointer]   = s.stack[s.stackPointer + 14];
-    ++s.pc;
+bool op_dup14(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 14) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.sp;
+    s.stack[R.sp]   = s.stack[R.sp + 14];
+    ++R.pc;
     return true;
 }
 
 // 0x8e DUP15 — duplicate the 15th-from-top item.
-bool op_dup15(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 15) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    s.stack[s.stackPointer]   = s.stack[s.stackPointer + 15];
-    ++s.pc;
+bool op_dup15(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 15) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.sp;
+    s.stack[R.sp]   = s.stack[R.sp + 15];
+    ++R.pc;
     return true;
 }
 
 // 0x8f DUP16 — duplicate the 16th-from-top item.
-bool op_dup16(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 16) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    s.stack[s.stackPointer]   = s.stack[s.stackPointer + 16];
-    ++s.pc;
+bool op_dup16(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 16) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.sp;
+    s.stack[R.sp]   = s.stack[R.sp + 16];
+    ++R.pc;
     return true;
 }
 
 // 0x90 SWAP1 — swap the top with the 2-th item.
-bool op_swap1(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 t = s.stack[s.stackPointer];
-    s.stack[s.stackPointer]      = s.stack[s.stackPointer + 1];
-    s.stack[s.stackPointer + 1] = t;
-    ++s.pc;
+bool op_swap1(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 t = s.stack[R.sp];
+    s.stack[R.sp]      = s.stack[R.sp + 1];
+    s.stack[R.sp + 1] = t;
+    ++R.pc;
     return true;
 }
 
 // 0x91 SWAP2 — swap the top with the 3-th item.
-bool op_swap2(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 t = s.stack[s.stackPointer];
-    s.stack[s.stackPointer]      = s.stack[s.stackPointer + 2];
-    s.stack[s.stackPointer + 2] = t;
-    ++s.pc;
+bool op_swap2(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 t = s.stack[R.sp];
+    s.stack[R.sp]      = s.stack[R.sp + 2];
+    s.stack[R.sp + 2] = t;
+    ++R.pc;
     return true;
 }
 
 // 0x92 SWAP3 — swap the top with the 4-th item.
-bool op_swap3(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 4) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 t = s.stack[s.stackPointer];
-    s.stack[s.stackPointer]      = s.stack[s.stackPointer + 3];
-    s.stack[s.stackPointer + 3] = t;
-    ++s.pc;
+bool op_swap3(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 4) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 t = s.stack[R.sp];
+    s.stack[R.sp]      = s.stack[R.sp + 3];
+    s.stack[R.sp + 3] = t;
+    ++R.pc;
     return true;
 }
 
 // 0x93 SWAP4 — swap the top with the 5-th item.
-bool op_swap4(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 5) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 t = s.stack[s.stackPointer];
-    s.stack[s.stackPointer]      = s.stack[s.stackPointer + 4];
-    s.stack[s.stackPointer + 4] = t;
-    ++s.pc;
+bool op_swap4(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 5) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 t = s.stack[R.sp];
+    s.stack[R.sp]      = s.stack[R.sp + 4];
+    s.stack[R.sp + 4] = t;
+    ++R.pc;
     return true;
 }
 
 // 0x94 SWAP5 — swap the top with the 6-th item.
-bool op_swap5(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 6) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 t = s.stack[s.stackPointer];
-    s.stack[s.stackPointer]      = s.stack[s.stackPointer + 5];
-    s.stack[s.stackPointer + 5] = t;
-    ++s.pc;
+bool op_swap5(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 6) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 t = s.stack[R.sp];
+    s.stack[R.sp]      = s.stack[R.sp + 5];
+    s.stack[R.sp + 5] = t;
+    ++R.pc;
     return true;
 }
 
 // 0x95 SWAP6 — swap the top with the 7-th item.
-bool op_swap6(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 7) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 t = s.stack[s.stackPointer];
-    s.stack[s.stackPointer]      = s.stack[s.stackPointer + 6];
-    s.stack[s.stackPointer + 6] = t;
-    ++s.pc;
+bool op_swap6(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 7) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 t = s.stack[R.sp];
+    s.stack[R.sp]      = s.stack[R.sp + 6];
+    s.stack[R.sp + 6] = t;
+    ++R.pc;
     return true;
 }
 
 // 0x96 SWAP7 — swap the top with the 8-th item.
-bool op_swap7(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 8) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 t = s.stack[s.stackPointer];
-    s.stack[s.stackPointer]      = s.stack[s.stackPointer + 7];
-    s.stack[s.stackPointer + 7] = t;
-    ++s.pc;
+bool op_swap7(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 8) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 t = s.stack[R.sp];
+    s.stack[R.sp]      = s.stack[R.sp + 7];
+    s.stack[R.sp + 7] = t;
+    ++R.pc;
     return true;
 }
 
 // 0x97 SWAP8 — swap the top with the 9-th item.
-bool op_swap8(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 9) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 t = s.stack[s.stackPointer];
-    s.stack[s.stackPointer]      = s.stack[s.stackPointer + 8];
-    s.stack[s.stackPointer + 8] = t;
-    ++s.pc;
+bool op_swap8(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 9) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 t = s.stack[R.sp];
+    s.stack[R.sp]      = s.stack[R.sp + 8];
+    s.stack[R.sp + 8] = t;
+    ++R.pc;
     return true;
 }
 
 // 0x98 SWAP9 — swap the top with the 10-th item.
-bool op_swap9(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 10) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 t = s.stack[s.stackPointer];
-    s.stack[s.stackPointer]      = s.stack[s.stackPointer + 9];
-    s.stack[s.stackPointer + 9] = t;
-    ++s.pc;
+bool op_swap9(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 10) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 t = s.stack[R.sp];
+    s.stack[R.sp]      = s.stack[R.sp + 9];
+    s.stack[R.sp + 9] = t;
+    ++R.pc;
     return true;
 }
 
 // 0x99 SWAP10 — swap the top with the 11-th item.
-bool op_swap10(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 11) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 t = s.stack[s.stackPointer];
-    s.stack[s.stackPointer]      = s.stack[s.stackPointer + 10];
-    s.stack[s.stackPointer + 10] = t;
-    ++s.pc;
+bool op_swap10(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 11) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 t = s.stack[R.sp];
+    s.stack[R.sp]      = s.stack[R.sp + 10];
+    s.stack[R.sp + 10] = t;
+    ++R.pc;
     return true;
 }
 
 // 0x9a SWAP11 — swap the top with the 12-th item.
-bool op_swap11(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 12) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 t = s.stack[s.stackPointer];
-    s.stack[s.stackPointer]      = s.stack[s.stackPointer + 11];
-    s.stack[s.stackPointer + 11] = t;
-    ++s.pc;
+bool op_swap11(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 12) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 t = s.stack[R.sp];
+    s.stack[R.sp]      = s.stack[R.sp + 11];
+    s.stack[R.sp + 11] = t;
+    ++R.pc;
     return true;
 }
 
 // 0x9b SWAP12 — swap the top with the 13-th item.
-bool op_swap12(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 13) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 t = s.stack[s.stackPointer];
-    s.stack[s.stackPointer]      = s.stack[s.stackPointer + 12];
-    s.stack[s.stackPointer + 12] = t;
-    ++s.pc;
+bool op_swap12(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 13) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 t = s.stack[R.sp];
+    s.stack[R.sp]      = s.stack[R.sp + 12];
+    s.stack[R.sp + 12] = t;
+    ++R.pc;
     return true;
 }
 
 // 0x9c SWAP13 — swap the top with the 14-th item.
-bool op_swap13(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 14) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 t = s.stack[s.stackPointer];
-    s.stack[s.stackPointer]      = s.stack[s.stackPointer + 13];
-    s.stack[s.stackPointer + 13] = t;
-    ++s.pc;
+bool op_swap13(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 14) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 t = s.stack[R.sp];
+    s.stack[R.sp]      = s.stack[R.sp + 13];
+    s.stack[R.sp + 13] = t;
+    ++R.pc;
     return true;
 }
 
 // 0x9d SWAP14 — swap the top with the 15-th item.
-bool op_swap14(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 15) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 t = s.stack[s.stackPointer];
-    s.stack[s.stackPointer]      = s.stack[s.stackPointer + 14];
-    s.stack[s.stackPointer + 14] = t;
-    ++s.pc;
+bool op_swap14(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 15) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 t = s.stack[R.sp];
+    s.stack[R.sp]      = s.stack[R.sp + 14];
+    s.stack[R.sp + 14] = t;
+    ++R.pc;
     return true;
 }
 
 // 0x9e SWAP15 — swap the top with the 16-th item.
-bool op_swap15(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 16) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 t = s.stack[s.stackPointer];
-    s.stack[s.stackPointer]      = s.stack[s.stackPointer + 15];
-    s.stack[s.stackPointer + 15] = t;
-    ++s.pc;
+bool op_swap15(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 16) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 t = s.stack[R.sp];
+    s.stack[R.sp]      = s.stack[R.sp + 15];
+    s.stack[R.sp + 15] = t;
+    ++R.pc;
     return true;
 }
 
 // 0x9f SWAP16 — swap the top with the 17-th item.
-bool op_swap16(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 17) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 t = s.stack[s.stackPointer];
-    s.stack[s.stackPointer]      = s.stack[s.stackPointer + 16];
-    s.stack[s.stackPointer + 16] = t;
-    ++s.pc;
+bool op_swap16(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 17) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 t = s.stack[R.sp];
+    s.stack[R.sp]      = s.stack[R.sp + 16];
+    s.stack[R.sp + 16] = t;
+    ++R.pc;
     return true;
 }
 

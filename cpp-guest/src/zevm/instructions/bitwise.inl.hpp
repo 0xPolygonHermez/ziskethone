@@ -104,62 +104,62 @@ inline void byte_sar(U256& v, unsigned k) {
 }
 
 // 0x10 LT — unsigned a < b.
-bool op_lt(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    s.stack[s.stackPointer + 1] =
-        bool_word(u256_lt(s.stack[s.stackPointer], s.stack[s.stackPointer + 1]));
-    ++s.stackPointer;
-    ++s.pc;
+bool op_lt(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    s.stack[R.sp + 1] =
+        bool_word(u256_lt(s.stack[R.sp], s.stack[R.sp + 1]));
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 
 // 0x11 GT — unsigned a > b.
-bool op_gt(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    s.stack[s.stackPointer + 1] =
-        bool_word(u256_lt(s.stack[s.stackPointer + 1], s.stack[s.stackPointer]));
-    ++s.stackPointer;
-    ++s.pc;
+bool op_gt(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    s.stack[R.sp + 1] =
+        bool_word(u256_lt(s.stack[R.sp + 1], s.stack[R.sp]));
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 
 // 0x12 SLT — signed a < b.
-bool op_slt(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    s.stack[s.stackPointer + 1] =
-        bool_word(slt(s.stack[s.stackPointer], s.stack[s.stackPointer + 1]));
-    ++s.stackPointer;
-    ++s.pc;
+bool op_slt(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    s.stack[R.sp + 1] =
+        bool_word(slt(s.stack[R.sp], s.stack[R.sp + 1]));
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 
 // 0x13 SGT — signed a > b.
-bool op_sgt(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    s.stack[s.stackPointer + 1] =
-        bool_word(slt(s.stack[s.stackPointer + 1], s.stack[s.stackPointer]));
-    ++s.stackPointer;
-    ++s.pc;
+bool op_sgt(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    s.stack[R.sp + 1] =
+        bool_word(slt(s.stack[R.sp + 1], s.stack[R.sp]));
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 
 // 0x14 EQ — a == b. Equality is representation-agnostic: compare BE slots.
-bool op_eq(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const bool e = u256_eq(s.stack[s.stackPointer], s.stack[s.stackPointer + 1]);
-    s.stack[s.stackPointer + 1] = bool_word(e);
-    ++s.stackPointer;
-    ++s.pc;
+bool op_eq(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const bool e = u256_eq(s.stack[R.sp], s.stack[R.sp + 1]);
+    s.stack[R.sp + 1] = bool_word(e);
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 
@@ -167,14 +167,14 @@ bool op_eq(EvmState& s) {
 // operand is a little-endian slot, so test from its least-significant lane
 // (limbs[0]) first and short-circuit — a small nonzero operand (the common case)
 // exits on the first lane.
-bool op_iszero(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256& a = s.stack[s.stackPointer];
+bool op_iszero(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256& a = s.stack[R.sp];
     const bool z = a.limbs[0] == 0 && a.limbs[1] == 0 && a.limbs[2] == 0 && a.limbs[3] == 0;
-    s.stack[s.stackPointer] = bool_word(z);
-    ++s.pc;
+    s.stack[R.sp] = bool_word(z);
+    ++R.pc;
     return true;
 }
 
@@ -183,149 +183,149 @@ bool op_iszero(EvmState& s) {
 // function with the four limbs unrolled, rather than a shared template.
 
 // 0x16 AND.
-bool op_and(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256& a = s.stack[s.stackPointer];
-    U256&       b = s.stack[s.stackPointer + 1];
+bool op_and(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256& a = s.stack[R.sp];
+    U256&       b = s.stack[R.sp + 1];
     b.limbs[0] &= a.limbs[0];
     b.limbs[1] &= a.limbs[1];
     b.limbs[2] &= a.limbs[2];
     b.limbs[3] &= a.limbs[3];
-    ++s.stackPointer;
-    ++s.pc;
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 
 // 0x17 OR.
-bool op_or(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256& a = s.stack[s.stackPointer];
-    U256&       b = s.stack[s.stackPointer + 1];
+bool op_or(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256& a = s.stack[R.sp];
+    U256&       b = s.stack[R.sp + 1];
     b.limbs[0] |= a.limbs[0];
     b.limbs[1] |= a.limbs[1];
     b.limbs[2] |= a.limbs[2];
     b.limbs[3] |= a.limbs[3];
-    ++s.stackPointer;
-    ++s.pc;
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 
 // 0x18 XOR.
-bool op_xor(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256& a = s.stack[s.stackPointer];
-    U256&       b = s.stack[s.stackPointer + 1];
+bool op_xor(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256& a = s.stack[R.sp];
+    U256&       b = s.stack[R.sp + 1];
     b.limbs[0] ^= a.limbs[0];
     b.limbs[1] ^= a.limbs[1];
     b.limbs[2] ^= a.limbs[2];
     b.limbs[3] ^= a.limbs[3];
-    ++s.stackPointer;
-    ++s.pc;
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 
 // 0x19 NOT — bitwise complement (unary). Bit-parallel: complement the BE slot.
-bool op_not(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    U256& a = s.stack[s.stackPointer];
+bool op_not(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    U256& a = s.stack[R.sp];
     for (int i = 0; i < 4; ++i) a.limbs[i] = ~a.limbs[i];
-    ++s.pc;
+    ++R.pc;
     return true;
 }
 
 // 0x1e CLZ — count leading zero bits of the 256-bit word (EIP-7939, Osaka).
 // clz(0) == 256. Positional; operates on the LE limbs directly (ld_le identity).
-bool op_clz(EvmState& s) {
-    if (s.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_LOW;
-    if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, s.stackPointer);
+bool op_clz(EvmState& s, Regs& R) {
+    if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_LOW;
+    if (stack_depth(R.sp) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 a = ld_le(s, R.sp);
     uint64_t n;  // limb[3] is most significant; higher all-zero limbs add 64 each
     if (a.limbs[3] != 0)      n =       static_cast<uint64_t>(__builtin_clzll(a.limbs[3]));
     else if (a.limbs[2] != 0) n =  64 + static_cast<uint64_t>(__builtin_clzll(a.limbs[2]));
     else if (a.limbs[1] != 0) n = 128 + static_cast<uint64_t>(__builtin_clzll(a.limbs[1]));
     else if (a.limbs[0] != 0) n = 192 + static_cast<uint64_t>(__builtin_clzll(a.limbs[0]));
     else                      n = 256;
-    st_le(s, s.stackPointer, U256{{n, 0, 0, 0}});
-    ++s.pc;
+    st_le(s, R.sp, U256{{n, 0, 0, 0}});
+    ++R.pc;
     return true;
 }
 
 // 0x1a BYTE — the i-th byte of x, counting from the most significant (i = 0).
 // i >= 32 yields 0. Stack: i = top, x = second. In the LE slot the most-
 // significant byte (i = 0) is raw byte[31], so byte i of x is raw byte[31 - i].
-bool op_byte(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const unsigned idx = low_scalar(s.stack[s.stackPointer]);  // 0 = most significant
+bool op_byte(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const unsigned idx = low_scalar(s.stack[R.sp]);  // 0 = most significant
     U256 r{};
     if (idx < 32) {
-        const uint8_t byte = reinterpret_cast<const uint8_t*>(&s.stack[s.stackPointer + 1])[31 - idx];
+        const uint8_t byte = reinterpret_cast<const uint8_t*>(&s.stack[R.sp + 1])[31 - idx];
         r.limbs[0] = static_cast<uint64_t>(byte);  // result value in the low lane
     }
-    s.stack[s.stackPointer + 1] = r;
-    ++s.stackPointer;
-    ++s.pc;
+    s.stack[R.sp + 1] = r;
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 
 // 0x1b SHL — value << shift. Stack: shift = top, value = second.
-bool op_shl(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const unsigned n = low_scalar(s.stack[s.stackPointer]);
-    U256& v = s.stack[s.stackPointer + 1];
+bool op_shl(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const unsigned n = low_scalar(s.stack[R.sp]);
+    U256& v = s.stack[R.sp + 1];
     if (n >= 256)        v = U256{};
     else if (n == 0)     { /* unchanged */ }
     else if (n % 8 == 0) byte_shl(v, n / 8);
-    else                 st_le(s, s.stackPointer + 1, shl(ld_le(s, s.stackPointer + 1), n));
-    ++s.stackPointer;
-    ++s.pc;
+    else                 st_le(s, R.sp + 1, shl(ld_le(s, R.sp + 1), n));
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 
 // 0x1c SHR — logical value >> shift.
-bool op_shr(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const unsigned n = low_scalar(s.stack[s.stackPointer]);
-    U256& v = s.stack[s.stackPointer + 1];
+bool op_shr(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const unsigned n = low_scalar(s.stack[R.sp]);
+    U256& v = s.stack[R.sp + 1];
     if (n >= 256)        v = U256{};
     else if (n == 0)     { /* unchanged */ }
     else if (n % 8 == 0) byte_shr(v, n / 8);
-    else                 st_le(s, s.stackPointer + 1, shr(ld_le(s, s.stackPointer + 1), n));
-    ++s.stackPointer;
-    ++s.pc;
+    else                 st_le(s, R.sp + 1, shr(ld_le(s, R.sp + 1), n));
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 
 // 0x1d SAR — arithmetic (sign-propagating) value >> shift.
-bool op_sar(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const unsigned n = low_scalar(s.stack[s.stackPointer]);
-    U256& v = s.stack[s.stackPointer + 1];
+bool op_sar(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const unsigned n = low_scalar(s.stack[R.sp]);
+    U256& v = s.stack[R.sp + 1];
     if (n >= 256) {
         // out-of-range: every bit becomes the sign bit (raw byte[31] high bit)
         const uint8_t fill = (reinterpret_cast<const uint8_t*>(&v)[31] & 0x80) ? 0xFF : 0x00;
         std::memset(&v, fill, 32);
     } else if (n == 0)   { /* unchanged */ }
     else if (n % 8 == 0) byte_sar(v, n / 8);
-    else                 st_le(s, s.stackPointer + 1, sar(ld_le(s, s.stackPointer + 1), n));
-    ++s.stackPointer;
-    ++s.pc;
+    else                 st_le(s, R.sp + 1, sar(ld_le(s, R.sp + 1), n));
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 

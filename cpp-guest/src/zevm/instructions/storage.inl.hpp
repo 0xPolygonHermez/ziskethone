@@ -56,34 +56,34 @@ inline evmc_bytes32 slot_bytes(const EvmState& s, uint32_t i) {
 }
 
 // 0x54 SLOAD — push storage[key]. Warm (100) base + cold surcharge (EIP-2929).
-bool op_sload(EvmState& s) {
-    if (s.gas < WARM_STORAGE_READ_COST) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= WARM_STORAGE_READ_COST;
-    if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+bool op_sload(EvmState& s, Regs& R) {
+    if (R.gas < WARM_STORAGE_READ_COST) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= WARM_STORAGE_READ_COST;
+    if (stack_depth(R.sp) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    const evmc_bytes32 key = slot_bytes(s, s.stackPointer);
+    const evmc_bytes32 key = slot_bytes(s, R.sp);
     if (s.rev >= EVMC_BERLIN &&
         s.host->access_storage(s.context, &s.evmcMsg->recipient, &key) == EVMC_ACCESS_COLD) {
         const int64_t extra = COLD_SLOAD_COST - WARM_STORAGE_READ_COST;
-        if (s.gas < extra) { s.status = EVMC_OUT_OF_GAS; return false; }
-        s.gas -= extra;
+        if (R.gas < extra) { s.status = EVMC_OUT_OF_GAS; return false; }
+        R.gas -= extra;
     }
     const evmc_bytes32 v = s.host->get_storage(s.context, &s.evmcMsg->recipient, &key);
-    s.stack[s.stackPointer] = u256_from_be(v.bytes);  // BE value -> LE slot
-    ++s.pc;
+    s.stack[R.sp] = u256_from_be(v.bytes);  // BE value -> LE slot
+    ++R.pc;
     return true;
 }
 
 // 0x55 SSTORE — storage[key] = value (EIP-2200/2929/3529 metering + refunds).
-bool op_sstore(EvmState& s) {
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+bool op_sstore(EvmState& s, Regs& R) {
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
-    if (s.rev >= EVMC_ISTANBUL && s.gas <= SSTORE_SENTRY_GAS) {
+    if (s.rev >= EVMC_ISTANBUL && R.gas <= SSTORE_SENTRY_GAS) {
         s.status = EVMC_OUT_OF_GAS;  // EIP-1706 sentry
         return false;
     }
-    const evmc_bytes32 key   = slot_bytes(s, s.stackPointer);
-    const evmc_bytes32 value = slot_bytes(s, s.stackPointer + 1);
+    const evmc_bytes32 key   = slot_bytes(s, R.sp);
+    const evmc_bytes32 value = slot_bytes(s, R.sp + 1);
 
     int64_t cold = 0;
     if (s.rev >= EVMC_BERLIN &&
@@ -94,42 +94,42 @@ bool op_sstore(EvmState& s) {
         s.host->set_storage(s.context, &s.evmcMsg->recipient, &key, &value);
     const SStoreCost sc = SSTORE_COST[st];
     const int64_t cost = sc.cost + cold;
-    if (s.gas < cost) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= cost;
+    if (R.gas < cost) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= cost;
     s.gas_refund += sc.refund;
 
-    s.stackPointer += 2;  // pop key and value
-    ++s.pc;
+    R.sp += 2;  // pop key and value
+    ++R.pc;
     return true;
 }
 
 // 0x5c TLOAD — push transient_storage[key] (EIP-1153). Flat 100 gas.
-bool op_tload(EvmState& s) {
-    if (s.gas < WARM_STORAGE_READ_COST) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= WARM_STORAGE_READ_COST;
-    if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+bool op_tload(EvmState& s, Regs& R) {
+    if (R.gas < WARM_STORAGE_READ_COST) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= WARM_STORAGE_READ_COST;
+    if (stack_depth(R.sp) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    const evmc_bytes32 key = slot_bytes(s, s.stackPointer);
+    const evmc_bytes32 key = slot_bytes(s, R.sp);
     const evmc_bytes32 v =
         s.host->get_transient_storage(s.context, &s.evmcMsg->recipient, &key);
-    s.stack[s.stackPointer] = u256_from_be(v.bytes);  // BE value -> LE slot
-    ++s.pc;
+    s.stack[R.sp] = u256_from_be(v.bytes);  // BE value -> LE slot
+    ++R.pc;
     return true;
 }
 
 // 0x5d TSTORE — transient_storage[key] = value (EIP-1153). Flat 100 gas.
-bool op_tstore(EvmState& s) {
-    if (s.gas < WARM_STORAGE_READ_COST) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= WARM_STORAGE_READ_COST;
+bool op_tstore(EvmState& s, Regs& R) {
+    if (R.gas < WARM_STORAGE_READ_COST) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= WARM_STORAGE_READ_COST;
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    const evmc_bytes32 key   = slot_bytes(s, s.stackPointer);
-    const evmc_bytes32 value = slot_bytes(s, s.stackPointer + 1);
+    const evmc_bytes32 key   = slot_bytes(s, R.sp);
+    const evmc_bytes32 value = slot_bytes(s, R.sp + 1);
     s.host->set_transient_storage(s.context, &s.evmcMsg->recipient, &key, &value);
 
-    s.stackPointer += 2;  // pop key and value
-    ++s.pc;
+    R.sp += 2;  // pop key and value
+    ++R.pc;
     return true;
 }
 

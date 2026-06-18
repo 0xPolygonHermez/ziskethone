@@ -53,12 +53,12 @@ inline void udivmod(const U256& a, const U256& b, U256& q, U256& r) {
 // the low 64-bit lane and the large operand's high lanes pass through verbatim —
 // no add256 precompile. A carry past bit 64 cascades one lane at a time; carry
 // off the top lane drops (mod 2^256). Only the both-large case takes add256.
-bool op_add(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256& sa = s.stack[s.stackPointer];      // a, LE slot (distinct from sb)
-    U256&       sb = s.stack[s.stackPointer + 1];  // b / result, LE slot
+bool op_add(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256& sa = s.stack[R.sp];      // a, LE slot (distinct from sb)
+    U256&       sb = s.stack[R.sp + 1];  // b / result, LE slot
 
     if ((sa.limbs[1] | sa.limbs[2] | sa.limbs[3]) == 0) {  // a < 2^64 (covers both-small)
         if (sa.limbs[0] != 0) {                            // a == 0 -> result is b, in place
@@ -89,27 +89,27 @@ bool op_add(EvmState& s) {
             }
         }
     } else {                                               // both >= 2^64: full path
-        const U256 a = ld_le(s, s.stackPointer);
-        U256       b = ld_le(s, s.stackPointer + 1);
+        const U256 a = ld_le(s, R.sp);
+        U256       b = ld_le(s, R.sp + 1);
         zeg::bi::add256(a.limbs, b.limbs, /*cin=*/0, b.limbs);  // b = a + b (mod 2^256)
-        st_le(s, s.stackPointer + 1, b);
+        st_le(s, R.sp + 1, b);
     }
-    ++s.stackPointer;
-    ++s.pc;
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 
 // 0x02 MUL — push (a * b) mod 2^256.
-bool op_mul(EvmState& s) {
-    if (s.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_LOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, s.stackPointer);
-    U256       b = ld_le(s, s.stackPointer + 1);
+bool op_mul(EvmState& s, Regs& R) {
+    if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_LOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 a = ld_le(s, R.sp);
+    U256       b = ld_le(s, R.sp + 1);
     b = mul_low(a, b);
-    st_le(s, s.stackPointer + 1, b);
-    ++s.stackPointer;
-    ++s.pc;
+    st_le(s, R.sp + 1, b);
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 
@@ -121,12 +121,12 @@ bool op_mul(EvmState& s) {
 // verbatim unless a borrow cascades (an all-zero lane of a turns all-0xFF and
 // the borrow continues — which builds the correct wrapped result for a < b).
 // Only b >= 2^64 (including small-minus-large) takes the full path.
-bool op_sub(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256& sa = s.stack[s.stackPointer];      // a, minuend (distinct from sb)
-    U256&       sb = s.stack[s.stackPointer + 1];  // b, subtrahend / result
+bool op_sub(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256& sa = s.stack[R.sp];      // a, minuend (distinct from sb)
+    U256&       sb = s.stack[R.sp + 1];  // b, subtrahend / result
 
     if ((sb.limbs[1] | sb.limbs[2] | sb.limbs[3]) == 0) {  // b < 2^64
         if (sb.limbs[0] == 0) {
@@ -146,43 +146,43 @@ bool op_sub(EvmState& s) {
             }
         }
     } else {                                               // b >= 2^64: full LE path
-        const U256 a = ld_le(s, s.stackPointer);
-        U256       b = ld_le(s, s.stackPointer + 1);
+        const U256 a = ld_le(s, R.sp);
+        U256       b = ld_le(s, R.sp + 1);
         // a - b == a + ~b + 1 (two's complement), via the accelerated adder.
         const uint64_t nb[4] = {~b.limbs[0], ~b.limbs[1], ~b.limbs[2], ~b.limbs[3]};
         zeg::bi::add256(a.limbs, nb, /*cin=*/1, b.limbs);
-        st_le(s, s.stackPointer + 1, b);
+        st_le(s, R.sp + 1, b);
     }
-    ++s.stackPointer;
-    ++s.pc;
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 
 // 0x04 DIV — unsigned a / b (0 when b == 0).
-bool op_div(EvmState& s) {
-    if (s.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_LOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, s.stackPointer);
-    U256       b = ld_le(s, s.stackPointer + 1);
+bool op_div(EvmState& s, Regs& R) {
+    if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_LOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 a = ld_le(s, R.sp);
+    U256       b = ld_le(s, R.sp + 1);
     if (u256_is_zero(b)) {
         b = U256{};
     } else {
         U256 q, r; udivmod(a, b, q, r); b = q;
     }
-    st_le(s, s.stackPointer + 1, b);
-    ++s.stackPointer;
-    ++s.pc;
+    st_le(s, R.sp + 1, b);
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 
 // 0x05 SDIV — signed a / b, truncated toward zero (0 when b == 0).
-bool op_sdiv(EvmState& s) {
-    if (s.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_LOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, s.stackPointer);
-    U256       b = ld_le(s, s.stackPointer + 1);
+bool op_sdiv(EvmState& s, Regs& R) {
+    if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_LOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 a = ld_le(s, R.sp);
+    U256       b = ld_le(s, R.sp + 1);
     if (u256_is_zero(b)) {
         b = U256{};
     } else {
@@ -201,37 +201,37 @@ bool op_sdiv(EvmState& s) {
             b = (na != nb) ? u256_neg(q) : q;
         }
     }
-    st_le(s, s.stackPointer + 1, b);
-    ++s.stackPointer;
-    ++s.pc;
+    st_le(s, R.sp + 1, b);
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 
 // 0x06 MOD — unsigned a % b (0 when b == 0).
-bool op_mod(EvmState& s) {
-    if (s.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_LOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, s.stackPointer);
-    U256       b = ld_le(s, s.stackPointer + 1);
+bool op_mod(EvmState& s, Regs& R) {
+    if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_LOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 a = ld_le(s, R.sp);
+    U256       b = ld_le(s, R.sp + 1);
     if (u256_is_zero(b)) {
         b = U256{};
     } else {
         U256 q, r; udivmod(a, b, q, r); b = r;
     }
-    st_le(s, s.stackPointer + 1, b);
-    ++s.stackPointer;
-    ++s.pc;
+    st_le(s, R.sp + 1, b);
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 
 // 0x07 SMOD — signed a % b, result takes the sign of a (0 when b == 0).
-bool op_smod(EvmState& s) {
-    if (s.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_LOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, s.stackPointer);
-    U256       b = ld_le(s, s.stackPointer + 1);
+bool op_smod(EvmState& s, Regs& R) {
+    if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_LOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 a = ld_le(s, R.sp);
+    U256       b = ld_le(s, R.sp + 1);
     if (u256_is_zero(b)) {
         b = U256{};
     } else {
@@ -241,20 +241,20 @@ bool op_smod(EvmState& s) {
         U256 q, r; udivmod(ua, ub, q, r);
         b = na ? u256_neg(r) : r;
     }
-    st_le(s, s.stackPointer + 1, b);
-    ++s.stackPointer;
-    ++s.pc;
+    st_le(s, R.sp + 1, b);
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 
 // 0x08 ADDMOD — (a + b) mod m (0 when m == 0). Ternary: a, b, m.
-bool op_addmod(EvmState& s) {
-    if (s.gas < GAS_MID) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_MID;
-    if (stack_depth(s) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, s.stackPointer);
-    const U256 b = ld_le(s, s.stackPointer + 1);
-    U256       m = ld_le(s, s.stackPointer + 2);
+bool op_addmod(EvmState& s, Regs& R) {
+    if (R.gas < GAS_MID) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_MID;
+    if (stack_depth(R.sp) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 a = ld_le(s, R.sp);
+    const U256 b = ld_le(s, R.sp + 1);
+    U256       m = ld_le(s, R.sp + 2);
     if (u256_is_zero(m)) {
         m = U256{};
     } else {
@@ -263,20 +263,20 @@ bool op_addmod(EvmState& s) {
         zeg::bi::arith256_mod(a.limbs, ONE4, b.limbs, m.limbs, d);
         m = U256{{d[0], d[1], d[2], d[3]}};
     }
-    st_le(s, s.stackPointer + 2, m);
-    s.stackPointer += 2;
-    ++s.pc;
+    st_le(s, R.sp + 2, m);
+    R.sp += 2;
+    ++R.pc;
     return true;
 }
 
 // 0x09 MULMOD — (a * b) mod m (0 when m == 0). Ternary: a, b, m.
-bool op_mulmod(EvmState& s) {
-    if (s.gas < GAS_MID) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_MID;
-    if (stack_depth(s) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, s.stackPointer);
-    const U256 b = ld_le(s, s.stackPointer + 1);
-    U256       m = ld_le(s, s.stackPointer + 2);
+bool op_mulmod(EvmState& s, Regs& R) {
+    if (R.gas < GAS_MID) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_MID;
+    if (stack_depth(R.sp) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 a = ld_le(s, R.sp);
+    const U256 b = ld_le(s, R.sp + 1);
+    U256       m = ld_le(s, R.sp + 2);
     if (u256_is_zero(m)) {
         m = U256{};
     } else {
@@ -284,9 +284,9 @@ bool op_mulmod(EvmState& s) {
         zeg::bi::arith256_mod(a.limbs, b.limbs, ZERO4, m.limbs, d);
         m = U256{{d[0], d[1], d[2], d[3]}};
     }
-    st_le(s, s.stackPointer + 2, m);
-    s.stackPointer += 2;
-    ++s.pc;
+    st_le(s, R.sp + 2, m);
+    R.sp += 2;
+    ++R.pc;
     return true;
 }
 
@@ -297,10 +297,10 @@ bool op_mulmod(EvmState& s) {
 // 8 bytes); the highest set bit is found by the first non-zero lane from the top
 // (limbs[3]) plus a clz on it — no 256-iteration scan. The square-and-multiply
 // then walks the bits top..0 lane by lane, skipping the leading all-zero lanes.
-bool op_exp(EvmState& s) {
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256  base = ld_le(s, s.stackPointer);
-    const U256& e    = s.stack[s.stackPointer + 1];  // exponent, little-endian slot
+bool op_exp(EvmState& s, Regs& R) {
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256  base = ld_le(s, R.sp);
+    const U256& e    = s.stack[R.sp + 1];  // exponent, little-endian slot
 
     // Highest set bit: first non-zero lane (MS first) + clz on it.
     int top = -1;
@@ -311,8 +311,8 @@ bool op_exp(EvmState& s) {
         }
     const int64_t byte_len = top < 0 ? 0 : (top / 8 + 1);
     const int64_t cost = GAS_EXP + GAS_EXPBYTE * byte_len;
-    if (s.gas < cost) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= cost;
+    if (R.gas < cost) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= cost;
 
     // Square-and-multiply, MSB -> LSB, lane by lane (lane vl == e.limbs[vl]).
     // top < 0 (exponent 0) runs zero iterations -> 1.
@@ -325,20 +325,20 @@ bool op_exp(EvmState& s) {
             if ((lane >> b) & 1ULL) result = mul_low(result, base);
         }
     }
-    st_le(s, s.stackPointer + 1, result);
-    ++s.stackPointer;
-    ++s.pc;
+    st_le(s, R.sp + 1, result);
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 
 // 0x0b SIGNEXTEND — sign-extend x from the byte at index i (0 = least
 // significant byte). i >= 31 leaves x unchanged. Stack: i = top, x = second.
-bool op_signextend(EvmState& s) {
-    if (s.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_LOW;
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 i = ld_le(s, s.stackPointer);
-    U256       x = ld_le(s, s.stackPointer + 1);
+bool op_signextend(EvmState& s, Regs& R) {
+    if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_LOW;
+    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 i = ld_le(s, R.sp);
+    U256       x = ld_le(s, R.sp + 1);
 
     const bool in_range = (i.limbs[1] | i.limbs[2] | i.limbs[3]) == 0 && i.limbs[0] <= 30;
     if (in_range) {
@@ -355,9 +355,9 @@ bool op_signextend(EvmState& s) {
             for (unsigned l = limb + 1; l < 4; ++l) x.limbs[l] = 0;
         }
     }
-    st_le(s, s.stackPointer + 1, x);
-    ++s.stackPointer;
-    ++s.pc;
+    st_le(s, R.sp + 1, x);
+    ++R.sp;
+    ++R.pc;
     return true;
 }
 

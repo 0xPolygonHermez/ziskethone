@@ -12,11 +12,25 @@
 #include <cstdint>
 #include <cstring>    // std::memcpy (unaligned PUSH loads)
 
+#include "evm_mem.hpp"       // EVMMem, MemError (memory-gas wrappers below)
 #include "evm_state.hpp"     // EvmState, kStackLimit
-#include "instructions.hpp"  // InstrFn, InstrTable
+#include "instructions.hpp"  // EvmState include
 #include "u256.hpp"          // U256, byteswap256, u256_* value helpers
 
 namespace zevm {
+
+// Hot interpreter state the dispatch loop holds in locals and threads by
+// reference into the (inlined) handlers, so the compiler keeps gas / stack
+// pointer / pc in registers across the loop instead of round-tripping them
+// through EvmState memory on every opcode (the dominant ZisK cost). The dispatch
+// loop seeds these from EvmState on entry and writes them back when the frame
+// halts; nothing else reads the EvmState copies while a frame runs. Crucially,
+// R.gas's address is never taken (see the mem_* wrappers) so it stays a register.
+struct Regs {
+    int64_t  gas;   // mirrors EvmState::gas
+    uint32_t sp;    // mirrors EvmState::stackPointer
+    size_t   pc;    // mirrors EvmState::pc
+};
 
 // EVM gas cost tiers (subset; grows as opcodes land).
 inline constexpr int64_t GAS_JUMPDEST = 1;  // JUMPDEST
@@ -29,9 +43,9 @@ inline constexpr int64_t GAS_EXP     = 10;  // EXP base
 inline constexpr int64_t GAS_EXPBYTE = 50;  // EXP per byte of exponent (>= Spurious Dragon)
 
 // Number of live operands on the stack. stackPointer counts DOWN from
-// kStackLimit (empty) toward 0 (full), so depth == kStackLimit - stackPointer.
-inline size_t stack_depth(const EvmState& s) {
-    return kStackLimit - s.stackPointer;
+// kStackLimit (empty) toward 0 (full), so depth == kStackLimit - sp.
+inline size_t stack_depth(uint32_t sp) {
+    return kStackLimit - sp;
 }
 
 // Unaligned 64-bit load from code.
@@ -92,6 +106,35 @@ inline int64_t num_words(uint64_t n) {
 // MCOPY, on top of their VERYLOW base).
 inline int64_t copy_cost(uint64_t n) {
     return num_words(n) * 3;
+}
+
+// EVMMem charges memory-expansion / copy gas through an `int64_t*`. Taking the
+// address of the register-resident R.gas would force it back to memory for the
+// whole frame, so these wrappers spill R.gas to EvmState::gas only across the
+// (out-of-line) EVMMem call and read it back — R.gas's address never escapes.
+inline MemError mem_expand(EvmState& s, Regs& R, size_t addr, size_t len) {
+    s.gas = R.gas;
+    const MemError e = EVMMem::expand(addr, len, &s.gas);
+    R.gas = s.gas;
+    return e;
+}
+inline MemError mem_read(EvmState& s, Regs& R, size_t addr, uint8_t* dst, size_t len) {
+    s.gas = R.gas;
+    const MemError e = EVMMem::readBytes(addr, dst, len, &s.gas);
+    R.gas = s.gas;
+    return e;
+}
+inline MemError mem_write(EvmState& s, Regs& R, size_t addr, const uint8_t* src, size_t len) {
+    s.gas = R.gas;
+    const MemError e = EVMMem::writeBytes(addr, src, len, &s.gas);
+    R.gas = s.gas;
+    return e;
+}
+inline MemError mem_write_byte(EvmState& s, Regs& R, size_t addr, uint8_t v) {
+    s.gas = R.gas;
+    const MemError e = EVMMem::writeByte(addr, v, &s.gas);
+    R.gas = s.gas;
+    return e;
 }
 
 // Opcode handlers live in the per-category headers (instructions/<category>.inl.hpp),

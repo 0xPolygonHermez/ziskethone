@@ -58,19 +58,24 @@ EvmState g_frames[kMaxCallDepth];
 
 // op: run the handler; a false return halts the frame.
 #define OP(code, ns, fn) \
-    case code: if (!ns::fn(s)) return; break;
+    case code: if (!ns::fn(s, R)) return; break;
 // gated op: present only when the compile-time revision is at/after REV; before
 // that the slot is undefined.
 #define OPG(code, REV, ns, fn) \
     case code: \
-        if constexpr (Rev >= REV) { if (!ns::fn(s)) return; break; } \
+        if constexpr (Rev >= REV) { if (!ns::fn(s, R)) return; break; } \
         else { s.status = EVMC_UNDEFINED_INSTRUCTION; return; }
 
+// The fork-specialized loop, operating on register-resident state R (gas / stack
+// pointer / pc). always_inline so that, once it folds into dispatch_loop below,
+// R is a plain local whose address never escapes — the compiler keeps gas/sp/pc
+// in registers across the loop instead of reloading them from EvmState per op.
 template <evmc_revision Rev>
-void dispatch_loop(EvmState& s) {
+[[gnu::always_inline]] inline void dispatch_inner(EvmState& s, Regs& R,
+                                                  const uint8_t* code, size_t codeSize) {
     for (;;) {
         // Past the end of code behaves like STOP (opcode 0x00).
-        const uint8_t op = s.pc < s.codeSize ? s.code[s.pc] : 0x00;
+        const uint8_t op = R.pc < codeSize ? code[R.pc] : 0x00;
         switch (op) {
             OP(0x00, control_ops, op_stop)
             OP(0x01, arith_ops, op_add)
@@ -228,6 +233,17 @@ void dispatch_loop(EvmState& s) {
 }
 #undef OP
 #undef OPG
+
+// Seed the register-resident state from EvmState, run the fork loop to a halt,
+// then write the final state back (run() reads EvmState::gas for the result).
+template <evmc_revision Rev>
+void dispatch_loop(EvmState& s) {
+    Regs R{s.gas, s.stackPointer, s.pc};
+    dispatch_inner<Rev>(s, R, s.code, s.codeSize);
+    s.gas = R.gas;
+    s.stackPointer = R.sp;
+    s.pc = R.pc;
+}
 
 // Pick the specialized loop for `rev`. Revisions that share an opcode set reuse
 // one instantiation (the fork-dependent *gas* logic inside handlers reads the
