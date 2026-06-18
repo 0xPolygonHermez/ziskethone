@@ -1,3 +1,4 @@
+#pragma once
 // bitwise.cpp — comparison & bitwise-logic opcodes (0x10..0x1e: LT, GT, SLT,
 // SGT, EQ, ISZERO, AND, OR, XOR, NOT, BYTE, SHL, SHR, SAR, CLZ).
 //
@@ -20,7 +21,7 @@
 
 namespace zevm {
 
-namespace {
+namespace bitwise_ops {
 
 // The boolean results 0/1 as a little-endian word. Compile-time constants.
 inline U256 bool_word(bool v) { return v ? U256{{1, 0, 0, 0}} : U256{}; }
@@ -330,25 +331,5 @@ bool op_sar(EvmState& s) {
 
 }  // namespace
 
-void register_bitwise(InstrTable& t, evmc_revision rev) {
-    t[0x10] = &op_lt;
-    t[0x11] = &op_gt;
-    t[0x12] = &op_slt;
-    t[0x13] = &op_sgt;
-    t[0x14] = &op_eq;
-    t[0x15] = &op_iszero;
-    t[0x16] = &op_and;
-    t[0x17] = &op_or;
-    t[0x18] = &op_xor;
-    t[0x19] = &op_not;
-    t[0x1a] = &op_byte;
-    if (rev >= EVMC_CONSTANTINOPLE) {  // EIP-145
-        t[0x1b] = &op_shl;
-        t[0x1c] = &op_shr;
-        t[0x1d] = &op_sar;
-    }
-    if (rev >= EVMC_OSAKA)  // EIP-7939
-        t[0x1e] = &op_clz;
-}
 
 }  // namespace zevm

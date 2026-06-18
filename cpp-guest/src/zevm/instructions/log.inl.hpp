@@ -1,3 +1,4 @@
+#pragma once
 // log.cpp — logging opcodes LOG0..LOG4 (0xa0..0xa4).
 //
 // LOGn pops a memory window (offset, size) and n topics, then emits a log for
@@ -14,7 +15,7 @@
 
 namespace zevm {
 
-namespace {
+namespace log_ops {
 
 constexpr int64_t GAS_LOG     = 375;  // per LOG + per topic (G_log / G_logtopic)
 constexpr int64_t GAS_LOGDATA = 8;    // per byte of logged data
@@ -60,12 +61,5 @@ bool op_log4(EvmState& s) { return log_impl(s, 4); }
 
 }  // namespace
 
-void register_log(InstrTable& t) {
-    t[0xa0] = &op_log0;
-    t[0xa1] = &op_log1;
-    t[0xa2] = &op_log2;
-    t[0xa3] = &op_log3;
-    t[0xa4] = &op_log4;
-}
 
 }  // namespace zevm

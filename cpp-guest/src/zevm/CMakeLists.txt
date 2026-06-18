@@ -6,22 +6,13 @@
 # the FetchContent'd evmone source tree; the parent CMakeLists exposes
 # evmone_SOURCE_DIR.
 
+# The opcode handlers are inline headers (instructions/*.inl.hpp) included by
+# zevm.cpp, which holds the per-fork dispatch switch — so there is no per-category
+# translation unit and no runtime dispatch table.
 add_library(zevm STATIC
     zevm.cpp
     evm_state.cpp
     evm_mem.cpp
-    instructions/table.cpp
-    instructions/arith.cpp
-    instructions/bitwise.cpp
-    instructions/keccak.cpp
-    instructions/env.cpp
-    instructions/memory.cpp
-    instructions/storage.cpp
-    instructions/control.cpp
-    instructions/stack.cpp
-    instructions/push.cpp
-    instructions/log.cpp
-    instructions/system.cpp
 )
 
 target_include_directories(zevm

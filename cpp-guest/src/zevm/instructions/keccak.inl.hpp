@@ -1,3 +1,4 @@
+#pragma once
 // keccak.cpp — KECCAK256 (0x20).
 //
 // Hashes a memory window [offset, offset+size) and pushes the 32-byte digest.
@@ -15,7 +16,7 @@
 
 namespace zevm {
 
-namespace {
+namespace keccak_ops {
 
 constexpr int64_t GAS_KECCAK256      = 30;  // base
 constexpr int64_t GAS_KECCAK256_WORD = 6;   // per 32-byte word of input
@@ -49,8 +50,5 @@ bool op_keccak256(EvmState& s) {
 
 }  // namespace
 
-void register_keccak(InstrTable& t) {
-    t[0x20] = &op_keccak256;
-}
 
 }  // namespace zevm

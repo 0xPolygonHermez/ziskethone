@@ -14,7 +14,22 @@
 
 #include "evm_mem.hpp"     // EVMMem::data — the frame's output window
 #include "evm_state.hpp"
-#include "instructions.hpp"
+
+// The opcode handlers, pulled in as inline headers so the dispatch switch below
+// can fold the hot ones directly into the per-fork loop (no out-of-line call, no
+// function-pointer table). Each lives in its own zevm::<category>_ops namespace.
+#include "instructions/detail.hpp"
+#include "instructions/arith.inl.hpp"
+#include "instructions/bitwise.inl.hpp"
+#include "instructions/keccak.inl.hpp"
+#include "instructions/env.inl.hpp"
+#include "instructions/memory.inl.hpp"
+#include "instructions/storage.inl.hpp"
+#include "instructions/control.inl.hpp"
+#include "instructions/stack.inl.hpp"
+#include "instructions/push.inl.hpp"
+#include "instructions/log.inl.hpp"
+#include "instructions/system.inl.hpp"
 
 namespace zevm {
 
@@ -32,6 +47,214 @@ namespace {
 // so the existing depth-limit light-fail keeps it in range.
 EvmState g_frames[kMaxCallDepth];
 
+// ----- straight-line opcode dispatch -----
+//
+// One specialized loop per fork (instantiated by run_dispatch below, one per
+// distinct opcode set): fetch the opcode at pc and run its inline handler until
+// one returns false (halt). This replaces the old function-pointer table — the
+// switch lets the compiler inline the hot handlers, and `if constexpr (Rev >= …)`
+// gates fork-introduced opcodes at compile time (an absent opcode is undefined,
+// exactly like an opcode missing from evmone's revision table).
+
+// op: run the handler; a false return halts the frame.
+#define OP(code, ns, fn) \
+    case code: if (!ns::fn(s)) return; break;
+// gated op: present only when the compile-time revision is at/after REV; before
+// that the slot is undefined.
+#define OPG(code, REV, ns, fn) \
+    case code: \
+        if constexpr (Rev >= REV) { if (!ns::fn(s)) return; break; } \
+        else { s.status = EVMC_UNDEFINED_INSTRUCTION; return; }
+
+template <evmc_revision Rev>
+void dispatch_loop(EvmState& s) {
+    for (;;) {
+        // Past the end of code behaves like STOP (opcode 0x00).
+        const uint8_t op = s.pc < s.codeSize ? s.code[s.pc] : 0x00;
+        switch (op) {
+            OP(0x00, control_ops, op_stop)
+            OP(0x01, arith_ops, op_add)
+            OP(0x02, arith_ops, op_mul)
+            OP(0x03, arith_ops, op_sub)
+            OP(0x04, arith_ops, op_div)
+            OP(0x05, arith_ops, op_sdiv)
+            OP(0x06, arith_ops, op_mod)
+            OP(0x07, arith_ops, op_smod)
+            OP(0x08, arith_ops, op_addmod)
+            OP(0x09, arith_ops, op_mulmod)
+            OP(0x0a, arith_ops, op_exp)
+            OP(0x0b, arith_ops, op_signextend)
+            OP(0x10, bitwise_ops, op_lt)
+            OP(0x11, bitwise_ops, op_gt)
+            OP(0x12, bitwise_ops, op_slt)
+            OP(0x13, bitwise_ops, op_sgt)
+            OP(0x14, bitwise_ops, op_eq)
+            OP(0x15, bitwise_ops, op_iszero)
+            OP(0x16, bitwise_ops, op_and)
+            OP(0x17, bitwise_ops, op_or)
+            OP(0x18, bitwise_ops, op_xor)
+            OP(0x19, bitwise_ops, op_not)
+            OP(0x1a, bitwise_ops, op_byte)
+            OPG(0x1b, EVMC_CONSTANTINOPLE, bitwise_ops, op_shl)
+            OPG(0x1c, EVMC_CONSTANTINOPLE, bitwise_ops, op_shr)
+            OPG(0x1d, EVMC_CONSTANTINOPLE, bitwise_ops, op_sar)
+            OPG(0x1e, EVMC_OSAKA, bitwise_ops, op_clz)
+            OP(0x20, keccak_ops, op_keccak256)
+            OP(0x30, env_ops, op_address)
+            OP(0x31, env_ops, op_balance)
+            OP(0x32, env_ops, op_origin)
+            OP(0x33, env_ops, op_caller)
+            OP(0x34, env_ops, op_callvalue)
+            OP(0x35, env_ops, op_calldataload)
+            OP(0x36, env_ops, op_calldatasize)
+            OP(0x37, env_ops, op_calldatacopy)
+            OP(0x38, env_ops, op_codesize)
+            OP(0x39, env_ops, op_codecopy)
+            OP(0x3a, env_ops, op_gasprice)
+            OP(0x3b, env_ops, op_extcodesize)
+            OP(0x3c, env_ops, op_extcodecopy)
+            OPG(0x3d, EVMC_BYZANTIUM, system_ops, op_returndatasize)
+            OPG(0x3e, EVMC_BYZANTIUM, system_ops, op_returndatacopy)
+            OPG(0x3f, EVMC_CONSTANTINOPLE, env_ops, op_extcodehash)
+            OP(0x40, env_ops, op_blockhash)
+            OP(0x41, env_ops, op_coinbase)
+            OP(0x42, env_ops, op_timestamp)
+            OP(0x43, env_ops, op_number)
+            OP(0x44, env_ops, op_prevrandao)
+            OP(0x45, env_ops, op_gaslimit)
+            OPG(0x46, EVMC_ISTANBUL, env_ops, op_chainid)
+            OPG(0x47, EVMC_ISTANBUL, env_ops, op_selfbalance)
+            OPG(0x48, EVMC_LONDON, env_ops, op_basefee)
+            OPG(0x49, EVMC_CANCUN, env_ops, op_blobhash)
+            OPG(0x4a, EVMC_CANCUN, env_ops, op_blobbasefee)
+            OP(0x50, control_ops, op_pop)
+            OP(0x51, memory_ops, op_mload)
+            OP(0x52, memory_ops, op_mstore)
+            OP(0x53, memory_ops, op_mstore8)
+            OP(0x54, storage_ops, op_sload)
+            OP(0x55, storage_ops, op_sstore)
+            OP(0x56, control_ops, op_jump)
+            OP(0x57, control_ops, op_jumpi)
+            OP(0x58, control_ops, op_pc)
+            OP(0x59, memory_ops, op_msize)
+            OP(0x5a, control_ops, op_gas)
+            OP(0x5b, control_ops, op_jumpdest)
+            OPG(0x5c, EVMC_CANCUN, storage_ops, op_tload)
+            OPG(0x5d, EVMC_CANCUN, storage_ops, op_tstore)
+            OPG(0x5e, EVMC_CANCUN, memory_ops, op_mcopy)
+            OPG(0x5f, EVMC_SHANGHAI, push_ops, op_push0)
+            OP(0x60, push_ops, op_push1)
+            OP(0x61, push_ops, op_push2)
+            OP(0x62, push_ops, op_push3)
+            OP(0x63, push_ops, op_push4)
+            OP(0x64, push_ops, op_push5)
+            OP(0x65, push_ops, op_push6)
+            OP(0x66, push_ops, op_push7)
+            OP(0x67, push_ops, op_push8)
+            OP(0x68, push_ops, op_push9)
+            OP(0x69, push_ops, op_push10)
+            OP(0x6a, push_ops, op_push11)
+            OP(0x6b, push_ops, op_push12)
+            OP(0x6c, push_ops, op_push13)
+            OP(0x6d, push_ops, op_push14)
+            OP(0x6e, push_ops, op_push15)
+            OP(0x6f, push_ops, op_push16)
+            OP(0x70, push_ops, op_push17)
+            OP(0x71, push_ops, op_push18)
+            OP(0x72, push_ops, op_push19)
+            OP(0x73, push_ops, op_push20)
+            OP(0x74, push_ops, op_push21)
+            OP(0x75, push_ops, op_push22)
+            OP(0x76, push_ops, op_push23)
+            OP(0x77, push_ops, op_push24)
+            OP(0x78, push_ops, op_push25)
+            OP(0x79, push_ops, op_push26)
+            OP(0x7a, push_ops, op_push27)
+            OP(0x7b, push_ops, op_push28)
+            OP(0x7c, push_ops, op_push29)
+            OP(0x7d, push_ops, op_push30)
+            OP(0x7e, push_ops, op_push31)
+            OP(0x7f, push_ops, op_push32)
+            OP(0x80, stack_ops, op_dup1)
+            OP(0x81, stack_ops, op_dup2)
+            OP(0x82, stack_ops, op_dup3)
+            OP(0x83, stack_ops, op_dup4)
+            OP(0x84, stack_ops, op_dup5)
+            OP(0x85, stack_ops, op_dup6)
+            OP(0x86, stack_ops, op_dup7)
+            OP(0x87, stack_ops, op_dup8)
+            OP(0x88, stack_ops, op_dup9)
+            OP(0x89, stack_ops, op_dup10)
+            OP(0x8a, stack_ops, op_dup11)
+            OP(0x8b, stack_ops, op_dup12)
+            OP(0x8c, stack_ops, op_dup13)
+            OP(0x8d, stack_ops, op_dup14)
+            OP(0x8e, stack_ops, op_dup15)
+            OP(0x8f, stack_ops, op_dup16)
+            OP(0x90, stack_ops, op_swap1)
+            OP(0x91, stack_ops, op_swap2)
+            OP(0x92, stack_ops, op_swap3)
+            OP(0x93, stack_ops, op_swap4)
+            OP(0x94, stack_ops, op_swap5)
+            OP(0x95, stack_ops, op_swap6)
+            OP(0x96, stack_ops, op_swap7)
+            OP(0x97, stack_ops, op_swap8)
+            OP(0x98, stack_ops, op_swap9)
+            OP(0x99, stack_ops, op_swap10)
+            OP(0x9a, stack_ops, op_swap11)
+            OP(0x9b, stack_ops, op_swap12)
+            OP(0x9c, stack_ops, op_swap13)
+            OP(0x9d, stack_ops, op_swap14)
+            OP(0x9e, stack_ops, op_swap15)
+            OP(0x9f, stack_ops, op_swap16)
+            OP(0xa0, log_ops, op_log0)
+            OP(0xa1, log_ops, op_log1)
+            OP(0xa2, log_ops, op_log2)
+            OP(0xa3, log_ops, op_log3)
+            OP(0xa4, log_ops, op_log4)
+            OP(0xf0, system_ops, op_create)
+            OP(0xf1, system_ops, op_call)
+            OP(0xf2, system_ops, op_callcode)
+            OP(0xf3, system_ops, op_return)
+            OPG(0xf4, EVMC_HOMESTEAD, system_ops, op_delegatecall)
+            OPG(0xf5, EVMC_CONSTANTINOPLE, system_ops, op_create2)
+            OPG(0xfa, EVMC_BYZANTIUM, system_ops, op_staticcall)
+            OPG(0xfd, EVMC_BYZANTIUM, system_ops, op_revert)
+            OP(0xfe, system_ops, op_invalid)
+            OP(0xff, system_ops, op_selfdestruct)
+            default: s.status = EVMC_UNDEFINED_INSTRUCTION; return;
+        }
+    }
+}
+#undef OP
+#undef OPG
+
+// Pick the specialized loop for `rev`. Revisions that share an opcode set reuse
+// one instantiation (the fork-dependent *gas* logic inside handlers reads the
+// runtime EvmState::rev, so only the opcode availability needs the compile-time
+// revision). One loop per distinct fork opcode set: Frontier, Homestead,
+// Byzantium, Constantinople, Istanbul, London, Shanghai, Cancun, Osaka.
+void run_dispatch(evmc_revision rev, EvmState& s) {
+    switch (rev) {
+        case EVMC_FRONTIER:                                  dispatch_loop<EVMC_FRONTIER>(s);       break;
+        case EVMC_HOMESTEAD:
+        case EVMC_TANGERINE_WHISTLE:
+        case EVMC_SPURIOUS_DRAGON:                           dispatch_loop<EVMC_HOMESTEAD>(s);      break;
+        case EVMC_BYZANTIUM:                                 dispatch_loop<EVMC_BYZANTIUM>(s);      break;
+        case EVMC_CONSTANTINOPLE:
+        case EVMC_PETERSBURG:                                dispatch_loop<EVMC_CONSTANTINOPLE>(s); break;
+        case EVMC_ISTANBUL:
+        case EVMC_BERLIN:                                    dispatch_loop<EVMC_ISTANBUL>(s);       break;
+        case EVMC_LONDON:
+        case EVMC_PARIS:                                     dispatch_loop<EVMC_LONDON>(s);         break;
+        case EVMC_SHANGHAI:                                  dispatch_loop<EVMC_SHANGHAI>(s);       break;
+        case EVMC_CANCUN:
+        case EVMC_PRAGUE:                                    dispatch_loop<EVMC_CANCUN>(s);         break;
+        case EVMC_OSAKA:
+        default:                                             dispatch_loop<EVMC_OSAKA>(s);          break;
+    }
+}
+
 // Run one frame to completion and build its evmc_result. `prebuilt` is an
 // optional JUMPDEST bitset borrowed for this frame; when null, EvmState builds
 // its own.
@@ -47,16 +270,9 @@ evmc_result run(const evmc_host_interface* host, evmc_host_context* context,
     EvmState& state = g_frames[msg->depth];
     state.reset(msg, code, code_size, host, context, rev, prebuilt);
 
-    // Dispatch table for this revision (fork-gated opcodes resolved at build).
-    const InstrTable& itable = instruction_table_for(rev);
-
-    bool cont = true;
-    do {
-        // Past the end of code behaves like STOP (opcode 0x00).
-        const uint8_t opcode =
-            state.pc < state.codeSize ? state.code[state.pc] : 0x00;
-        cont = itable[opcode](state);
-    } while (cont);
+    // Run this revision's specialized straight-line dispatch loop to completion
+    // (fork-gated opcodes resolved at compile time; no runtime table).
+    run_dispatch(rev, state);
 
     // Report status, remaining gas, refund, and the RETURN/REVERT output. The
     // output points straight into this frame's EVMMem zone (set by

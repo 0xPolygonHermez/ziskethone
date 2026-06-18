@@ -94,22 +94,9 @@ inline int64_t copy_cost(uint64_t n) {
     return num_words(n) * 3;
 }
 
-// Per-category table registration. Each is defined in its own translation unit
-// (instructions/<category>.cpp) and slots its handlers into `t`; table.cpp calls
-// them all over the default-filled table.
-// The `rev` overloads gate fork-introduced opcodes: an opcode is registered only
-// when `rev` is at or past the fork that introduced it (otherwise it stays
-// op_unimplemented, i.e. undefined).
-void register_arith(InstrTable& t);
-void register_bitwise(InstrTable& t, evmc_revision rev);
-void register_keccak(InstrTable& t);
-void register_env(InstrTable& t, evmc_revision rev);
-void register_memory(InstrTable& t, evmc_revision rev);
-void register_storage(InstrTable& t, evmc_revision rev);
-void register_control(InstrTable& t);
-void register_stack(InstrTable& t);
-void register_push(InstrTable& t, evmc_revision rev);
-void register_log(InstrTable& t);
-void register_system(InstrTable& t, evmc_revision rev);
+// Opcode handlers live in the per-category headers (instructions/<category>.inl.hpp),
+// each in its own `zevm::<category>_ops` namespace, and are dispatched by the
+// straight-line switch in zevm.cpp (no runtime table). Fork gating is done there
+// at compile time via `if constexpr (Rev >= …)`.
 
 }  // namespace zevm

@@ -1,3 +1,4 @@
+#pragma once
 // push.cpp — PUSH0 (0x5f) and PUSH1..PUSH32 (0x60..0x7f).
 //
 // A PUSH's n immediate bytes are big-endian and right-aligned in the 256-bit
@@ -18,7 +19,7 @@
 
 namespace zevm {
 
-namespace {
+namespace push_ops {
 
 // Shared PUSH1..PUSH8 fast path (N = 1..8). See the file header.
 template <unsigned N>
@@ -114,20 +115,5 @@ bool op_push32(EvmState& s) { return push_big<32>(s); }
 
 }  // namespace
 
-void register_push(InstrTable& t, evmc_revision rev) {
-    if (rev >= EVMC_SHANGHAI)  // EIP-3855
-        t[0x5f] = &op_push0;
-    t[0x60] = &op_push1;   t[0x61] = &op_push2;   t[0x62] = &op_push3;
-    t[0x63] = &op_push4;   t[0x64] = &op_push5;   t[0x65] = &op_push6;
-    t[0x66] = &op_push7;   t[0x67] = &op_push8;   t[0x68] = &op_push9;
-    t[0x69] = &op_push10;  t[0x6a] = &op_push11;  t[0x6b] = &op_push12;
-    t[0x6c] = &op_push13;  t[0x6d] = &op_push14;  t[0x6e] = &op_push15;
-    t[0x6f] = &op_push16;  t[0x70] = &op_push17;  t[0x71] = &op_push18;
-    t[0x72] = &op_push19;  t[0x73] = &op_push20;  t[0x74] = &op_push21;
-    t[0x75] = &op_push22;  t[0x76] = &op_push23;  t[0x77] = &op_push24;
-    t[0x78] = &op_push25;  t[0x79] = &op_push26;  t[0x7a] = &op_push27;
-    t[0x7b] = &op_push28;  t[0x7c] = &op_push29;  t[0x7d] = &op_push30;
-    t[0x7e] = &op_push31;  t[0x7f] = &op_push32;
-}
 
 }  // namespace zevm

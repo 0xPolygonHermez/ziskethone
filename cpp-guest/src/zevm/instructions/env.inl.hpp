@@ -1,3 +1,4 @@
+#pragma once
 // env.cpp — execution-environment & block-context opcodes (0x30..0x4a, except
 // RETURNDATASIZE/RETURNDATACOPY 0x3d/0x3e which live in system.cpp): ADDRESS,
 // BALANCE, ORIGIN, CALLER, CALLVALUE, CALLDATA*, CODE*, GASPRICE, EXTCODE*,
@@ -20,7 +21,7 @@
 
 namespace zevm {
 
-namespace {
+namespace env_ops {
 
 constexpr int64_t WARM_ACCESS    = 100;    // EIP-2929 warm account access (base)
 constexpr int64_t COLD_EXTRA     = 2500;   // EIP-2929 cold account surcharge
@@ -343,38 +344,5 @@ bool op_blobhash(EvmState& s) {
 
 }  // namespace
 
-void register_env(InstrTable& t, evmc_revision rev) {
-    t[0x30] = &op_address;
-    t[0x31] = &op_balance;
-    t[0x32] = &op_origin;
-    t[0x33] = &op_caller;
-    t[0x34] = &op_callvalue;
-    t[0x35] = &op_calldataload;
-    t[0x36] = &op_calldatasize;
-    t[0x37] = &op_calldatacopy;
-    t[0x38] = &op_codesize;
-    t[0x39] = &op_codecopy;
-    t[0x3a] = &op_gasprice;
-    t[0x3b] = &op_extcodesize;
-    t[0x3c] = &op_extcodecopy;
-    t[0x40] = &op_blockhash;
-    t[0x41] = &op_coinbase;
-    t[0x42] = &op_timestamp;
-    t[0x43] = &op_number;
-    t[0x44] = &op_prevrandao;
-    t[0x45] = &op_gaslimit;
-    if (rev >= EVMC_CONSTANTINOPLE)  // EIP-1052
-        t[0x3f] = &op_extcodehash;
-    if (rev >= EVMC_ISTANBUL) {  // EIP-1344 / EIP-1884
-        t[0x46] = &op_chainid;
-        t[0x47] = &op_selfbalance;
-    }
-    if (rev >= EVMC_LONDON)  // EIP-3198
-        t[0x48] = &op_basefee;
-    if (rev >= EVMC_CANCUN) {  // EIP-4844 / EIP-7516
-        t[0x49] = &op_blobhash;
-        t[0x4a] = &op_blobbasefee;
-    }
-}
 
 }  // namespace zevm

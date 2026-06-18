@@ -1,3 +1,4 @@
+#pragma once
 // stack.cpp — stack-shuffling opcodes: DUP1..DUP16 (0x80..0x8f) and
 // SWAP1..SWAP16 (0x90..0x9f). POP lives in control.cpp.
 //
@@ -11,7 +12,7 @@
 
 namespace zevm {
 
-namespace {
+namespace stack_ops {
 
 // 0x80 DUP1 — duplicate the 1st-from-top item.
 bool op_dup1(EvmState& s) {
@@ -399,19 +400,5 @@ bool op_swap16(EvmState& s) {
 
 }  // namespace
 
-void register_stack(InstrTable& t) {
-    t[0x80] = &op_dup1;   t[0x81] = &op_dup2;   t[0x82] = &op_dup3;
-    t[0x83] = &op_dup4;   t[0x84] = &op_dup5;   t[0x85] = &op_dup6;
-    t[0x86] = &op_dup7;   t[0x87] = &op_dup8;   t[0x88] = &op_dup9;
-    t[0x89] = &op_dup10;  t[0x8a] = &op_dup11;  t[0x8b] = &op_dup12;
-    t[0x8c] = &op_dup13;  t[0x8d] = &op_dup14;  t[0x8e] = &op_dup15;
-    t[0x8f] = &op_dup16;
-    t[0x90] = &op_swap1;  t[0x91] = &op_swap2;  t[0x92] = &op_swap3;
-    t[0x93] = &op_swap4;  t[0x94] = &op_swap5;  t[0x95] = &op_swap6;
-    t[0x96] = &op_swap7;  t[0x97] = &op_swap8;  t[0x98] = &op_swap9;
-    t[0x99] = &op_swap10; t[0x9a] = &op_swap11; t[0x9b] = &op_swap12;
-    t[0x9c] = &op_swap13; t[0x9d] = &op_swap14; t[0x9e] = &op_swap15;
-    t[0x9f] = &op_swap16;
-}
 
 }  // namespace zevm

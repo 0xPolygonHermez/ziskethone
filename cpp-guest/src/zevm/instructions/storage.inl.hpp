@@ -1,3 +1,4 @@
+#pragma once
 // storage.cpp — persistent & transient storage opcodes (SLOAD 0x54, SSTORE 0x55,
 // TLOAD 0x5c, TSTORE 0x5d).
 //
@@ -17,7 +18,7 @@
 
 namespace zevm {
 
-namespace {
+namespace storage_ops {
 
 constexpr int64_t WARM_STORAGE_READ_COST = 100;
 constexpr int64_t COLD_SLOAD_COST        = 2100;
@@ -134,13 +135,5 @@ bool op_tstore(EvmState& s) {
 
 }  // namespace
 
-void register_storage(InstrTable& t, evmc_revision rev) {
-    t[0x54] = &op_sload;
-    t[0x55] = &op_sstore;
-    if (rev >= EVMC_CANCUN) {  // EIP-1153 transient storage
-        t[0x5c] = &op_tload;
-        t[0x5d] = &op_tstore;
-    }
-}
 
 }  // namespace zevm

@@ -1,3 +1,4 @@
+#pragma once
 // control.cpp — control-flow, halting & misc opcodes: STOP (0x00), JUMP (0x56),
 // JUMPI (0x57), JUMPDEST (0x5b), POP (0x50), PC (0x58), GAS (0x5a).
 //
@@ -9,7 +10,7 @@
 
 namespace zevm {
 
-namespace {
+namespace control_ops {
 
 // 0x00 STOP — halt successfully.
 bool op_stop(EvmState& s) {
@@ -96,14 +97,5 @@ bool op_gas(EvmState& s) {
 
 }  // namespace
 
-void register_control(InstrTable& t) {
-    t[0x00] = &op_stop;
-    t[0x50] = &op_pop;
-    t[0x56] = &op_jump;
-    t[0x57] = &op_jumpi;
-    t[0x58] = &op_pc;
-    t[0x5a] = &op_gas;
-    t[0x5b] = &op_jumpdest;
-}
 
 }  // namespace zevm

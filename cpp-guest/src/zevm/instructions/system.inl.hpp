@@ -1,3 +1,4 @@
+#pragma once
 // system.cpp — the call/create subsystem: CALL (0xf1), CALLCODE (0xf2),
 // DELEGATECALL (0xf4), STATICCALL (0xfa), CREATE (0xf0), CREATE2 (0xf5); the
 // halting/output opcodes RETURN (0xf3), REVERT (0xfd) and SELFDESTRUCT (0xff);
@@ -24,7 +25,7 @@
 
 namespace zevm {
 
-namespace {
+namespace system_ops {
 
 constexpr int64_t WARM_ACCESS         = 100;    // warm_storage_read_cost (call base)
 constexpr int64_t COLD_ACCOUNT_ACCESS = 2600;   // EIP-2929
@@ -420,23 +421,5 @@ bool op_selfdestruct(EvmState& s) {
 
 }  // namespace
 
-void register_system(InstrTable& t, evmc_revision rev) {
-    t[0xf0] = &op_create;
-    t[0xf1] = &op_call;
-    t[0xf2] = &op_callcode;
-    t[0xf3] = &op_return;
-    t[0xfe] = &op_invalid;
-    t[0xff] = &op_selfdestruct;
-    if (rev >= EVMC_HOMESTEAD)  // EIP-7
-        t[0xf4] = &op_delegatecall;
-    if (rev >= EVMC_BYZANTIUM) {  // EIP-211 (RETURNDATA*), EIP-214 (STATICCALL), EIP-140 (REVERT)
-        t[0x3d] = &op_returndatasize;
-        t[0x3e] = &op_returndatacopy;
-        t[0xfa] = &op_staticcall;
-        t[0xfd] = &op_revert;
-    }
-    if (rev >= EVMC_CONSTANTINOPLE)  // EIP-1014
-        t[0xf5] = &op_create2;
-}
 
 }  // namespace zevm

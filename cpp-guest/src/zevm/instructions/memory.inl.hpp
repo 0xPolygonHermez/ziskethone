@@ -1,3 +1,4 @@
+#pragma once
 // memory.cpp — memory opcodes (MLOAD 0x51, MSTORE 0x52, MSTORE8 0x53,
 // MSIZE 0x59, MCOPY 0x5e). Backed by the static EVMMem manager.
 //
@@ -16,7 +17,7 @@
 
 namespace zevm {
 
-namespace {
+namespace memory_ops {
 
 // 0x51 MLOAD — push the 32 bytes at memory[offset..offset+32); the wire bytes are
 // big-endian, byteswapped into the little-endian slot.
@@ -133,13 +134,5 @@ bool op_mcopy(EvmState& s) {
 
 }  // namespace
 
-void register_memory(InstrTable& t, evmc_revision rev) {
-    t[0x51] = &op_mload;
-    t[0x52] = &op_mstore;
-    t[0x53] = &op_mstore8;
-    t[0x59] = &op_msize;
-    if (rev >= EVMC_CANCUN)  // EIP-5656
-        t[0x5e] = &op_mcopy;
-}
 
 }  // namespace zevm

@@ -1,3 +1,4 @@
+#pragma once
 // arith.cpp — arithmetic opcodes (0x01..0x0b: ADD, MUL, SUB, DIV, SDIV, MOD,
 // SMOD, ADDMOD, MULMOD, EXP, SIGNEXTEND).
 //
@@ -16,7 +17,7 @@
 
 namespace zevm {
 
-namespace {
+namespace arith_ops {
 
 constexpr uint64_t ZERO4[4] = {0, 0, 0, 0};
 constexpr uint64_t ONE4[4]  = {1, 0, 0, 0};
@@ -362,18 +363,5 @@ bool op_signextend(EvmState& s) {
 
 }  // namespace
 
-void register_arith(InstrTable& t) {
-    t[0x01] = &op_add;
-    t[0x02] = &op_mul;
-    t[0x03] = &op_sub;
-    t[0x04] = &op_div;
-    t[0x05] = &op_sdiv;
-    t[0x06] = &op_mod;
-    t[0x07] = &op_smod;
-    t[0x08] = &op_addmod;
-    t[0x09] = &op_mulmod;
-    t[0x0a] = &op_exp;
-    t[0x0b] = &op_signextend;
-}
 
 }  // namespace zevm
