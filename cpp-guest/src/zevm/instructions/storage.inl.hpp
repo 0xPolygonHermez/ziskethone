@@ -49,9 +49,9 @@ constexpr SStoreCost SSTORE_COST[] = {
 
 // The 32 big-endian bytes of stack slot `i` (its LE integer value byteswapped to
 // the on-wire evmc_bytes32 form the host expects for keys/values).
-inline evmc_bytes32 slot_bytes(const EvmState& s, size_t i) {
+inline evmc_bytes32 slot_bytes(const U256* i) {
     evmc_bytes32 b;
-    u256_to_be(s.stack[i], b.bytes);
+    u256_to_be(i[0], b.bytes);
     return b;
 }
 
@@ -59,9 +59,9 @@ inline evmc_bytes32 slot_bytes(const EvmState& s, size_t i) {
 bool op_sload(EvmState& s, Regs& R) {
     if (R.gas < WARM_STORAGE_READ_COST) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= WARM_STORAGE_READ_COST;
-    if (stack_depth(R.sp) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(s, R.top, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    const evmc_bytes32 key = slot_bytes(s, R.sp);
+    const evmc_bytes32 key = slot_bytes(R.top);
     if (s.rev >= EVMC_BERLIN &&
         s.host->access_storage(s.context, &s.evmcMsg->recipient, &key) == EVMC_ACCESS_COLD) {
         const int64_t extra = COLD_SLOAD_COST - WARM_STORAGE_READ_COST;
@@ -69,21 +69,21 @@ bool op_sload(EvmState& s, Regs& R) {
         R.gas -= extra;
     }
     const evmc_bytes32 v = s.host->get_storage(s.context, &s.evmcMsg->recipient, &key);
-    s.stack[R.sp] = u256_from_be(v.bytes);  // BE value -> LE slot
+    R.top[0] = u256_from_be(v.bytes);  // BE value -> LE slot
     ++R.pc;
     return true;
 }
 
 // 0x55 SSTORE — storage[key] = value (EIP-2200/2929/3529 metering + refunds).
 bool op_sstore(EvmState& s, Regs& R) {
-    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
     if (s.rev >= EVMC_ISTANBUL && R.gas <= SSTORE_SENTRY_GAS) {
         s.status = EVMC_OUT_OF_GAS;  // EIP-1706 sentry
         return false;
     }
-    const evmc_bytes32 key   = slot_bytes(s, R.sp);
-    const evmc_bytes32 value = slot_bytes(s, R.sp + 1);
+    const evmc_bytes32 key   = slot_bytes(R.top);
+    const evmc_bytes32 value = slot_bytes(R.top + 1);
 
     int64_t cold = 0;
     if (s.rev >= EVMC_BERLIN &&
@@ -98,7 +98,7 @@ bool op_sstore(EvmState& s, Regs& R) {
     R.gas -= cost;
     s.gas_refund += sc.refund;
 
-    R.sp += 2;  // pop key and value
+    R.top += 2;  // pop key and value
     ++R.pc;
     return true;
 }
@@ -107,12 +107,12 @@ bool op_sstore(EvmState& s, Regs& R) {
 bool op_tload(EvmState& s, Regs& R) {
     if (R.gas < WARM_STORAGE_READ_COST) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= WARM_STORAGE_READ_COST;
-    if (stack_depth(R.sp) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(s, R.top, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    const evmc_bytes32 key = slot_bytes(s, R.sp);
+    const evmc_bytes32 key = slot_bytes(R.top);
     const evmc_bytes32 v =
         s.host->get_transient_storage(s.context, &s.evmcMsg->recipient, &key);
-    s.stack[R.sp] = u256_from_be(v.bytes);  // BE value -> LE slot
+    R.top[0] = u256_from_be(v.bytes);  // BE value -> LE slot
     ++R.pc;
     return true;
 }
@@ -122,13 +122,13 @@ bool op_tstore(EvmState& s, Regs& R) {
     if (R.gas < WARM_STORAGE_READ_COST) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= WARM_STORAGE_READ_COST;
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
-    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    const evmc_bytes32 key   = slot_bytes(s, R.sp);
-    const evmc_bytes32 value = slot_bytes(s, R.sp + 1);
+    const evmc_bytes32 key   = slot_bytes(R.top);
+    const evmc_bytes32 value = slot_bytes(R.top + 1);
     s.host->set_transient_storage(s.context, &s.evmcMsg->recipient, &key, &value);
 
-    R.sp += 2;  // pop key and value
+    R.top += 2;  // pop key and value
     ++R.pc;
     return true;
 }

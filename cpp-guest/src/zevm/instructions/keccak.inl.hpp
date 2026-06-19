@@ -25,12 +25,12 @@ constexpr int64_t GAS_KECCAK256_WORD = 6;   // per 32-byte word of input
 bool op_keccak256(EvmState& s, Regs& R) {
     if (R.gas < GAS_KECCAK256) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_KECCAK256;
-    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    const size_t off_i  = R.sp;
-    const size_t size_i = R.sp + 1;
-    const uint64_t off  = mem_arg(s.stack[off_i]);
-    const uint64_t size = mem_arg(s.stack[size_i]);
+    U256* const off_i  = R.top;
+    U256* const size_i = R.top + 1;
+    const uint64_t off  = mem_arg(off_i[0]);
+    const uint64_t size = mem_arg(size_i[0]);
 
     if (mem_expand(s, R, static_cast<size_t>(off), static_cast<size_t>(size)) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
@@ -41,9 +41,9 @@ bool op_keccak256(EvmState& s, Regs& R) {
 
     const uint8_t* data = size != 0 ? EVMMem::data(static_cast<size_t>(off)) : nullptr;
     const evmc_bytes32 digest = zeg::keccak256_bytes32(data, static_cast<size_t>(size));
-    s.stack[size_i] = u256_from_be(digest.bytes);  // BE digest -> LE slot
+    size_i[0] = u256_from_be(digest.bytes);  // BE digest -> LE slot
 
-    ++R.sp;  // popped offset; result sits in the old size slot
+    ++R.top;  // popped offset; result sits in the old size slot
     ++R.pc;
     return true;
 }

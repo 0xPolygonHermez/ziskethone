@@ -54,42 +54,42 @@ bool call_impl(EvmState& s, Regs& R, evmc_call_kind kind, bool has_value, bool s
 
     if (R.gas < WARM_ACCESS) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= WARM_ACCESS;
-    if (stack_depth(R.sp) < nargs) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(s, R.top, nargs)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    const size_t sp       = R.sp;
-    const size_t iGas     = sp;
-    const size_t iDst     = sp + 1;
-    const size_t iVal     = sp + 2;                 // only when has_value
-    const size_t b        = has_value ? sp + 3 : sp + 2;
-    const size_t iInOff   = b;
-    const size_t iInSize  = b + 1;
-    const size_t iOutOff  = b + 2;
-    const size_t iOutSize = b + 3;
-    const size_t iResult  = iOutSize;               // last popped slot -> pushed result
+    U256* const sp       = R.top;
+    U256* const iGas     = sp;
+    U256* const iDst     = sp + 1;
+    U256* const iVal     = sp + 2;                 // only when has_value
+    U256* const b        = has_value ? sp + 3 : sp + 2;
+    U256* const iInOff   = b;
+    U256* const iInSize  = b + 1;
+    U256* const iOutOff  = b + 2;
+    U256* const iOutSize = b + 3;
+    U256* const iResult  = iOutSize;               // last popped slot -> pushed result
 
     // ----- read operands (captured before any host call / overwrite) -----
     int64_t req_gas;
     {
-        const U256 g = ld_le(s, iGas);
+        const U256 g = ld_le(iGas);
         req_gas = ((g.limbs[1] | g.limbs[2] | g.limbs[3]) != 0 ||
                    g.limbs[0] > static_cast<uint64_t>(INT64_MAX))
                       ? INT64_MAX
                       : static_cast<int64_t>(g.limbs[0]);
     }
 
-    const evmc_address dst = addr_from_slot(s.stack[iDst]);  // low 20 bytes of the value
+    const evmc_address dst = addr_from_slot(iDst[0]);  // low 20 bytes of the value
 
     bool nonzero_value = false;
     evmc_uint256be value_be{};
     if (has_value) {
-        nonzero_value = !u256_is_zero(s.stack[iVal]);
-        u256_to_be(s.stack[iVal], value_be.bytes);  // LE slot -> BE wire value
+        nonzero_value = !u256_is_zero(iVal[0]);
+        u256_to_be(iVal[0], value_be.bytes);  // LE slot -> BE wire value
     }
 
-    const uint64_t in_off   = mem_arg(s.stack[iInOff]);
-    const uint64_t in_size  = mem_arg(s.stack[iInSize]);
-    const uint64_t out_off  = mem_arg(s.stack[iOutOff]);
-    const uint64_t out_size = mem_arg(s.stack[iOutSize]);
+    const uint64_t in_off   = mem_arg(iInOff[0]);
+    const uint64_t in_size  = mem_arg(iInSize[0]);
+    const uint64_t out_off  = mem_arg(iOutOff[0]);
+    const uint64_t out_size = mem_arg(iOutSize[0]);
 
     // Supersede any prior return data (releasing it if it was heap-owned).
     if (s.returnDataOwner.release) s.returnDataOwner.release(&s.returnDataOwner);
@@ -97,8 +97,8 @@ bool call_impl(EvmState& s, Regs& R, evmc_call_kind kind, bool has_value, bool s
 
     // "light" failure (insufficient balance / depth): push 0 and continue.
     auto finish_light = [&]() {
-        s.stack[iResult] = U256{};  // zero is BE-agnostic
-        R.sp = iResult;
+        iResult[0] = U256{};  // zero is BE-agnostic
+        R.top = iResult;
         ++R.pc;
         return true;
     };
@@ -195,7 +195,7 @@ bool call_impl(EvmState& s, Regs& R, evmc_call_kind kind, bool has_value, bool s
     // ----- run the child frame via the host -----
     evmc_result r = s.host->call(s.context, &msg);
 
-    st_le(s, iResult, (r.status_code == EVMC_SUCCESS) ? U256{{1, 0, 0, 0}} : U256{});
+    st_le(iResult, (r.status_code == EVMC_SUCCESS) ? U256{{1, 0, 0, 0}} : U256{});
 
     if (const size_t copy = std::min<size_t>(static_cast<size_t>(out_size), r.output_size); copy > 0)
         std::memcpy(EVMMem::data(static_cast<size_t>(out_off)), r.output_data, copy);
@@ -209,7 +209,7 @@ bool call_impl(EvmState& s, Regs& R, evmc_call_kind kind, bool has_value, bool s
     R.gas        -= (msg.gas - r.gas_left);  // reclaim the child's leftover gas
     s.gas_refund += r.gas_refund;
 
-    R.sp = iResult;
+    R.top = iResult;
     ++R.pc;
     return true;
 }
@@ -230,34 +230,34 @@ bool create_impl(EvmState& s, Regs& R, evmc_call_kind kind) {
 
     if (R.gas < GAS_CREATE) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_CREATE;
-    if (stack_depth(R.sp) < nargs) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(s, R.top, nargs)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
 
-    const size_t sp      = R.sp;
-    const size_t iVal    = sp;
-    const size_t iOff    = sp + 1;
-    const size_t iSize   = sp + 2;
-    const size_t iSalt   = sp + 3;          // CREATE2 only
-    const size_t iResult = is2 ? sp + 3 : sp + 2;
+    U256* const sp      = R.top;
+    U256* const iVal    = sp;
+    U256* const iOff    = sp + 1;
+    U256* const iSize   = sp + 2;
+    U256* const iSalt   = sp + 3;          // CREATE2 only
+    U256* const iResult = is2 ? sp + 3 : sp + 2;
 
-    const bool nonzero_value = !u256_is_zero(s.stack[iVal]);
+    const bool nonzero_value = !u256_is_zero(iVal[0]);
     evmc_uint256be value_be;
-    u256_to_be(s.stack[iVal], value_be.bytes);  // LE slot -> BE wire value
+    u256_to_be(iVal[0], value_be.bytes);  // LE slot -> BE wire value
 
-    const uint64_t off  = mem_arg(s.stack[iOff]);
-    const uint64_t size = mem_arg(s.stack[iSize]);
+    const uint64_t off  = mem_arg(iOff[0]);
+    const uint64_t size = mem_arg(iSize[0]);
 
     evmc_bytes32 salt{};
     if (is2)
-        u256_to_be(s.stack[iSalt], salt.bytes);  // LE slot -> BE wire salt
+        u256_to_be(iSalt[0], salt.bytes);  // LE slot -> BE wire salt
 
     // Supersede any prior return data (releasing it if it was heap-owned).
     if (s.returnDataOwner.release) s.returnDataOwner.release(&s.returnDataOwner);
     s.returnDataOwner = evmc_result{};
 
     auto finish_fail = [&]() {  // "light" failure (depth / balance): push 0, continue
-        s.stack[iResult] = U256{};  // zero is BE-agnostic
-        R.sp = iResult;
+        iResult[0] = U256{};  // zero is BE-agnostic
+        R.top = iResult;
         ++R.pc;
         return true;
     };
@@ -303,11 +303,11 @@ bool create_impl(EvmState& s, Regs& R, evmc_call_kind kind) {
     s.returnDataOwner = r;  // keep revert output (empty on success) as return data
 
     if (r.status_code == EVMC_SUCCESS) {
-        s.stack[iResult] = slot_from_address(r.create_address);  // 20-byte address -> LE slot
+        iResult[0] = slot_from_address(r.create_address);  // 20-byte address -> LE slot
     } else {
-        s.stack[iResult] = U256{};  // zero is BE-agnostic
+        iResult[0] = U256{};  // zero is BE-agnostic
     }
-    R.sp = iResult;
+    R.top = iResult;
     ++R.pc;
     return true;
 }
@@ -317,9 +317,9 @@ bool op_create2(EvmState& s, Regs& R) { return create_impl(s, R, EVMC_CREATE2); 
 
 // RETURN (success) / REVERT — set the frame's output window and halt.
 bool return_impl(EvmState& s, Regs& R, evmc_status_code st) {
-    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const uint64_t off  = mem_arg(s.stack[R.sp]);
-    const uint64_t size = mem_arg(s.stack[R.sp + 1]);
+    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const uint64_t off  = mem_arg(R.top[0]);
+    const uint64_t size = mem_arg(R.top[1]);
     if (size > 0) {
         if (mem_expand(s, R, static_cast<size_t>(off), static_cast<size_t>(size)) != MemError::Ok) {
             s.status = EVMC_OUT_OF_GAS;
@@ -341,9 +341,9 @@ bool op_revert(EvmState& s, Regs& R) { return return_impl(s, R, EVMC_REVERT); }
 bool op_returndatasize(EvmState& s, Regs& R) {
     if (R.gas < GAS_BASE) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_BASE;
-    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --R.sp;
-    st_le(s, R.sp, U256{{static_cast<uint64_t>(s.returnDataOwner.output_size), 0, 0, 0}});
+    if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.top;
+    st_le(R.top, U256{{static_cast<uint64_t>(s.returnDataOwner.output_size), 0, 0, 0}});
     ++R.pc;
     return true;
 }
@@ -352,10 +352,10 @@ bool op_returndatasize(EvmState& s, Regs& R) {
 bool op_returndatacopy(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (stack_depth(R.sp) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const uint64_t mem_off = mem_arg(s.stack[R.sp]);
-    const uint64_t ret_off = mem_arg(s.stack[R.sp + 1]);
-    const uint64_t size    = mem_arg(s.stack[R.sp + 2]);
+    if (depth_lt(s, R.top, 3)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const uint64_t mem_off = mem_arg(R.top[0]);
+    const uint64_t ret_off = mem_arg(R.top[1]);
+    const uint64_t size    = mem_arg(R.top[2]);
 
     if (mem_expand(s, R, static_cast<size_t>(mem_off), static_cast<size_t>(size)) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS;
@@ -373,7 +373,7 @@ bool op_returndatacopy(EvmState& s, Regs& R) {
     if (size > 0)
         std::memcpy(EVMMem::data(static_cast<size_t>(mem_off)),
                     s.returnDataOwner.output_data + ret_off, static_cast<size_t>(size));
-    R.sp += 3;
+    R.top += 3;
     ++R.pc;
     return true;
 }
@@ -390,10 +390,10 @@ bool op_invalid(EvmState& s, Regs& R) {
 bool op_selfdestruct(EvmState& s, Regs& R) {
     if (R.gas < SELFDESTRUCT_GAS) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= SELFDESTRUCT_GAS;
-    if (stack_depth(R.sp) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(s, R.top, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
 
-    const evmc_address ben = addr_from_slot(s.stack[R.sp]);  // low 20 bytes of the value
+    const evmc_address ben = addr_from_slot(R.top[0]);  // low 20 bytes of the value
 
     // Cold beneficiary access (Berlin+): the full 2600 (no warm base for SELFDESTRUCT).
     if (s.rev >= EVMC_BERLIN &&

@@ -26,9 +26,9 @@ template <unsigned N>
 inline bool push_small(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --R.sp;
-    U256& w = s.stack[R.sp];
+    if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.top;
+    U256& w = R.top[0];
     w.limbs[1] = 0; w.limbs[2] = 0; w.limbs[3] = 0;
     const size_t pc1 = R.pc + 1;
     if (pc1 + 8 <= s.codeSize) {
@@ -55,13 +55,13 @@ template <unsigned N>
 inline bool push_big(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --R.sp;
+    if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.top;
     const size_t pc1 = R.pc + 1;
     uint8_t be[32] = {};
     const size_t avail = pc1 < s.codeSize ? std::min<size_t>(N, s.codeSize - pc1) : 0;
     std::memcpy(be + (32 - N), s.code + pc1, avail);  // right-aligned; low bytes 0 if truncated
-    s.stack[R.sp] = u256_from_be(be);
+    R.top[0] = u256_from_be(be);
     R.pc += N + 1;
     return true;
 }
@@ -70,9 +70,9 @@ inline bool push_big(EvmState& s, Regs& R) {
 bool op_push0(EvmState& s, Regs& R) {
     if (R.gas < GAS_BASE) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_BASE;
-    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --R.sp;
-    s.stack[R.sp] = U256{};
+    if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.top;
+    R.top[0] = U256{};
     ++R.pc;
     return true;
 }

@@ -36,9 +36,9 @@ inline size_t jump_target(const U256& d) {
 bool op_jump(EvmState& s, Regs& R) {
     if (R.gas < GAS_MID) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_MID;
-    if (stack_depth(R.sp) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const size_t dest = jump_target(ld_le(s, R.sp));
-    ++R.sp;  // pop the target
+    if (depth_lt(s, R.top, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const size_t dest = jump_target(ld_le(R.top));
+    ++R.top;  // pop the target
     if (!s.is_jumpdest(dest)) { s.status = EVMC_BAD_JUMP_DESTINATION; return false; }
     // Fold the landing JUMPDEST: charge its gas and resume at dest+1.
     if (R.gas < GAS_JUMPDEST) { s.status = EVMC_OUT_OF_GAS; return false; }
@@ -51,11 +51,11 @@ bool op_jump(EvmState& s, Regs& R) {
 bool op_jumpi(EvmState& s, Regs& R) {
     if (R.gas < GAS_HIGH) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_HIGH;
-    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     // target (the condition is endianness-independent — zero is zero in BE too)
-    const size_t dest = jump_target(ld_le(s, R.sp));
-    const bool   take = !u256_is_zero(s.stack[R.sp + 1]);  // cond != 0
-    R.sp += 2;  // pop target and condition
+    const size_t dest = jump_target(ld_le(R.top));
+    const bool   take = !u256_is_zero(R.top[1]);  // cond != 0
+    R.top += 2;  // pop target and condition
     if (take) {
         if (!s.is_jumpdest(dest)) { s.status = EVMC_BAD_JUMP_DESTINATION; return false; }
         // Fold the landing JUMPDEST: charge its gas and resume at dest+1.
@@ -80,8 +80,8 @@ bool op_jumpdest(EvmState& s, Regs& R) {
 bool op_pop(EvmState& s, Regs& R) {
     if (R.gas < GAS_BASE) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_BASE;
-    if (stack_depth(R.sp) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    ++R.sp;
+    if (depth_lt(s, R.top, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    ++R.top;
     ++R.pc;
     return true;
 }
@@ -90,9 +90,9 @@ bool op_pop(EvmState& s, Regs& R) {
 bool op_pc(EvmState& s, Regs& R) {
     if (R.gas < GAS_BASE) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_BASE;
-    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --R.sp;
-    st_le(s, R.sp, U256{{static_cast<uint64_t>(R.pc), 0, 0, 0}});
+    if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.top;
+    st_le(R.top, U256{{static_cast<uint64_t>(R.pc), 0, 0, 0}});
     ++R.pc;
     return true;
 }
@@ -101,9 +101,9 @@ bool op_pc(EvmState& s, Regs& R) {
 bool op_gas(EvmState& s, Regs& R) {
     if (R.gas < GAS_BASE) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_BASE;
-    if (stack_depth(R.sp) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --R.sp;
-    st_le(s, R.sp, U256{{static_cast<uint64_t>(R.gas), 0, 0, 0}});
+    if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    --R.top;
+    st_le(R.top, U256{{static_cast<uint64_t>(R.gas), 0, 0, 0}});
     ++R.pc;
     return true;
 }

@@ -238,10 +238,10 @@ template <evmc_revision Rev>
 // then write the final state back (run() reads EvmState::gas for the result).
 template <evmc_revision Rev>
 void dispatch_loop(EvmState& s) {
-    Regs R{s.gas, s.stackPointer, s.pc};
+    Regs R{s.gas, s.stack + s.stackPointer, s.pc};
     dispatch_inner<Rev>(s, R, s.code, s.codeSize);
     s.gas = R.gas;
-    s.stackPointer = R.sp;
+    s.stackPointer = static_cast<size_t>(R.top - s.stack);
     s.pc = R.pc;
 }
 

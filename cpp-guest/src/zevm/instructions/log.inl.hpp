@@ -25,12 +25,12 @@ bool log_impl(EvmState& s, Regs& R, unsigned n) {
     const int64_t base = GAS_LOG * static_cast<int64_t>(1 + n);
     if (R.gas < base) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= base;
-    if (stack_depth(R.sp) < 2u + n) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(s, R.top, 2u + n)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
 
-    const size_t sp = R.sp;
-    const uint64_t off  = mem_arg(s.stack[sp]);
-    const uint64_t size = mem_arg(s.stack[sp + 1]);
+    U256* const sp = R.top;
+    const uint64_t off  = mem_arg(sp[0]);
+    const uint64_t size = mem_arg(sp[1]);
 
     if (mem_expand(s, R, static_cast<size_t>(off), static_cast<size_t>(size)) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
@@ -42,13 +42,13 @@ bool log_impl(EvmState& s, Regs& R, unsigned n) {
     // topics[i] is the word just below (offset, size): sp+2 .. sp+1+n.
     evmc_bytes32 topics[4];
     for (unsigned i = 0; i < n; ++i)
-        u256_to_be(s.stack[sp + 2 + i], topics[i].bytes);  // LE slot -> BE wire topic
+        u256_to_be(sp[2 + i], topics[i].bytes);  // LE slot -> BE wire topic
 
     const uint8_t* data = size != 0 ? EVMMem::data(static_cast<size_t>(off)) : nullptr;
     s.host->emit_log(s.context, &s.evmcMsg->recipient, data, static_cast<size_t>(size),
                      topics, n);
 
-    R.sp += 2 + n;  // pop offset, size, and the n topics
+    R.top += 2 + n;  // pop offset, size, and the n topics
     ++R.pc;
     return true;
 }

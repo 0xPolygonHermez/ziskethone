@@ -56,9 +56,9 @@ inline void udivmod(const U256& a, const U256& b, U256& q, U256& r) {
 bool op_add(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256& sa = s.stack[R.sp];      // a, LE slot (distinct from sb)
-    U256&       sb = s.stack[R.sp + 1];  // b / result, LE slot
+    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256& sa = R.top[0];      // a, LE slot (distinct from sb)
+    U256&       sb = R.top[1];  // b / result, LE slot
 
     if ((sa.limbs[1] | sa.limbs[2] | sa.limbs[3]) == 0) {  // a < 2^64 (covers both-small)
         if (sa.limbs[0] != 0) {                            // a == 0 -> result is b, in place
@@ -89,12 +89,12 @@ bool op_add(EvmState& s, Regs& R) {
             }
         }
     } else {                                               // both >= 2^64: full path
-        const U256 a = ld_le(s, R.sp);
-        U256       b = ld_le(s, R.sp + 1);
+        const U256 a = ld_le(R.top);
+        U256       b = ld_le(R.top + 1);
         zeg::bi::add256(a.limbs, b.limbs, /*cin=*/0, b.limbs);  // b = a + b (mod 2^256)
-        st_le(s, R.sp + 1, b);
+        st_le(R.top + 1, b);
     }
-    ++R.sp;
+    ++R.top;
     ++R.pc;
     return true;
 }
@@ -103,12 +103,12 @@ bool op_add(EvmState& s, Regs& R) {
 bool op_mul(EvmState& s, Regs& R) {
     if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_LOW;
-    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, R.sp);
-    U256       b = ld_le(s, R.sp + 1);
+    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 a = ld_le(R.top);
+    U256       b = ld_le(R.top + 1);
     b = mul_low(a, b);
-    st_le(s, R.sp + 1, b);
-    ++R.sp;
+    st_le(R.top + 1, b);
+    ++R.top;
     ++R.pc;
     return true;
 }
@@ -124,9 +124,9 @@ bool op_mul(EvmState& s, Regs& R) {
 bool op_sub(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256& sa = s.stack[R.sp];      // a, minuend (distinct from sb)
-    U256&       sb = s.stack[R.sp + 1];  // b, subtrahend / result
+    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256& sa = R.top[0];      // a, minuend (distinct from sb)
+    U256&       sb = R.top[1];  // b, subtrahend / result
 
     if ((sb.limbs[1] | sb.limbs[2] | sb.limbs[3]) == 0) {  // b < 2^64
         if (sb.limbs[0] == 0) {
@@ -146,14 +146,14 @@ bool op_sub(EvmState& s, Regs& R) {
             }
         }
     } else {                                               // b >= 2^64: full LE path
-        const U256 a = ld_le(s, R.sp);
-        U256       b = ld_le(s, R.sp + 1);
+        const U256 a = ld_le(R.top);
+        U256       b = ld_le(R.top + 1);
         // a - b == a + ~b + 1 (two's complement), via the accelerated adder.
         const uint64_t nb[4] = {~b.limbs[0], ~b.limbs[1], ~b.limbs[2], ~b.limbs[3]};
         zeg::bi::add256(a.limbs, nb, /*cin=*/1, b.limbs);
-        st_le(s, R.sp + 1, b);
+        st_le(R.top + 1, b);
     }
-    ++R.sp;
+    ++R.top;
     ++R.pc;
     return true;
 }
@@ -162,16 +162,16 @@ bool op_sub(EvmState& s, Regs& R) {
 bool op_div(EvmState& s, Regs& R) {
     if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_LOW;
-    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, R.sp);
-    U256       b = ld_le(s, R.sp + 1);
+    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 a = ld_le(R.top);
+    U256       b = ld_le(R.top + 1);
     if (u256_is_zero(b)) {
         b = U256{};
     } else {
         U256 q, r; udivmod(a, b, q, r); b = q;
     }
-    st_le(s, R.sp + 1, b);
-    ++R.sp;
+    st_le(R.top + 1, b);
+    ++R.top;
     ++R.pc;
     return true;
 }
@@ -180,9 +180,9 @@ bool op_div(EvmState& s, Regs& R) {
 bool op_sdiv(EvmState& s, Regs& R) {
     if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_LOW;
-    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, R.sp);
-    U256       b = ld_le(s, R.sp + 1);
+    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 a = ld_le(R.top);
+    U256       b = ld_le(R.top + 1);
     if (u256_is_zero(b)) {
         b = U256{};
     } else {
@@ -201,8 +201,8 @@ bool op_sdiv(EvmState& s, Regs& R) {
             b = (na != nb) ? u256_neg(q) : q;
         }
     }
-    st_le(s, R.sp + 1, b);
-    ++R.sp;
+    st_le(R.top + 1, b);
+    ++R.top;
     ++R.pc;
     return true;
 }
@@ -211,16 +211,16 @@ bool op_sdiv(EvmState& s, Regs& R) {
 bool op_mod(EvmState& s, Regs& R) {
     if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_LOW;
-    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, R.sp);
-    U256       b = ld_le(s, R.sp + 1);
+    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 a = ld_le(R.top);
+    U256       b = ld_le(R.top + 1);
     if (u256_is_zero(b)) {
         b = U256{};
     } else {
         U256 q, r; udivmod(a, b, q, r); b = r;
     }
-    st_le(s, R.sp + 1, b);
-    ++R.sp;
+    st_le(R.top + 1, b);
+    ++R.top;
     ++R.pc;
     return true;
 }
@@ -229,9 +229,9 @@ bool op_mod(EvmState& s, Regs& R) {
 bool op_smod(EvmState& s, Regs& R) {
     if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_LOW;
-    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, R.sp);
-    U256       b = ld_le(s, R.sp + 1);
+    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 a = ld_le(R.top);
+    U256       b = ld_le(R.top + 1);
     if (u256_is_zero(b)) {
         b = U256{};
     } else {
@@ -241,8 +241,8 @@ bool op_smod(EvmState& s, Regs& R) {
         U256 q, r; udivmod(ua, ub, q, r);
         b = na ? u256_neg(r) : r;
     }
-    st_le(s, R.sp + 1, b);
-    ++R.sp;
+    st_le(R.top + 1, b);
+    ++R.top;
     ++R.pc;
     return true;
 }
@@ -251,10 +251,10 @@ bool op_smod(EvmState& s, Regs& R) {
 bool op_addmod(EvmState& s, Regs& R) {
     if (R.gas < GAS_MID) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_MID;
-    if (stack_depth(R.sp) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, R.sp);
-    const U256 b = ld_le(s, R.sp + 1);
-    U256       m = ld_le(s, R.sp + 2);
+    if (depth_lt(s, R.top, 3)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 a = ld_le(R.top);
+    const U256 b = ld_le(R.top + 1);
+    U256       m = ld_le(R.top + 2);
     if (u256_is_zero(m)) {
         m = U256{};
     } else {
@@ -263,8 +263,8 @@ bool op_addmod(EvmState& s, Regs& R) {
         zeg::bi::arith256_mod(a.limbs, ONE4, b.limbs, m.limbs, d);
         m = U256{{d[0], d[1], d[2], d[3]}};
     }
-    st_le(s, R.sp + 2, m);
-    R.sp += 2;
+    st_le(R.top + 2, m);
+    R.top += 2;
     ++R.pc;
     return true;
 }
@@ -273,10 +273,10 @@ bool op_addmod(EvmState& s, Regs& R) {
 bool op_mulmod(EvmState& s, Regs& R) {
     if (R.gas < GAS_MID) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_MID;
-    if (stack_depth(R.sp) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 a = ld_le(s, R.sp);
-    const U256 b = ld_le(s, R.sp + 1);
-    U256       m = ld_le(s, R.sp + 2);
+    if (depth_lt(s, R.top, 3)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 a = ld_le(R.top);
+    const U256 b = ld_le(R.top + 1);
+    U256       m = ld_le(R.top + 2);
     if (u256_is_zero(m)) {
         m = U256{};
     } else {
@@ -284,8 +284,8 @@ bool op_mulmod(EvmState& s, Regs& R) {
         zeg::bi::arith256_mod(a.limbs, b.limbs, ZERO4, m.limbs, d);
         m = U256{{d[0], d[1], d[2], d[3]}};
     }
-    st_le(s, R.sp + 2, m);
-    R.sp += 2;
+    st_le(R.top + 2, m);
+    R.top += 2;
     ++R.pc;
     return true;
 }
@@ -298,9 +298,9 @@ bool op_mulmod(EvmState& s, Regs& R) {
 // (limbs[3]) plus a clz on it — no 256-iteration scan. The square-and-multiply
 // then walks the bits top..0 lane by lane, skipping the leading all-zero lanes.
 bool op_exp(EvmState& s, Regs& R) {
-    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256  base = ld_le(s, R.sp);
-    const U256& e    = s.stack[R.sp + 1];  // exponent, little-endian slot
+    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256  base = ld_le(R.top);
+    const U256& e    = R.top[1];  // exponent, little-endian slot
 
     // Highest set bit: first non-zero lane (MS first) + clz on it.
     int top = -1;
@@ -325,8 +325,8 @@ bool op_exp(EvmState& s, Regs& R) {
             if ((lane >> b) & 1ULL) result = mul_low(result, base);
         }
     }
-    st_le(s, R.sp + 1, result);
-    ++R.sp;
+    st_le(R.top + 1, result);
+    ++R.top;
     ++R.pc;
     return true;
 }
@@ -336,9 +336,9 @@ bool op_exp(EvmState& s, Regs& R) {
 bool op_signextend(EvmState& s, Regs& R) {
     if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_LOW;
-    if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256 i = ld_le(s, R.sp);
-    U256       x = ld_le(s, R.sp + 1);
+    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 i = ld_le(R.top);
+    U256       x = ld_le(R.top + 1);
 
     const bool in_range = (i.limbs[1] | i.limbs[2] | i.limbs[3]) == 0 && i.limbs[0] <= 30;
     if (in_range) {
@@ -355,8 +355,8 @@ bool op_signextend(EvmState& s, Regs& R) {
             for (unsigned l = limb + 1; l < 4; ++l) x.limbs[l] = 0;
         }
     }
-    st_le(s, R.sp + 1, x);
-    ++R.sp;
+    st_le(R.top + 1, x);
+    ++R.top;
     ++R.pc;
     return true;
 }

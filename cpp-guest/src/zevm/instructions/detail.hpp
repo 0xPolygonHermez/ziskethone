@@ -28,7 +28,9 @@ namespace zevm {
 // R.gas's address is never taken (see the mem_* wrappers) so it stays a register.
 struct Regs {
     int64_t gas;   // mirrors EvmState::gas
-    size_t  sp;    // mirrors EvmState::stackPointer (64-bit: it indexes the stack)
+    U256*   top;   // pointer to the current top-of-stack slot (&s.stack[stackPointer]);
+                   // evmone-style — avoids the per-access index*sizeof + zero-extend,
+                   // and sidesteps a GCC 15/16 RISC-V miscompile of the 64-bit index.
     size_t  pc;    // mirrors EvmState::pc
 };
 
@@ -42,10 +44,15 @@ inline constexpr int64_t GAS_HIGH    = 10;  // JUMPI
 inline constexpr int64_t GAS_EXP     = 10;  // EXP base
 inline constexpr int64_t GAS_EXPBYTE = 50;  // EXP per byte of exponent (>= Spurious Dragon)
 
-// Number of live operands on the stack. stackPointer counts DOWN from
-// kStackLimit (empty) toward 0 (full), so depth == kStackLimit - sp.
-inline size_t stack_depth(size_t sp) {
-    return kStackLimit - sp;
+// Stack bounds as pointer comparisons (evmone-style; no index math). The top
+// pointer counts DOWN from s.stack+kStackLimit (empty) toward s.stack (full).
+// depth_lt(need): fewer than `need` operands present (underflow).
+inline bool depth_lt(const EvmState& s, const U256* top, size_t need) {
+    return top > s.stack + (kStackLimit - need);
+}
+// stack_full: no room left to push (depth == kStackLimit).
+inline bool stack_full(const EvmState& s, const U256* top) {
+    return top <= s.stack;
 }
 
 // Unaligned 64-bit load from code.
@@ -67,10 +74,10 @@ inline uint64_t load_u64(const uint8_t* p) {
 // Stack slot `i` as a little-endian value. The slot already holds LE limbs, so
 // this is just a copy (kept as a named accessor so the arithmetic handlers read
 // clearly and to localize the representation choice).
-inline U256 ld_le(const EvmState& s, size_t i) { return s.stack[i]; }
+inline U256 ld_le(const U256* p) { return *p; }
 
-// Store a little-endian value into slot `i` (the slot is LE — a plain copy).
-inline void st_le(EvmState& s, size_t i, const U256& v) { s.stack[i] = v; }
+// Store a little-endian value into slot `*p` (the slot is LE — a plain copy).
+inline void st_le(U256* p, const U256& v) { *p = v; }
 
 // A 256-bit little-endian stack slot used as a memory offset/size: its integer
 // value when it fits in 64 bits (the low lane), or UINT64_MAX when any higher
