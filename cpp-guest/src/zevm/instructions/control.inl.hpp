@@ -5,6 +5,13 @@
 // JUMP/JUMPI validate the target against the analyzer's push-data map via
 // EvmState::is_jumpdest (a 0x5b opcode that isn't PUSH immediate data); an
 // invalid target halts the frame with EVMC_BAD_JUMP_DESTINATION.
+//
+// JUMPDEST fusion: a valid target is *always* a JUMPDEST (0x5b) — a no-op that
+// only charges GAS_JUMPDEST and steps past itself. So a JUMP (and a taken JUMPI)
+// fold that landing JUMPDEST in: charge its gas and resume at dest+1, saving a
+// whole dispatch iteration. The charge order (jump gas → validate → jumpdest gas)
+// is preserved, so gas/OOG/BAD_JUMP behaviour is identical. A JUMPDEST reached by
+// fall-through still runs op_jumpdest normally.
 
 #include "detail.hpp"
 
@@ -25,7 +32,7 @@ inline size_t jump_target(const U256& d) {
                                                        : static_cast<size_t>(d.limbs[0]);
 }
 
-// 0x56 JUMP — set pc to a validated jump target.
+// 0x56 JUMP — set pc to a validated jump target (landing JUMPDEST folded in).
 bool op_jump(EvmState& s, Regs& R) {
     if (R.gas < GAS_MID) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_MID;
@@ -33,7 +40,10 @@ bool op_jump(EvmState& s, Regs& R) {
     const size_t dest = jump_target(ld_le(s, R.sp));
     ++R.sp;  // pop the target
     if (!s.is_jumpdest(dest)) { s.status = EVMC_BAD_JUMP_DESTINATION; return false; }
-    R.pc = dest;
+    // Fold the landing JUMPDEST: charge its gas and resume at dest+1.
+    if (R.gas < GAS_JUMPDEST) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_JUMPDEST;
+    R.pc = dest + 1;
     return true;
 }
 
@@ -48,7 +58,10 @@ bool op_jumpi(EvmState& s, Regs& R) {
     R.sp += 2;  // pop target and condition
     if (take) {
         if (!s.is_jumpdest(dest)) { s.status = EVMC_BAD_JUMP_DESTINATION; return false; }
-        R.pc = dest;
+        // Fold the landing JUMPDEST: charge its gas and resume at dest+1.
+        if (R.gas < GAS_JUMPDEST) { s.status = EVMC_OUT_OF_GAS; return false; }
+        R.gas -= GAS_JUMPDEST;
+        R.pc = dest + 1;
     } else {
         ++R.pc;
     }
