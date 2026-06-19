@@ -27,8 +27,8 @@ bool op_keccak256(EvmState& s, Regs& R) {
     R.gas -= GAS_KECCAK256;
     if (stack_depth(R.sp) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    const uint32_t off_i  = R.sp;
-    const uint32_t size_i = R.sp + 1;
+    const size_t off_i  = R.sp;
+    const size_t size_i = R.sp + 1;
     const uint64_t off  = mem_arg(s.stack[off_i]);
     const uint64_t size = mem_arg(s.stack[size_i]);
 

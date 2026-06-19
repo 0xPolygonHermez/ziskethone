@@ -50,22 +50,22 @@ inline bool be_lt(const evmc_uint256be& a, const evmc_uint256be& b) {
 //   has_value      — CALL/CALLCODE take a value arg (DELEGATECALL/STATICCALL don't)
 //   static_forced  — STATICCALL forces the child into static mode
 bool call_impl(EvmState& s, Regs& R, evmc_call_kind kind, bool has_value, bool static_forced) {
-    const uint32_t nargs = has_value ? 7u : 6u;
+    const size_t nargs = has_value ? 7u : 6u;
 
     if (R.gas < WARM_ACCESS) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= WARM_ACCESS;
     if (stack_depth(R.sp) < nargs) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    const uint32_t sp       = R.sp;
-    const uint32_t iGas     = sp;
-    const uint32_t iDst     = sp + 1;
-    const uint32_t iVal     = sp + 2;                 // only when has_value
-    const uint32_t b        = has_value ? sp + 3 : sp + 2;
-    const uint32_t iInOff   = b;
-    const uint32_t iInSize  = b + 1;
-    const uint32_t iOutOff  = b + 2;
-    const uint32_t iOutSize = b + 3;
-    const uint32_t iResult  = iOutSize;               // last popped slot -> pushed result
+    const size_t sp       = R.sp;
+    const size_t iGas     = sp;
+    const size_t iDst     = sp + 1;
+    const size_t iVal     = sp + 2;                 // only when has_value
+    const size_t b        = has_value ? sp + 3 : sp + 2;
+    const size_t iInOff   = b;
+    const size_t iInSize  = b + 1;
+    const size_t iOutOff  = b + 2;
+    const size_t iOutSize = b + 3;
+    const size_t iResult  = iOutSize;               // last popped slot -> pushed result
 
     // ----- read operands (captured before any host call / overwrite) -----
     int64_t req_gas;
@@ -226,19 +226,19 @@ bool op_staticcall(EvmState& s, Regs& R)   { return call_impl(s, R, EVMC_CALL,  
 // message, and push the created address (0 on failure).
 bool create_impl(EvmState& s, Regs& R, evmc_call_kind kind) {
     const bool     is2   = (kind == EVMC_CREATE2);
-    const uint32_t nargs = is2 ? 4u : 3u;
+    const size_t nargs = is2 ? 4u : 3u;
 
     if (R.gas < GAS_CREATE) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_CREATE;
     if (stack_depth(R.sp) < nargs) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
 
-    const uint32_t sp      = R.sp;
-    const uint32_t iVal    = sp;
-    const uint32_t iOff    = sp + 1;
-    const uint32_t iSize   = sp + 2;
-    const uint32_t iSalt   = sp + 3;          // CREATE2 only
-    const uint32_t iResult = is2 ? sp + 3 : sp + 2;
+    const size_t sp      = R.sp;
+    const size_t iVal    = sp;
+    const size_t iOff    = sp + 1;
+    const size_t iSize   = sp + 2;
+    const size_t iSalt   = sp + 3;          // CREATE2 only
+    const size_t iResult = is2 ? sp + 3 : sp + 2;
 
     const bool nonzero_value = !u256_is_zero(s.stack[iVal]);
     evmc_uint256be value_be;

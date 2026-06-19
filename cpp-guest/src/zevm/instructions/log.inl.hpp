@@ -28,7 +28,7 @@ bool log_impl(EvmState& s, Regs& R, unsigned n) {
     if (stack_depth(R.sp) < 2u + n) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
 
-    const uint32_t sp = R.sp;
+    const size_t sp = R.sp;
     const uint64_t off  = mem_arg(s.stack[sp]);
     const uint64_t size = mem_arg(s.stack[sp + 1]);
 

@@ -49,7 +49,7 @@ constexpr SStoreCost SSTORE_COST[] = {
 
 // The 32 big-endian bytes of stack slot `i` (its LE integer value byteswapped to
 // the on-wire evmc_bytes32 form the host expects for keys/values).
-inline evmc_bytes32 slot_bytes(const EvmState& s, uint32_t i) {
+inline evmc_bytes32 slot_bytes(const EvmState& s, size_t i) {
     evmc_bytes32 b;
     u256_to_be(s.stack[i], b.bytes);
     return b;

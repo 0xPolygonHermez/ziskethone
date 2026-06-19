@@ -110,7 +110,7 @@ bool op_mcopy(EvmState& s, Regs& R) {
     R.gas -= GAS_VERYLOW;
     if (stack_depth(R.sp) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    const uint32_t sp = R.sp;
+    const size_t sp = R.sp;
     const uint64_t dst  = mem_arg(s.stack[sp]);
     const uint64_t src  = mem_arg(s.stack[sp + 1]);
     const uint64_t size = mem_arg(s.stack[sp + 2]);

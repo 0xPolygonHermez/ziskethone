@@ -63,7 +63,7 @@ struct EvmState {
     // toward 0 (full). A push pre-decrements, a pop post-increments. Number of
     // live items == kStackLimit - stackPointer.
     U256           stack[kStackLimit];
-    uint32_t       stackPointer;       // kStackLimit == empty
+    size_t         stackPointer;       // kStackLimit == empty (64-bit: indexes the stack)
 
     // ----- memory -----
     // Handle into the static EVMMem manager (== this frame's call depth). The

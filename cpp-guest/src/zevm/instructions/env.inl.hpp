@@ -51,7 +51,7 @@ inline bool push_address(EvmState& s, Regs& R, const evmc_address& a) {  // 20 b
 }
 
 // The address operand in stack slot `i`: the low 20 big-endian bytes of its value.
-inline evmc_address addr_arg(EvmState& s, uint32_t i) {
+inline evmc_address addr_arg(EvmState& s, size_t i) {
     return addr_from_slot(s.stack[i]);
 }
 
@@ -84,7 +84,7 @@ inline bool data_copy(EvmState& s, Regs& R, const uint8_t* data, uint64_t dataLe
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
     if (stack_depth(R.sp) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const uint32_t sp = R.sp;
+    const size_t sp = R.sp;
     const uint64_t dst  = mem_arg(s.stack[sp]);
     const uint64_t src  = mem_arg(s.stack[sp + 1]);
     const uint64_t size = mem_arg(s.stack[sp + 2]);
@@ -217,7 +217,7 @@ bool op_calldataload(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
     if (stack_depth(R.sp) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const uint32_t i = R.sp;
+    const size_t i = R.sp;
     const uint64_t idx        = mem_arg(s.stack[i]);
     const uint64_t input_size = s.evmcMsg->input_size;
     uint8_t buf[32] = {};
@@ -245,7 +245,7 @@ bool op_balance(EvmState& s, Regs& R) {
     if (R.gas < WARM_ACCESS) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= WARM_ACCESS;
     if (stack_depth(R.sp) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const uint32_t i = R.sp;
+    const size_t i = R.sp;
     const evmc_address addr = addr_arg(s, i);
     if (!charge_account_access(s, R, addr)) return false;
     const evmc_uint256be bal = s.host->get_balance(s.context, &addr);
@@ -258,7 +258,7 @@ bool op_extcodesize(EvmState& s, Regs& R) {
     if (R.gas < WARM_ACCESS) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= WARM_ACCESS;
     if (stack_depth(R.sp) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const uint32_t i = R.sp;
+    const size_t i = R.sp;
     const evmc_address addr = addr_arg(s, i);
     if (!charge_account_access(s, R, addr)) return false;
     st_le(s, i, U256{{s.host->get_code_size(s.context, &addr), 0, 0, 0}});
@@ -270,7 +270,7 @@ bool op_extcodehash(EvmState& s, Regs& R) {
     if (R.gas < WARM_ACCESS) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= WARM_ACCESS;
     if (stack_depth(R.sp) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const uint32_t i = R.sp;
+    const size_t i = R.sp;
     const evmc_address addr = addr_arg(s, i);
     if (!charge_account_access(s, R, addr)) return false;
     const evmc_bytes32 h = s.host->get_code_hash(s.context, &addr);
@@ -284,7 +284,7 @@ bool op_extcodecopy(EvmState& s, Regs& R) {
     if (R.gas < WARM_ACCESS) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= WARM_ACCESS;
     if (stack_depth(R.sp) < 4) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const uint32_t sp = R.sp;
+    const size_t sp = R.sp;
     const evmc_address addr = addr_arg(s, sp);  // top
     const uint64_t dst  = mem_arg(s.stack[sp + 1]);
     const uint64_t src  = mem_arg(s.stack[sp + 2]);
@@ -312,7 +312,7 @@ bool op_blockhash(EvmState& s, Regs& R) {
     if (R.gas < GAS_BLOCKHASH) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_BLOCKHASH;
     if (stack_depth(R.sp) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const uint32_t i = R.sp;
+    const size_t i = R.sp;
     const U256 v = ld_le(s, i);
     const evmc_tx_context tx = s.host->get_tx_context(s.context);
     const int64_t upper = tx.block_number;
@@ -332,7 +332,7 @@ bool op_blobhash(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
     if (stack_depth(R.sp) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const uint32_t i = R.sp;
+    const size_t i = R.sp;
     const U256 v = ld_le(s, i);
     const evmc_tx_context tx = s.host->get_tx_context(s.context);
     evmc_bytes32 h{};

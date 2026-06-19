@@ -27,9 +27,9 @@ namespace zevm {
 // halts; nothing else reads the EvmState copies while a frame runs. Crucially,
 // R.gas's address is never taken (see the mem_* wrappers) so it stays a register.
 struct Regs {
-    int64_t  gas;   // mirrors EvmState::gas
-    uint32_t sp;    // mirrors EvmState::stackPointer
-    size_t   pc;    // mirrors EvmState::pc
+    int64_t gas;   // mirrors EvmState::gas
+    size_t  sp;    // mirrors EvmState::stackPointer (64-bit: it indexes the stack)
+    size_t  pc;    // mirrors EvmState::pc
 };
 
 // EVM gas cost tiers (subset; grows as opcodes land).
@@ -44,7 +44,7 @@ inline constexpr int64_t GAS_EXPBYTE = 50;  // EXP per byte of exponent (>= Spur
 
 // Number of live operands on the stack. stackPointer counts DOWN from
 // kStackLimit (empty) toward 0 (full), so depth == kStackLimit - sp.
-inline size_t stack_depth(uint32_t sp) {
+inline size_t stack_depth(size_t sp) {
     return kStackLimit - sp;
 }
 
@@ -67,10 +67,10 @@ inline uint64_t load_u64(const uint8_t* p) {
 // Stack slot `i` as a little-endian value. The slot already holds LE limbs, so
 // this is just a copy (kept as a named accessor so the arithmetic handlers read
 // clearly and to localize the representation choice).
-inline U256 ld_le(const EvmState& s, uint32_t i) { return s.stack[i]; }
+inline U256 ld_le(const EvmState& s, size_t i) { return s.stack[i]; }
 
 // Store a little-endian value into slot `i` (the slot is LE — a plain copy).
-inline void st_le(EvmState& s, uint32_t i, const U256& v) { s.stack[i] = v; }
+inline void st_le(EvmState& s, size_t i, const U256& v) { s.stack[i] = v; }
 
 // A 256-bit little-endian stack slot used as a memory offset/size: its integer
 // value when it fits in 64 bits (the low lane), or UINT64_MAX when any higher
