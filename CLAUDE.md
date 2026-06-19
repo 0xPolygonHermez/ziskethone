@@ -17,17 +17,21 @@
   - `cmake -S cpp-guest -B cpp-guest/build      -DEVM_BACKEND=evmone` → `build/zisk_eth_guest`
   - `cmake -S cpp-guest -B cpp-guest/build-zevm -DEVM_BACKEND=zevm`   → `build-zevm/zisk_eth_guest`
 
-## RISC-V ELF cross-compiler — use GCC 14 (GCC 15 AND 16 are broken)
+## RISC-V ELF cross-compiler
 
-The ZisK guest ELF (`cpp-guest/zisk`) must be built with **GCC 14** (xpack
-`riscv-none-elf-gcc` 14.x). **GCC 15.2.0 and GCC 16.1.0 both miscompile the zevm
-guest** → a *wrong block-state root*. It is a **GCC RISC-V codegen regression, not a
-zevm bug**: host g++ 13 + full Prague EEST pass, and host UBSan+ASan are clean, so the
-source is correct; GCC 14 is correct, 15 and 16 are wrong (the wrong hash even varies
-with `-O` level). Symptom: the ELF hash is wrong (e.g. starts `0xaaaa…`) while the host
-build + EEST pass. Ubuntu's `riscv64-unknown-elf-g++` 13.2.0 ships no libstdc++ headers,
-so it can't build the C++ guest at all. Put gcc-14's `bin/` on `PATH`; `toolchain.cmake`
-auto-detects the cross prefix.
+Build the ZisK guest ELF (`cpp-guest/zisk`) with GCC **14 or 16** (xpack
+`riscv-none-elf-gcc`). Ubuntu's `riscv64-unknown-elf-g++` 13.2.0 ships no libstdc++
+headers, so it can't build the C++ guest. Put the cross `bin/` on `PATH`;
+`toolchain.cmake` auto-detects the prefix.
+
+History/caveat: GCC **15.2.0 and 16.1.0 miscompiled** an earlier *index-based* stack
+(`s.stack[sp]` with a 64-bit `sp`) → wrong block-state root (a GCC RISC-V wrong-code
+regression, not a zevm bug; cf. GCC bugzilla PR123050; host g++13 + UBSan/ASan + full
+EEST were clean, only GCC 14 codegen was correct). The **pointer-to-top stack**
+(commit `fbb34e7`, `Regs::top`) generates a different addressing pattern and builds
+correctly on GCC 14 *and* 16, so the bug no longer bites. If you ever reintroduce a
+miscompile (ELF hash wrong — e.g. starts `0xaaaa…` — while the host build + EEST pass),
+suspect the toolchain and drop to GCC 14.
 
 ## Verify a single block
 
