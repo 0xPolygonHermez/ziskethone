@@ -59,7 +59,7 @@ inline evmc_bytes32 slot_bytes(const U256* i) {
 bool op_sload(EvmState& s, Regs& R) {
     if (R.gas < WARM_STORAGE_READ_COST) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= WARM_STORAGE_READ_COST;
-    if (depth_lt(s, R.top, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
     const evmc_bytes32 key = slot_bytes(R.top);
     if (s.rev >= EVMC_BERLIN &&
@@ -76,7 +76,7 @@ bool op_sload(EvmState& s, Regs& R) {
 
 // 0x55 SSTORE — storage[key] = value (EIP-2200/2929/3529 metering + refunds).
 bool op_sstore(EvmState& s, Regs& R) {
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
     if (s.rev >= EVMC_ISTANBUL && R.gas <= SSTORE_SENTRY_GAS) {
         s.status = EVMC_OUT_OF_GAS;  // EIP-1706 sentry
@@ -107,7 +107,7 @@ bool op_sstore(EvmState& s, Regs& R) {
 bool op_tload(EvmState& s, Regs& R) {
     if (R.gas < WARM_STORAGE_READ_COST) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= WARM_STORAGE_READ_COST;
-    if (depth_lt(s, R.top, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
     const evmc_bytes32 key = slot_bytes(R.top);
     const evmc_bytes32 v =
@@ -122,7 +122,7 @@ bool op_tstore(EvmState& s, Regs& R) {
     if (R.gas < WARM_STORAGE_READ_COST) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= WARM_STORAGE_READ_COST;
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
     const evmc_bytes32 key   = slot_bytes(R.top);
     const evmc_bytes32 value = slot_bytes(R.top + 1);

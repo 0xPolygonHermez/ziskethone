@@ -25,14 +25,14 @@ bool log_impl(EvmState& s, Regs& R, unsigned n) {
     const int64_t base = GAS_LOG * static_cast<int64_t>(1 + n);
     if (R.gas < base) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= base;
-    if (depth_lt(s, R.top, 2u + n)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2u + n)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
 
     U256* const sp = R.top;
     const uint64_t off  = mem_arg(sp[0]);
     const uint64_t size = mem_arg(sp[1]);
 
-    if (mem_expand(s, R, static_cast<size_t>(off), static_cast<size_t>(size)) != MemError::Ok) {
+    if (mem_expand(R, static_cast<size_t>(off), static_cast<size_t>(size)) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
     }
     const int64_t data_cost = static_cast<int64_t>(size) * GAS_LOGDATA;

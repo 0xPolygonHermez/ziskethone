@@ -35,10 +35,10 @@ inline bool slt(const U256& a, const U256& b) {
 }
 
 // Logical left shift by n (0..255); bits shifted out the top are dropped.
-inline U256 shl(const U256& a, unsigned n) {
+inline U256 shl(const U256& a, uint64_t n) {
     U256 r{};
     if (n >= 256) return r;
-    const unsigned w = n / 64, b = n % 64;
+    const uint64_t w = n / 64, b = n % 64;
     for (unsigned i = 0; i < 4; ++i) {
         if (i + w < 4)               r.limbs[i + w]     |= a.limbs[i] << b;
         if (b && i + w + 1 < 4)      r.limbs[i + w + 1] |= a.limbs[i] >> (64 - b);
@@ -47,10 +47,10 @@ inline U256 shl(const U256& a, unsigned n) {
 }
 
 // Logical right shift by n (0..255).
-inline U256 shr(const U256& a, unsigned n) {
+inline U256 shr(const U256& a, uint64_t n) {
     U256 r{};
     if (n >= 256) return r;
-    const unsigned w = n / 64, b = n % 64;
+    const uint64_t w = n / 64, b = n % 64;
     for (unsigned i = 0; i < 4; ++i) {
         if (i >= w)                  r.limbs[i - w]     |= a.limbs[i] >> b;
         if (b && i >= w + 1)         r.limbs[i - w - 1] |= a.limbs[i] << (64 - b);
@@ -60,7 +60,7 @@ inline U256 shr(const U256& a, unsigned n) {
 
 // Arithmetic right shift by n: logical shift, then fill the top n bits with the
 // sign bit of a.
-inline U256 sar(const U256& a, unsigned n) {
+inline U256 sar(const U256& a, uint64_t n) {
     const bool neg = u256_sign(a);
     if (n >= 256) { const uint64_t f = neg ? ~0ULL : 0; return U256{{f, f, f, f}}; }
     U256 r = shr(a, n);
@@ -76,27 +76,27 @@ inline U256 sar(const U256& a, unsigned n) {
 // < 256 iff every byte but the lowest is zero, in which case the value is that
 // low byte (limbs[0] & 0xFF). Returns 256 otherwise, which the shift handlers
 // treat as out-of-range and BYTE as >= 32.
-inline unsigned low_scalar(const U256& v) {
+inline uint64_t low_scalar(const U256& v) {
     if ((v.limbs[1] | v.limbs[2] | v.limbs[3] |
          (v.limbs[0] & ~0xFFULL)) != 0)
         return 256;
-    return static_cast<unsigned>(v.limbs[0] & 0xFF);
+    return v.limbs[0] & 0xFF;
 }
 
 // Byte-granular shifts on a little-endian slot in place (k bytes, 1..31). The LE
 // byte array runs LSB (byte 0) .. MSB (byte 31), so SHL moves bytes toward byte
 // 31 and SHR/SAR toward byte 0; the vacated end is zero-filled (SAR sign-filled).
-inline void byte_shl(U256& v, unsigned k) {
+inline void byte_shl(U256& v, uint64_t k) {
     uint8_t* b = reinterpret_cast<uint8_t*>(&v);
     std::memmove(b + k, b, 32 - k);
     std::memset(b, 0, k);
 }
-inline void byte_shr(U256& v, unsigned k) {
+inline void byte_shr(U256& v, uint64_t k) {
     uint8_t* b = reinterpret_cast<uint8_t*>(&v);
     std::memmove(b, b + k, 32 - k);
     std::memset(b + (32 - k), 0, k);
 }
-inline void byte_sar(U256& v, unsigned k) {
+inline void byte_sar(U256& v, uint64_t k) {
     uint8_t* b = reinterpret_cast<uint8_t*>(&v);
     const uint8_t fill = (b[31] & 0x80) ? 0xFF : 0x00;  // sign byte (MSB = byte 31)
     std::memmove(b, b + k, 32 - k);
@@ -107,7 +107,7 @@ inline void byte_sar(U256& v, unsigned k) {
 bool op_lt(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     R.top[1] =
         bool_word(u256_lt(R.top[0], R.top[1]));
     ++R.top;
@@ -119,7 +119,7 @@ bool op_lt(EvmState& s, Regs& R) {
 bool op_gt(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     R.top[1] =
         bool_word(u256_lt(R.top[1], R.top[0]));
     ++R.top;
@@ -131,7 +131,7 @@ bool op_gt(EvmState& s, Regs& R) {
 bool op_slt(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     R.top[1] =
         bool_word(slt(R.top[0], R.top[1]));
     ++R.top;
@@ -143,7 +143,7 @@ bool op_slt(EvmState& s, Regs& R) {
 bool op_sgt(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     R.top[1] =
         bool_word(slt(R.top[1], R.top[0]));
     ++R.top;
@@ -155,7 +155,7 @@ bool op_sgt(EvmState& s, Regs& R) {
 bool op_eq(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const bool e = u256_eq(R.top[0], R.top[1]);
     R.top[1] = bool_word(e);
     ++R.top;
@@ -170,7 +170,7 @@ bool op_eq(EvmState& s, Regs& R) {
 bool op_iszero(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256& a = R.top[0];
     const bool z = a.limbs[0] == 0 && a.limbs[1] == 0 && a.limbs[2] == 0 && a.limbs[3] == 0;
     R.top[0] = bool_word(z);
@@ -186,7 +186,7 @@ bool op_iszero(EvmState& s, Regs& R) {
 bool op_and(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256& a = R.top[0];
     U256&       b = R.top[1];
     b.limbs[0] &= a.limbs[0];
@@ -202,7 +202,7 @@ bool op_and(EvmState& s, Regs& R) {
 bool op_or(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256& a = R.top[0];
     U256&       b = R.top[1];
     b.limbs[0] |= a.limbs[0];
@@ -218,7 +218,7 @@ bool op_or(EvmState& s, Regs& R) {
 bool op_xor(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256& a = R.top[0];
     U256&       b = R.top[1];
     b.limbs[0] ^= a.limbs[0];
@@ -234,7 +234,7 @@ bool op_xor(EvmState& s, Regs& R) {
 bool op_not(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     U256& a = R.top[0];
     for (int i = 0; i < 4; ++i) a.limbs[i] = ~a.limbs[i];
     ++R.pc;
@@ -246,7 +246,7 @@ bool op_not(EvmState& s, Regs& R) {
 bool op_clz(EvmState& s, Regs& R) {
     if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_LOW;
-    if (depth_lt(s, R.top, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 a = ld_le(R.top);
     uint64_t n;  // limb[3] is most significant; higher all-zero limbs add 64 each
     if (a.limbs[3] != 0)      n =       static_cast<uint64_t>(__builtin_clzll(a.limbs[3]));
@@ -265,8 +265,8 @@ bool op_clz(EvmState& s, Regs& R) {
 bool op_byte(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const unsigned idx = low_scalar(R.top[0]);  // 0 = most significant
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const uint64_t idx = low_scalar(R.top[0]);  // 0 = most significant
     U256 r{};
     if (idx < 32) {
         const uint8_t byte = reinterpret_cast<const uint8_t*>(&R.top[1])[31 - idx];
@@ -282,8 +282,8 @@ bool op_byte(EvmState& s, Regs& R) {
 bool op_shl(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const unsigned n = low_scalar(R.top[0]);
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const uint64_t n = low_scalar(R.top[0]);
     U256& v = R.top[1];
     if (n >= 256)        v = U256{};
     else if (n == 0)     { /* unchanged */ }
@@ -298,8 +298,8 @@ bool op_shl(EvmState& s, Regs& R) {
 bool op_shr(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const unsigned n = low_scalar(R.top[0]);
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const uint64_t n = low_scalar(R.top[0]);
     U256& v = R.top[1];
     if (n >= 256)        v = U256{};
     else if (n == 0)     { /* unchanged */ }
@@ -314,8 +314,8 @@ bool op_shr(EvmState& s, Regs& R) {
 bool op_sar(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const unsigned n = low_scalar(R.top[0]);
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const uint64_t n = low_scalar(R.top[0]);
     U256& v = R.top[1];
     if (n >= 256) {
         // out-of-range: every bit becomes the sign bit (raw byte[31] high bit)

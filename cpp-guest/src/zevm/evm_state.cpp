@@ -9,6 +9,17 @@
 
 namespace zevm {
 
+// Instruction width for the JUMPDEST boundary walk: PUSH1..PUSH32 (0x60..0x7f)
+// span 1 opcode byte + (op-0x5f) immediate data bytes; every other opcode is 1
+// byte. The PUSH range is exactly the opcodes whose top three bits are 0b011, so
+// `(op & 0xe0) == 0x60` detects it — and `op - 0x5e` (= op-0x60+2) is the span.
+// Kept in 64-bit ops throughout: the old `int8_t(op) >= int8_t(0x60)` sign-trick
+// compiled to a per-byte slliw+sraiw sign-extend, which dominated this guest's
+// `signextend_w` cost (~4.3M word-ops); this form emits none.
+inline size_t instr_width(uint8_t op) {
+    return ((op & 0xe0) == 0x60) ? static_cast<size_t>(op) - 0x5e : size_t{1};
+}
+
 void build_jumpdest_bitset(const uint8_t* code, size_t codeSize, uint64_t* out) {
     // One bit per code byte: bit i set iff code[i] is a real JUMPDEST (a 0x5b
     // opcode, not PUSH immediate data). Built 64 bytes at a time — each group
@@ -25,11 +36,9 @@ void build_jumpdest_bitset(const uint8_t* code, size_t codeSize, uint64_t* out) 
     // `out` holds ceil(codeSize/64) words. The first codeSize/64 groups are full
     // 64-byte runs guaranteed inside `code`; a trailing partial group
     // (codeSize % 64 bytes) is handled at the end. PUSH1 (0x60) .. PUSH32 (0x7f)
-    // is detected with the signed-byte trick (PUSH32 == INT8_MAX, so opcodes
-    // >= 0x80 read negative and fall through). The walk uses a running pointer
-    // `p` (a monotonic instruction cursor, as cheap as the old chunk analysis);
-    // the JUMPDEST bit within the group is `p - gStart`.
-    constexpr uint8_t PUSH1 = 0x60;
+    // is detected by its top-three-bits signature (see instr_width). The walk
+    // uses a running pointer `p` (a monotonic instruction cursor, as cheap as the
+    // old chunk analysis); the JUMPDEST bit within the group is `p - gStart`.
     const size_t nFull = codeSize / 64;
     const size_t rem   = codeSize % 64;
 
@@ -42,9 +51,7 @@ void build_jumpdest_bitset(const uint8_t* code, size_t codeSize, uint64_t* out) 
             const uint8_t op = *p;
             if (op == 0x5b)
                 word |= uint64_t{1} << static_cast<unsigned>(p - gStart);
-            p += (static_cast<int8_t>(op) >= static_cast<int8_t>(PUSH1))
-                     ? static_cast<size_t>(op - PUSH1) + 2   // opcode + n data bytes
-                     : 1;
+            p += instr_width(op);
         }
         out[g] = word;
     }
@@ -56,9 +63,7 @@ void build_jumpdest_bitset(const uint8_t* code, size_t codeSize, uint64_t* out) 
             const uint8_t op = *p;
             if (op == 0x5b)
                 word |= uint64_t{1} << static_cast<unsigned>(p - gStart);
-            p += (static_cast<int8_t>(op) >= static_cast<int8_t>(PUSH1))
-                     ? static_cast<size_t>(op - PUSH1) + 2
-                     : 1;
+            p += instr_width(op);
         }
         out[nFull] = word;
     }

@@ -18,7 +18,7 @@ namespace stack_ops {
 bool op_dup1(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --R.top;
     R.top[0]   = R.top[1];
@@ -30,7 +30,7 @@ bool op_dup1(EvmState& s, Regs& R) {
 bool op_dup2(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --R.top;
     R.top[0]   = R.top[2];
@@ -42,7 +42,7 @@ bool op_dup2(EvmState& s, Regs& R) {
 bool op_dup3(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 3)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 3)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --R.top;
     R.top[0]   = R.top[3];
@@ -54,7 +54,7 @@ bool op_dup3(EvmState& s, Regs& R) {
 bool op_dup4(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 4)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 4)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --R.top;
     R.top[0]   = R.top[4];
@@ -66,7 +66,7 @@ bool op_dup4(EvmState& s, Regs& R) {
 bool op_dup5(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 5)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 5)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --R.top;
     R.top[0]   = R.top[5];
@@ -78,7 +78,7 @@ bool op_dup5(EvmState& s, Regs& R) {
 bool op_dup6(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 6)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 6)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --R.top;
     R.top[0]   = R.top[6];
@@ -90,7 +90,7 @@ bool op_dup6(EvmState& s, Regs& R) {
 bool op_dup7(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 7)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 7)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --R.top;
     R.top[0]   = R.top[7];
@@ -102,7 +102,7 @@ bool op_dup7(EvmState& s, Regs& R) {
 bool op_dup8(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 8)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 8)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --R.top;
     R.top[0]   = R.top[8];
@@ -114,7 +114,7 @@ bool op_dup8(EvmState& s, Regs& R) {
 bool op_dup9(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 9)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 9)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --R.top;
     R.top[0]   = R.top[9];
@@ -126,7 +126,7 @@ bool op_dup9(EvmState& s, Regs& R) {
 bool op_dup10(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 10)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 10)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --R.top;
     R.top[0]   = R.top[10];
@@ -138,7 +138,7 @@ bool op_dup10(EvmState& s, Regs& R) {
 bool op_dup11(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 11)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 11)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --R.top;
     R.top[0]   = R.top[11];
@@ -150,7 +150,7 @@ bool op_dup11(EvmState& s, Regs& R) {
 bool op_dup12(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 12)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 12)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --R.top;
     R.top[0]   = R.top[12];
@@ -162,7 +162,7 @@ bool op_dup12(EvmState& s, Regs& R) {
 bool op_dup13(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 13)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 13)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --R.top;
     R.top[0]   = R.top[13];
@@ -174,7 +174,7 @@ bool op_dup13(EvmState& s, Regs& R) {
 bool op_dup14(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 14)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 14)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --R.top;
     R.top[0]   = R.top[14];
@@ -186,7 +186,7 @@ bool op_dup14(EvmState& s, Regs& R) {
 bool op_dup15(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 15)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 15)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --R.top;
     R.top[0]   = R.top[15];
@@ -198,7 +198,7 @@ bool op_dup15(EvmState& s, Regs& R) {
 bool op_dup16(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 16)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 16)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
     --R.top;
     R.top[0]   = R.top[16];
@@ -210,7 +210,7 @@ bool op_dup16(EvmState& s, Regs& R) {
 bool op_swap1(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 t = R.top[0];
     R.top[0]      = R.top[1];
     R.top[1] = t;
@@ -222,7 +222,7 @@ bool op_swap1(EvmState& s, Regs& R) {
 bool op_swap2(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 3)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 3)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 t = R.top[0];
     R.top[0]      = R.top[2];
     R.top[2] = t;
@@ -234,7 +234,7 @@ bool op_swap2(EvmState& s, Regs& R) {
 bool op_swap3(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 4)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 4)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 t = R.top[0];
     R.top[0]      = R.top[3];
     R.top[3] = t;
@@ -246,7 +246,7 @@ bool op_swap3(EvmState& s, Regs& R) {
 bool op_swap4(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 5)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 5)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 t = R.top[0];
     R.top[0]      = R.top[4];
     R.top[4] = t;
@@ -258,7 +258,7 @@ bool op_swap4(EvmState& s, Regs& R) {
 bool op_swap5(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 6)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 6)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 t = R.top[0];
     R.top[0]      = R.top[5];
     R.top[5] = t;
@@ -270,7 +270,7 @@ bool op_swap5(EvmState& s, Regs& R) {
 bool op_swap6(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 7)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 7)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 t = R.top[0];
     R.top[0]      = R.top[6];
     R.top[6] = t;
@@ -282,7 +282,7 @@ bool op_swap6(EvmState& s, Regs& R) {
 bool op_swap7(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 8)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 8)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 t = R.top[0];
     R.top[0]      = R.top[7];
     R.top[7] = t;
@@ -294,7 +294,7 @@ bool op_swap7(EvmState& s, Regs& R) {
 bool op_swap8(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 9)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 9)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 t = R.top[0];
     R.top[0]      = R.top[8];
     R.top[8] = t;
@@ -306,7 +306,7 @@ bool op_swap8(EvmState& s, Regs& R) {
 bool op_swap9(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 10)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 10)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 t = R.top[0];
     R.top[0]      = R.top[9];
     R.top[9] = t;
@@ -318,7 +318,7 @@ bool op_swap9(EvmState& s, Regs& R) {
 bool op_swap10(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 11)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 11)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 t = R.top[0];
     R.top[0]      = R.top[10];
     R.top[10] = t;
@@ -330,7 +330,7 @@ bool op_swap10(EvmState& s, Regs& R) {
 bool op_swap11(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 12)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 12)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 t = R.top[0];
     R.top[0]      = R.top[11];
     R.top[11] = t;
@@ -342,7 +342,7 @@ bool op_swap11(EvmState& s, Regs& R) {
 bool op_swap12(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 13)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 13)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 t = R.top[0];
     R.top[0]      = R.top[12];
     R.top[12] = t;
@@ -354,7 +354,7 @@ bool op_swap12(EvmState& s, Regs& R) {
 bool op_swap13(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 14)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 14)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 t = R.top[0];
     R.top[0]      = R.top[13];
     R.top[13] = t;
@@ -366,7 +366,7 @@ bool op_swap13(EvmState& s, Regs& R) {
 bool op_swap14(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 15)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 15)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 t = R.top[0];
     R.top[0]      = R.top[14];
     R.top[14] = t;
@@ -378,7 +378,7 @@ bool op_swap14(EvmState& s, Regs& R) {
 bool op_swap15(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 16)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 16)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 t = R.top[0];
     R.top[0]      = R.top[15];
     R.top[15] = t;
@@ -390,7 +390,7 @@ bool op_swap15(EvmState& s, Regs& R) {
 bool op_swap16(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 17)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 17)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 t = R.top[0];
     R.top[0]      = R.top[16];
     R.top[16] = t;

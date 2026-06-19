@@ -56,7 +56,7 @@ inline void udivmod(const U256& a, const U256& b, U256& q, U256& r) {
 bool op_add(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256& sa = R.top[0];      // a, LE slot (distinct from sb)
     U256&       sb = R.top[1];  // b / result, LE slot
 
@@ -103,7 +103,7 @@ bool op_add(EvmState& s, Regs& R) {
 bool op_mul(EvmState& s, Regs& R) {
     if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_LOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 a = ld_le(R.top);
     U256       b = ld_le(R.top + 1);
     b = mul_low(a, b);
@@ -124,7 +124,7 @@ bool op_mul(EvmState& s, Regs& R) {
 bool op_sub(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256& sa = R.top[0];      // a, minuend (distinct from sb)
     U256&       sb = R.top[1];  // b, subtrahend / result
 
@@ -162,7 +162,7 @@ bool op_sub(EvmState& s, Regs& R) {
 bool op_div(EvmState& s, Regs& R) {
     if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_LOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 a = ld_le(R.top);
     U256       b = ld_le(R.top + 1);
     if (u256_is_zero(b)) {
@@ -180,7 +180,7 @@ bool op_div(EvmState& s, Regs& R) {
 bool op_sdiv(EvmState& s, Regs& R) {
     if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_LOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 a = ld_le(R.top);
     U256       b = ld_le(R.top + 1);
     if (u256_is_zero(b)) {
@@ -211,7 +211,7 @@ bool op_sdiv(EvmState& s, Regs& R) {
 bool op_mod(EvmState& s, Regs& R) {
     if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_LOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 a = ld_le(R.top);
     U256       b = ld_le(R.top + 1);
     if (u256_is_zero(b)) {
@@ -229,7 +229,7 @@ bool op_mod(EvmState& s, Regs& R) {
 bool op_smod(EvmState& s, Regs& R) {
     if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_LOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 a = ld_le(R.top);
     U256       b = ld_le(R.top + 1);
     if (u256_is_zero(b)) {
@@ -251,7 +251,7 @@ bool op_smod(EvmState& s, Regs& R) {
 bool op_addmod(EvmState& s, Regs& R) {
     if (R.gas < GAS_MID) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_MID;
-    if (depth_lt(s, R.top, 3)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 3)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 a = ld_le(R.top);
     const U256 b = ld_le(R.top + 1);
     U256       m = ld_le(R.top + 2);
@@ -273,7 +273,7 @@ bool op_addmod(EvmState& s, Regs& R) {
 bool op_mulmod(EvmState& s, Regs& R) {
     if (R.gas < GAS_MID) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_MID;
-    if (depth_lt(s, R.top, 3)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 3)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 a = ld_le(R.top);
     const U256 b = ld_le(R.top + 1);
     U256       m = ld_le(R.top + 2);
@@ -298,7 +298,7 @@ bool op_mulmod(EvmState& s, Regs& R) {
 // (limbs[3]) plus a clz on it — no 256-iteration scan. The square-and-multiply
 // then walks the bits top..0 lane by lane, skipping the leading all-zero lanes.
 bool op_exp(EvmState& s, Regs& R) {
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256  base = ld_le(R.top);
     const U256& e    = R.top[1];  // exponent, little-endian slot
 
@@ -336,7 +336,7 @@ bool op_exp(EvmState& s, Regs& R) {
 bool op_signextend(EvmState& s, Regs& R) {
     if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_LOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const U256 i = ld_le(R.top);
     U256       x = ld_le(R.top + 1);
 

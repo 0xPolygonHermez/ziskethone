@@ -54,7 +54,7 @@ bool call_impl(EvmState& s, Regs& R, evmc_call_kind kind, bool has_value, bool s
 
     if (R.gas < WARM_ACCESS) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= WARM_ACCESS;
-    if (depth_lt(s, R.top, nargs)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, nargs)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
     U256* const sp       = R.top;
     U256* const iGas     = sp;
@@ -151,10 +151,10 @@ bool call_impl(EvmState& s, Regs& R, evmc_call_kind kind, bool has_value, bool s
     }
 
     // ----- gas: memory expansion for the input and output windows -----
-    if (mem_expand(s, R, static_cast<size_t>(in_off), static_cast<size_t>(in_size)) != MemError::Ok) {
+    if (mem_expand(R, static_cast<size_t>(in_off), static_cast<size_t>(in_size)) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
     }
-    if (mem_expand(s, R, static_cast<size_t>(out_off), static_cast<size_t>(out_size)) != MemError::Ok) {
+    if (mem_expand(R, static_cast<size_t>(out_off), static_cast<size_t>(out_size)) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
     }
 
@@ -230,7 +230,7 @@ bool create_impl(EvmState& s, Regs& R, evmc_call_kind kind) {
 
     if (R.gas < GAS_CREATE) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_CREATE;
-    if (depth_lt(s, R.top, nargs)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, nargs)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
 
     U256* const sp      = R.top;
@@ -263,7 +263,7 @@ bool create_impl(EvmState& s, Regs& R, evmc_call_kind kind) {
     };
 
     // init-code memory expansion
-    if (mem_expand(s, R, static_cast<size_t>(off), static_cast<size_t>(size)) != MemError::Ok) {
+    if (mem_expand(R, static_cast<size_t>(off), static_cast<size_t>(size)) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
     }
     // EIP-3860 (Shanghai+): cap init-code size and add 2 gas/word. The CREATE2
@@ -317,11 +317,11 @@ bool op_create2(EvmState& s, Regs& R) { return create_impl(s, R, EVMC_CREATE2); 
 
 // RETURN (success) / REVERT — set the frame's output window and halt.
 bool return_impl(EvmState& s, Regs& R, evmc_status_code st) {
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const uint64_t off  = mem_arg(R.top[0]);
     const uint64_t size = mem_arg(R.top[1]);
     if (size > 0) {
-        if (mem_expand(s, R, static_cast<size_t>(off), static_cast<size_t>(size)) != MemError::Ok) {
+        if (mem_expand(R, static_cast<size_t>(off), static_cast<size_t>(size)) != MemError::Ok) {
             s.status = EVMC_OUT_OF_GAS;
             return false;
         }
@@ -352,12 +352,12 @@ bool op_returndatasize(EvmState& s, Regs& R) {
 bool op_returndatacopy(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 3)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 3)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const uint64_t mem_off = mem_arg(R.top[0]);
     const uint64_t ret_off = mem_arg(R.top[1]);
     const uint64_t size    = mem_arg(R.top[2]);
 
-    if (mem_expand(s, R, static_cast<size_t>(mem_off), static_cast<size_t>(size)) != MemError::Ok) {
+    if (mem_expand(R, static_cast<size_t>(mem_off), static_cast<size_t>(size)) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
     }
@@ -390,7 +390,7 @@ bool op_invalid(EvmState& s, Regs& R) {
 bool op_selfdestruct(EvmState& s, Regs& R) {
     if (R.gas < SELFDESTRUCT_GAS) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= SELFDESTRUCT_GAS;
-    if (depth_lt(s, R.top, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
 
     const evmc_address ben = addr_from_slot(R.top[0]);  // low 20 bytes of the value

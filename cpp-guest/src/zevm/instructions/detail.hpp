@@ -27,11 +27,16 @@ namespace zevm {
 // halts; nothing else reads the EvmState copies while a frame runs. Crucially,
 // R.gas's address is never taken (see the mem_* wrappers) so it stays a register.
 struct Regs {
-    int64_t gas;   // mirrors EvmState::gas
-    U256*   top;   // pointer to the current top-of-stack slot (&s.stack[stackPointer]);
-                   // evmone-style — avoids the per-access index*sizeof + zero-extend,
-                   // and sidesteps a GCC 15/16 RISC-V miscompile of the 64-bit index.
-    size_t  pc;    // mirrors EvmState::pc
+    int64_t      gas;   // mirrors EvmState::gas
+    U256*        top;   // pointer to the current top-of-stack slot (&s.stack[stackPointer]);
+                        // evmone-style — avoids the per-access index*sizeof + zero-extend,
+                        // and sidesteps a GCC 15/16 RISC-V miscompile of the 64-bit index.
+    size_t       pc;    // mirrors EvmState::pc
+    const U256*  empty; // s.stack + kStackLimit — the empty-stack marker (one past the
+                        // deepest slot). Hoisted into a register so the per-op underflow
+                        // check is `top > empty - need` (a single addi + branch) instead
+                        // of re-forming s.stack + (kStackLimit - need) (lui+addi+add: the
+                        // base sits ~32 KB past s.stack, beyond the 12-bit immediate).
 };
 
 // EVM gas cost tiers (subset; grows as opcodes land).
@@ -46,9 +51,10 @@ inline constexpr int64_t GAS_EXPBYTE = 50;  // EXP per byte of exponent (>= Spur
 
 // Stack bounds as pointer comparisons (evmone-style; no index math). The top
 // pointer counts DOWN from s.stack+kStackLimit (empty) toward s.stack (full).
-// depth_lt(need): fewer than `need` operands present (underflow).
-inline bool depth_lt(const EvmState& s, const U256* top, size_t need) {
-    return top > s.stack + (kStackLimit - need);
+// depth_lt(need): fewer than `need` operands present (underflow). Uses the
+// hoisted empty marker (R.empty == s.stack + kStackLimit): `top > empty - need`.
+inline bool depth_lt(const Regs& R, size_t need) {
+    return R.top > R.empty - need;
 }
 // stack_full: no room left to push (depth == kStackLimit).
 inline bool stack_full(const EvmState& s, const U256* top) {
@@ -115,33 +121,28 @@ inline int64_t copy_cost(uint64_t n) {
     return num_words(n) * 3;
 }
 
-// EVMMem charges memory-expansion / copy gas through an `int64_t*`. Taking the
-// address of the register-resident R.gas would force it back to memory for the
-// whole frame, so these wrappers spill R.gas to EvmState::gas only across the
-// (out-of-line) EVMMem call and read it back — R.gas's address never escapes.
-inline MemError mem_expand(EvmState& s, Regs& R, size_t addr, size_t len) {
-    s.gas = R.gas;
-    const MemError e = EVMMem::expand(addr, len, &s.gas);
-    R.gas = s.gas;
-    return e;
+// EVMMem charges memory-expansion / copy gas by value and returns the remaining
+// gas (MemGas), so R.gas stays register-resident: it is passed in and written
+// back without its address ever being taken (no spill through EvmState::gas).
+inline MemError mem_expand(Regs& R, size_t addr, size_t len) {
+    const MemGas r = EVMMem::expand(addr, len, R.gas);
+    R.gas = r.gas;
+    return r.err;
 }
-inline MemError mem_read(EvmState& s, Regs& R, size_t addr, uint8_t* dst, size_t len) {
-    s.gas = R.gas;
-    const MemError e = EVMMem::readBytes(addr, dst, len, &s.gas);
-    R.gas = s.gas;
-    return e;
+inline MemError mem_read(Regs& R, size_t addr, uint8_t* dst, size_t len) {
+    const MemGas r = EVMMem::readBytes(addr, dst, len, R.gas);
+    R.gas = r.gas;
+    return r.err;
 }
-inline MemError mem_write(EvmState& s, Regs& R, size_t addr, const uint8_t* src, size_t len) {
-    s.gas = R.gas;
-    const MemError e = EVMMem::writeBytes(addr, src, len, &s.gas);
-    R.gas = s.gas;
-    return e;
+inline MemError mem_write(Regs& R, size_t addr, const uint8_t* src, size_t len) {
+    const MemGas r = EVMMem::writeBytes(addr, src, len, R.gas);
+    R.gas = r.gas;
+    return r.err;
 }
-inline MemError mem_write_byte(EvmState& s, Regs& R, size_t addr, uint8_t v) {
-    s.gas = R.gas;
-    const MemError e = EVMMem::writeByte(addr, v, &s.gas);
-    R.gas = s.gas;
-    return e;
+inline MemError mem_write_byte(Regs& R, size_t addr, uint8_t v) {
+    const MemGas r = EVMMem::writeByte(addr, v, R.gas);
+    R.gas = r.gas;
+    return r.err;
 }
 
 // Opcode handlers live in the per-category headers (instructions/<category>.inl.hpp),

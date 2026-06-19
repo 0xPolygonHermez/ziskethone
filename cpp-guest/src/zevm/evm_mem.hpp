@@ -35,6 +35,16 @@ enum class MemError {
     OutOfGas,
 };
 
+// Result of a gas-charging memory op: the outcome plus the gas remaining after
+// the charge (valid when err == Ok). Returned by value so the caller's
+// register-resident gas need never have its address taken — on RISC-V LP64 this
+// two-field, <=16-byte struct comes back in a0/a1, with no memory spill (the old
+// `int64_t* gas` interface forced a store+load of gas through EvmState per op).
+struct MemGas {
+    MemError err;
+    int64_t  gas;
+};
+
 // A live memory region: an absolute pointer to where it starts inside its zone,
 // and its current (word-aligned) logical size in bytes. Holding the pointer
 // (rather than a zone-relative offset) lets byte access skip the zone-base add.
@@ -59,18 +69,18 @@ public:
     // KECCAK256 input, RETURN / REVERT / LOG data, ...). Both may grow memory
     // (charging *gas) and return OutOfGas without mutating state if the
     // expansion can't be paid for. A zero-length access never grows memory.
-    static MemError readBytes (size_t addr, uint8_t* dst, size_t len, int64_t* gas);
-    static MemError writeBytes(size_t addr, const uint8_t* src, size_t len, int64_t* gas);
+    static MemGas readBytes (size_t addr, uint8_t* dst, size_t len, int64_t gas);
+    static MemGas writeBytes(size_t addr, const uint8_t* src, size_t len, int64_t gas);
 
     // Write a single byte to memory[addr], growing memory (charging *gas) as
     // needed. A leaner path than writeBytes(addr, &b, 1, gas) for MSTORE8: one
     // store instead of a memcpy, and no length handling.
-    static MemError writeByte(size_t addr, uint8_t value, int64_t* gas);
+    static MemGas writeByte(size_t addr, uint8_t value, int64_t gas);
 
     // Grow the current frame so [addr, addr+len) is addressable, charging gas
     // (and cleaning recycled bytes) — the "check_memory" primitive for CALL
     // arg/return regions, RETURN/REVERT, and *COPY opcodes. No-op for len == 0.
-    static MemError expand(size_t addr, size_t len, int64_t* gas);
+    static MemGas expand(size_t addr, size_t len, int64_t gas);
 
     // Raw pointer to byte `addr` of the current frame's memory. Valid only while
     // this frame is live (until destroyMemory) and only within the already-grown
@@ -86,7 +96,7 @@ public:
 private:
     // Grow the current frame so `need_bytes` are addressable, charging gas and
     // cleaning any recycled (dirty) bytes. No-op when already large enough.
-    static MemError ensure(size_t need_bytes, int64_t* gas);
+    static MemGas ensure(size_t need_bytes, int64_t gas);
 
     static uint8_t   s_zone[2][kMemBlockSize];   // the two zeroed arenas
     static MemHandle s_handles[kMaxMemHandles];  // one per live frame

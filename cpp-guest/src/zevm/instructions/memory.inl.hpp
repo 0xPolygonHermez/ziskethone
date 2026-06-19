@@ -24,7 +24,7 @@ namespace memory_ops {
 bool op_mload(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
     const U256& off = R.top[0];  // offset (little-endian slot)
     if ((off.limbs[1] | off.limbs[2] | off.limbs[3]) != 0) {
@@ -33,7 +33,7 @@ bool op_mload(EvmState& s, Regs& R) {
     }
     const size_t addr = static_cast<size_t>(off.limbs[0]);
     uint8_t be[32];
-    if (mem_read(s, R, addr, be, 32) != MemError::Ok) {
+    if (mem_read(R, addr, be, 32) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
     }
@@ -46,7 +46,7 @@ bool op_mload(EvmState& s, Regs& R) {
 bool op_mstore(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
     const U256& off = R.top[0];  // offset (little-endian slot)
     if ((off.limbs[1] | off.limbs[2] | off.limbs[3]) != 0) {
@@ -57,7 +57,7 @@ bool op_mstore(EvmState& s, Regs& R) {
 
     uint8_t be[32];
     u256_to_be(R.top[1], be);  // LE slot -> BE wire bytes
-    if (mem_write(s, R, addr, be, 32) != MemError::Ok) {
+    if (mem_write(R, addr, be, 32) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
     }
@@ -70,7 +70,7 @@ bool op_mstore(EvmState& s, Regs& R) {
 bool op_mstore8(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
     const U256& off = R.top[0];  // offset (little-endian slot)
     if ((off.limbs[1] | off.limbs[2] | off.limbs[3]) != 0) {
@@ -83,7 +83,7 @@ bool op_mstore8(EvmState& s, Regs& R) {
     // byte of the low lane.
     const U256& val = R.top[1];
     const uint8_t byte = static_cast<uint8_t>(val.limbs[0] & 0xFF);
-    if (mem_write_byte(s, R, addr, byte) != MemError::Ok) {
+    if (mem_write_byte(R, addr, byte) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
     }
@@ -108,7 +108,7 @@ bool op_msize(EvmState& s, Regs& R) {
 bool op_mcopy(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 3)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 3)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
     U256* const sp = R.top;
     const uint64_t dst  = mem_arg(sp[0]);
@@ -117,7 +117,7 @@ bool op_mcopy(EvmState& s, Regs& R) {
 
     // Grow once to cover both windows (the higher of dst/src + size).
     const uint64_t hi = dst > src ? dst : src;
-    if (mem_expand(s, R, static_cast<size_t>(hi), static_cast<size_t>(size)) != MemError::Ok) {
+    if (mem_expand(R, static_cast<size_t>(hi), static_cast<size_t>(size)) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
     }
     const int64_t cc = copy_cost(size);

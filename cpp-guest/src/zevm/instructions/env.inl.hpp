@@ -83,12 +83,12 @@ inline void copy_into_mem(uint64_t dst, uint64_t size, const uint8_t* data,
 inline bool data_copy(EvmState& s, Regs& R, const uint8_t* data, uint64_t dataLen) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 3)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 3)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     U256* const sp = R.top;
     const uint64_t dst  = mem_arg(sp[0]);
     const uint64_t src  = mem_arg(sp[1]);
     const uint64_t size = mem_arg(sp[2]);
-    if (mem_expand(s, R, static_cast<size_t>(dst), static_cast<size_t>(size)) != MemError::Ok) {
+    if (mem_expand(R, static_cast<size_t>(dst), static_cast<size_t>(size)) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
     }
     const int64_t cc = copy_cost(size);
@@ -216,7 +216,7 @@ bool op_selfbalance(EvmState& s, Regs& R) {
 bool op_calldataload(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     U256* const i = R.top;
     const uint64_t idx        = mem_arg(i[0]);
     const uint64_t input_size = s.evmcMsg->input_size;
@@ -244,7 +244,7 @@ bool op_codecopy(EvmState& s, Regs& R) {
 bool op_balance(EvmState& s, Regs& R) {
     if (R.gas < WARM_ACCESS) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= WARM_ACCESS;
-    if (depth_lt(s, R.top, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     U256* const i = R.top;
     const evmc_address addr = addr_arg(i);
     if (!charge_account_access(s, R, addr)) return false;
@@ -257,7 +257,7 @@ bool op_balance(EvmState& s, Regs& R) {
 bool op_extcodesize(EvmState& s, Regs& R) {
     if (R.gas < WARM_ACCESS) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= WARM_ACCESS;
-    if (depth_lt(s, R.top, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     U256* const i = R.top;
     const evmc_address addr = addr_arg(i);
     if (!charge_account_access(s, R, addr)) return false;
@@ -269,7 +269,7 @@ bool op_extcodesize(EvmState& s, Regs& R) {
 bool op_extcodehash(EvmState& s, Regs& R) {
     if (R.gas < WARM_ACCESS) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= WARM_ACCESS;
-    if (depth_lt(s, R.top, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     U256* const i = R.top;
     const evmc_address addr = addr_arg(i);
     if (!charge_account_access(s, R, addr)) return false;
@@ -283,13 +283,13 @@ bool op_extcodehash(EvmState& s, Regs& R) {
 bool op_extcodecopy(EvmState& s, Regs& R) {
     if (R.gas < WARM_ACCESS) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= WARM_ACCESS;
-    if (depth_lt(s, R.top, 4)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 4)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     U256* const sp = R.top;
     const evmc_address addr = addr_arg(sp);  // top
     const uint64_t dst  = mem_arg(sp[1]);
     const uint64_t src  = mem_arg(sp[2]);
     const uint64_t size = mem_arg(sp[3]);
-    if (mem_expand(s, R, static_cast<size_t>(dst), static_cast<size_t>(size)) != MemError::Ok) {
+    if (mem_expand(R, static_cast<size_t>(dst), static_cast<size_t>(size)) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
     }
     const int64_t cc = copy_cost(size);
@@ -311,7 +311,7 @@ bool op_extcodecopy(EvmState& s, Regs& R) {
 bool op_blockhash(EvmState& s, Regs& R) {
     if (R.gas < GAS_BLOCKHASH) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_BLOCKHASH;
-    if (depth_lt(s, R.top, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     U256* const i = R.top;
     const U256 v = ld_le(i);
     const evmc_tx_context tx = s.host->get_tx_context(s.context);
@@ -331,7 +331,7 @@ bool op_blockhash(EvmState& s, Regs& R) {
 bool op_blobhash(EvmState& s, Regs& R) {
     if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_VERYLOW;
-    if (depth_lt(s, R.top, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     U256* const i = R.top;
     const U256 v = ld_le(i);
     const evmc_tx_context tx = s.host->get_tx_context(s.context);

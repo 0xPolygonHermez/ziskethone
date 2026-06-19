@@ -25,14 +25,14 @@ constexpr int64_t GAS_KECCAK256_WORD = 6;   // per 32-byte word of input
 bool op_keccak256(EvmState& s, Regs& R) {
     if (R.gas < GAS_KECCAK256) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_KECCAK256;
-    if (depth_lt(s, R.top, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
     U256* const off_i  = R.top;
     U256* const size_i = R.top + 1;
     const uint64_t off  = mem_arg(off_i[0]);
     const uint64_t size = mem_arg(size_i[0]);
 
-    if (mem_expand(s, R, static_cast<size_t>(off), static_cast<size_t>(size)) != MemError::Ok) {
+    if (mem_expand(R, static_cast<size_t>(off), static_cast<size_t>(size)) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
     }
     const int64_t word_cost = num_words(size) * GAS_KECCAK256_WORD;
