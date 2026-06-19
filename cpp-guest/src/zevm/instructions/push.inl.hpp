@@ -71,9 +71,7 @@ bool op_push0(EvmState& s, Regs& R) {
     if (R.gas < GAS_BASE) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_BASE;
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --R.top;
-    R.top[0] = U256{};
-    ++R.pc;
+    R.top[-1] = U256{};
     return true;
 }
 

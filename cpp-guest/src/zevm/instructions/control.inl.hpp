@@ -72,7 +72,6 @@ bool op_jumpi(EvmState& s, Regs& R) {
 bool op_jumpdest(EvmState& s, Regs& R) {
     if (R.gas < GAS_JUMPDEST) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_JUMPDEST;
-    ++R.pc;
     return true;
 }
 
@@ -81,8 +80,6 @@ bool op_pop(EvmState& s, Regs& R) {
     if (R.gas < GAS_BASE) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_BASE;
     if (depth_lt(R, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    ++R.top;
-    ++R.pc;
     return true;
 }
 
@@ -91,9 +88,7 @@ bool op_pc(EvmState& s, Regs& R) {
     if (R.gas < GAS_BASE) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_BASE;
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --R.top;
-    st_le(R.top, U256{{static_cast<uint64_t>(R.pc), 0, 0, 0}});
-    ++R.pc;
+    st_le(R.top - 1, U256{{static_cast<uint64_t>(R.pc), 0, 0, 0}});
     return true;
 }
 
@@ -102,9 +97,7 @@ bool op_gas(EvmState& s, Regs& R) {
     if (R.gas < GAS_BASE) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_BASE;
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --R.top;
-    st_le(R.top, U256{{static_cast<uint64_t>(R.gas), 0, 0, 0}});
-    ++R.pc;
+    st_le(R.top - 1, U256{{static_cast<uint64_t>(R.gas), 0, 0, 0}});
     return true;
 }
 

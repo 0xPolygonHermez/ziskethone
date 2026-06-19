@@ -110,8 +110,6 @@ bool op_lt(EvmState& s, Regs& R) {
     if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     R.top[1] =
         bool_word(u256_lt(R.top[0], R.top[1]));
-    ++R.top;
-    ++R.pc;
     return true;
 }
 
@@ -122,8 +120,6 @@ bool op_gt(EvmState& s, Regs& R) {
     if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     R.top[1] =
         bool_word(u256_lt(R.top[1], R.top[0]));
-    ++R.top;
-    ++R.pc;
     return true;
 }
 
@@ -134,8 +130,6 @@ bool op_slt(EvmState& s, Regs& R) {
     if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     R.top[1] =
         bool_word(slt(R.top[0], R.top[1]));
-    ++R.top;
-    ++R.pc;
     return true;
 }
 
@@ -146,8 +140,6 @@ bool op_sgt(EvmState& s, Regs& R) {
     if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     R.top[1] =
         bool_word(slt(R.top[1], R.top[0]));
-    ++R.top;
-    ++R.pc;
     return true;
 }
 
@@ -158,8 +150,6 @@ bool op_eq(EvmState& s, Regs& R) {
     if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     const bool e = u256_eq(R.top[0], R.top[1]);
     R.top[1] = bool_word(e);
-    ++R.top;
-    ++R.pc;
     return true;
 }
 
@@ -174,7 +164,6 @@ bool op_iszero(EvmState& s, Regs& R) {
     const U256& a = R.top[0];
     const bool z = a.limbs[0] == 0 && a.limbs[1] == 0 && a.limbs[2] == 0 && a.limbs[3] == 0;
     R.top[0] = bool_word(z);
-    ++R.pc;
     return true;
 }
 
@@ -193,8 +182,6 @@ bool op_and(EvmState& s, Regs& R) {
     b.limbs[1] &= a.limbs[1];
     b.limbs[2] &= a.limbs[2];
     b.limbs[3] &= a.limbs[3];
-    ++R.top;
-    ++R.pc;
     return true;
 }
 
@@ -209,8 +196,6 @@ bool op_or(EvmState& s, Regs& R) {
     b.limbs[1] |= a.limbs[1];
     b.limbs[2] |= a.limbs[2];
     b.limbs[3] |= a.limbs[3];
-    ++R.top;
-    ++R.pc;
     return true;
 }
 
@@ -225,8 +210,6 @@ bool op_xor(EvmState& s, Regs& R) {
     b.limbs[1] ^= a.limbs[1];
     b.limbs[2] ^= a.limbs[2];
     b.limbs[3] ^= a.limbs[3];
-    ++R.top;
-    ++R.pc;
     return true;
 }
 
@@ -237,7 +220,6 @@ bool op_not(EvmState& s, Regs& R) {
     if (depth_lt(R, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     U256& a = R.top[0];
     for (int i = 0; i < 4; ++i) a.limbs[i] = ~a.limbs[i];
-    ++R.pc;
     return true;
 }
 
@@ -255,7 +237,6 @@ bool op_clz(EvmState& s, Regs& R) {
     else if (a.limbs[0] != 0) n = 192 + static_cast<uint64_t>(__builtin_clzll(a.limbs[0]));
     else                      n = 256;
     st_le(R.top, U256{{n, 0, 0, 0}});
-    ++R.pc;
     return true;
 }
 
@@ -273,8 +254,6 @@ bool op_byte(EvmState& s, Regs& R) {
         r.limbs[0] = static_cast<uint64_t>(byte);  // result value in the low lane
     }
     R.top[1] = r;
-    ++R.top;
-    ++R.pc;
     return true;
 }
 
@@ -289,8 +268,6 @@ bool op_shl(EvmState& s, Regs& R) {
     else if (n == 0)     { /* unchanged */ }
     else if (n % 8 == 0) byte_shl(v, n / 8);
     else                 st_le(R.top + 1, shl(ld_le(R.top + 1), n));
-    ++R.top;
-    ++R.pc;
     return true;
 }
 
@@ -305,8 +282,6 @@ bool op_shr(EvmState& s, Regs& R) {
     else if (n == 0)     { /* unchanged */ }
     else if (n % 8 == 0) byte_shr(v, n / 8);
     else                 st_le(R.top + 1, shr(ld_le(R.top + 1), n));
-    ++R.top;
-    ++R.pc;
     return true;
 }
 
@@ -324,8 +299,6 @@ bool op_sar(EvmState& s, Regs& R) {
     } else if (n == 0)   { /* unchanged */ }
     else if (n % 8 == 0) byte_sar(v, n / 8);
     else                 st_le(R.top + 1, sar(ld_le(R.top + 1), n));
-    ++R.top;
-    ++R.pc;
     return true;
 }
 

@@ -38,7 +38,6 @@ bool op_mload(EvmState& s, Regs& R) {
         return false;
     }
     R.top[0] = u256_from_be(be);  // BE wire bytes -> LE slot
-    ++R.pc;
     return true;
 }
 
@@ -61,8 +60,6 @@ bool op_mstore(EvmState& s, Regs& R) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
     }
-    R.top += 2;  // pop offset and value
-    ++R.pc;
     return true;
 }
 
@@ -87,8 +84,6 @@ bool op_mstore8(EvmState& s, Regs& R) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
     }
-    R.top += 2;  // pop offset and value
-    ++R.pc;
     return true;
 }
 
@@ -98,9 +93,7 @@ bool op_msize(EvmState& s, Regs& R) {
     R.gas -= GAS_BASE;
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
 
-    --R.top;
-    st_le(R.top, U256{{static_cast<uint64_t>(EVMMem::size()), 0, 0, 0}});
-    ++R.pc;
+    st_le(R.top - 1, U256{{static_cast<uint64_t>(EVMMem::size()), 0, 0, 0}});
     return true;
 }
 
@@ -127,8 +120,6 @@ bool op_mcopy(EvmState& s, Regs& R) {
     if (size != 0)  // overlap-safe
         std::memmove(EVMMem::data(static_cast<size_t>(dst)),
                      EVMMem::data(static_cast<size_t>(src)), static_cast<size_t>(size));
-    R.top += 3;
-    ++R.pc;
     return true;
 }
 

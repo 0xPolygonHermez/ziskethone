@@ -94,8 +94,6 @@ bool op_add(EvmState& s, Regs& R) {
         zeg::bi::add256(a.limbs, b.limbs, /*cin=*/0, b.limbs);  // b = a + b (mod 2^256)
         st_le(R.top + 1, b);
     }
-    ++R.top;
-    ++R.pc;
     return true;
 }
 
@@ -108,8 +106,6 @@ bool op_mul(EvmState& s, Regs& R) {
     U256       b = ld_le(R.top + 1);
     b = mul_low(a, b);
     st_le(R.top + 1, b);
-    ++R.top;
-    ++R.pc;
     return true;
 }
 
@@ -153,8 +149,6 @@ bool op_sub(EvmState& s, Regs& R) {
         zeg::bi::add256(a.limbs, nb, /*cin=*/1, b.limbs);
         st_le(R.top + 1, b);
     }
-    ++R.top;
-    ++R.pc;
     return true;
 }
 
@@ -171,8 +165,6 @@ bool op_div(EvmState& s, Regs& R) {
         U256 q, r; udivmod(a, b, q, r); b = q;
     }
     st_le(R.top + 1, b);
-    ++R.top;
-    ++R.pc;
     return true;
 }
 
@@ -202,8 +194,6 @@ bool op_sdiv(EvmState& s, Regs& R) {
         }
     }
     st_le(R.top + 1, b);
-    ++R.top;
-    ++R.pc;
     return true;
 }
 
@@ -220,8 +210,6 @@ bool op_mod(EvmState& s, Regs& R) {
         U256 q, r; udivmod(a, b, q, r); b = r;
     }
     st_le(R.top + 1, b);
-    ++R.top;
-    ++R.pc;
     return true;
 }
 
@@ -242,8 +230,6 @@ bool op_smod(EvmState& s, Regs& R) {
         b = na ? u256_neg(r) : r;
     }
     st_le(R.top + 1, b);
-    ++R.top;
-    ++R.pc;
     return true;
 }
 
@@ -264,8 +250,6 @@ bool op_addmod(EvmState& s, Regs& R) {
         m = U256{{d[0], d[1], d[2], d[3]}};
     }
     st_le(R.top + 2, m);
-    R.top += 2;
-    ++R.pc;
     return true;
 }
 
@@ -285,8 +269,6 @@ bool op_mulmod(EvmState& s, Regs& R) {
         m = U256{{d[0], d[1], d[2], d[3]}};
     }
     st_le(R.top + 2, m);
-    R.top += 2;
-    ++R.pc;
     return true;
 }
 
@@ -326,8 +308,6 @@ bool op_exp(EvmState& s, Regs& R) {
         }
     }
     st_le(R.top + 1, result);
-    ++R.top;
-    ++R.pc;
     return true;
 }
 
@@ -356,8 +336,6 @@ bool op_signextend(EvmState& s, Regs& R) {
         }
     }
     st_le(R.top + 1, x);
-    ++R.top;
-    ++R.pc;
     return true;
 }
 

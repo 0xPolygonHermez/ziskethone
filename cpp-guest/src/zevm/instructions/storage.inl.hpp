@@ -70,7 +70,6 @@ bool op_sload(EvmState& s, Regs& R) {
     }
     const evmc_bytes32 v = s.host->get_storage(s.context, &s.evmcMsg->recipient, &key);
     R.top[0] = u256_from_be(v.bytes);  // BE value -> LE slot
-    ++R.pc;
     return true;
 }
 
@@ -98,8 +97,6 @@ bool op_sstore(EvmState& s, Regs& R) {
     R.gas -= cost;
     s.gas_refund += sc.refund;
 
-    R.top += 2;  // pop key and value
-    ++R.pc;
     return true;
 }
 
@@ -113,7 +110,6 @@ bool op_tload(EvmState& s, Regs& R) {
     const evmc_bytes32 v =
         s.host->get_transient_storage(s.context, &s.evmcMsg->recipient, &key);
     R.top[0] = u256_from_be(v.bytes);  // BE value -> LE slot
-    ++R.pc;
     return true;
 }
 
@@ -128,8 +124,6 @@ bool op_tstore(EvmState& s, Regs& R) {
     const evmc_bytes32 value = slot_bytes(R.top + 1);
     s.host->set_transient_storage(s.context, &s.evmcMsg->recipient, &key, &value);
 
-    R.top += 2;  // pop key and value
-    ++R.pc;
     return true;
 }
 

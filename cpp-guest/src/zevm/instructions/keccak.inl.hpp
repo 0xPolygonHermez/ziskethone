@@ -41,10 +41,7 @@ bool op_keccak256(EvmState& s, Regs& R) {
 
     const uint8_t* data = size != 0 ? EVMMem::data(static_cast<size_t>(off)) : nullptr;
     const evmc_bytes32 digest = zeg::keccak256_bytes32(data, static_cast<size_t>(size));
-    size_i[0] = u256_from_be(digest.bytes);  // BE digest -> LE slot
-
-    ++R.top;  // popped offset; result sits in the old size slot
-    ++R.pc;
+    size_i[0] = u256_from_be(digest.bytes);  // BE digest -> LE slot, the new top
     return true;
 }
 

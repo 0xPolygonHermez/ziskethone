@@ -342,9 +342,7 @@ bool op_returndatasize(EvmState& s, Regs& R) {
     if (R.gas < GAS_BASE) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_BASE;
     if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --R.top;
-    st_le(R.top, U256{{static_cast<uint64_t>(s.returnDataOwner.output_size), 0, 0, 0}});
-    ++R.pc;
+    st_le(R.top - 1, U256{{static_cast<uint64_t>(s.returnDataOwner.output_size), 0, 0, 0}});
     return true;
 }
 
@@ -373,8 +371,6 @@ bool op_returndatacopy(EvmState& s, Regs& R) {
     if (size > 0)
         std::memcpy(EVMMem::data(static_cast<size_t>(mem_off)),
                     s.returnDataOwner.output_data + ret_off, static_cast<size_t>(size));
-    R.top += 3;
-    ++R.pc;
     return true;
 }
 
