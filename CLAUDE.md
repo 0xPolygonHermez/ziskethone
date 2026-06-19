@@ -17,6 +17,16 @@
   - `cmake -S cpp-guest -B cpp-guest/build      -DEVM_BACKEND=evmone` → `build/zisk_eth_guest`
   - `cmake -S cpp-guest -B cpp-guest/build-zevm -DEVM_BACKEND=zevm`   → `build-zevm/zisk_eth_guest`
 
+## RISC-V ELF cross-compiler — use GCC 14, NOT GCC 15
+
+The ZisK guest ELF (`cpp-guest/zisk`) must be built with **xpack `riscv-none-elf-gcc`
+14.x**. **GCC 15.2.0 miscompiles the zevm guest** at the aggressive `-O3 ZEG_GUEST_OPT`
+flags and produces a *wrong block-state root* (verified: host g++ 13 + full Prague
+EEST pass; the wrong hash even differs between -O1 and -O3 — a codegen bug). Ubuntu's
+`riscv64-unknown-elf-g++` 13.2.0 ships no libstdc++ headers, so it can't build the C++
+guest at all. Put the gcc-14 `bin/` on `PATH`; `toolchain.cmake` auto-detects
+`riscv-none-elf-`.
+
 ## Verify a single block
 
 ```bash
