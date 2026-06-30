@@ -219,10 +219,31 @@ impl<'a> Encoder<'a> {
         Ok(())
     }
 
-    /// Emit a revealed extension as a chain of single-child branches (one per
-    /// nibble); the guest's `reduce_branch` folds them back into an
-    /// extension. If the extension's child is itself unrevealed, emit a
-    /// single `Op::ExtensionHash` instead.
+    /// Emit an extension as a chain of single-child branches (one per nibble);
+    /// the guest's `reduce_branch` folds them back into an extension at hash
+    /// time. The chain terminates in whatever the extension's child resolves
+    /// to via `emit_child`: a revealed subtree, or — when the witness only
+    /// references the child by hash — an `Op::Hash`.
+    ///
+    /// We deliberately do NOT emit a single opaque `Op::ExtensionHash` even
+    /// for an unrevealed child. A bare `ExtensionHash` is unsplittable: when
+    /// the new-root pass inserts a CREATED key whose path diverges *inside*
+    /// the extension's nibbles, the guest can't break the extension apart and
+    /// aborts ("insert into an unrevealed (Hash) subtree — witness
+    /// incomplete"). reth's `debug_executionWitness` collapses the untouched
+    /// remainder of a storage trie to hashes, so this is common for created
+    /// storage slots, and the child node simply isn't fetchable offline (an
+    /// `eth_getProof` at the parent block falls outside the node's proof
+    /// window for non-recent blocks).
+    ///
+    /// Emitting the branch-chain instead exposes every nibble of the
+    /// extension as a single-child branch the guest CAN split — the created
+    /// key lands in an empty slot at the divergence branch, and the original
+    /// (still-hashed) child stays an `Op::Hash` sibling. `reduce_branch` folds
+    /// a single Hash child back into `ExtR{[nibble], child_hash}`, so the
+    /// reconstructed root is byte-identical to the `ExtensionHash` encoding.
+    /// (`Op::ExtensionHash` remains supported by the guest for back-compat;
+    /// the writer no longer produces it.)
     fn emit_extension(
         &mut self,
         walked: &[u8],
@@ -231,24 +252,6 @@ impl<'a> Encoder<'a> {
         kind: TreeKind,
     ) -> Result<()> {
         let cr = child_ref(child)?;
-        let revealed = match &cr {
-            ChildRef::Hash(h) => self.nodes.contains_key(h),
-            ChildRef::Inline(_) => true,
-            ChildRef::Empty => false,
-        };
-        if !revealed {
-            let h = match cr {
-                ChildRef::Hash(h) => h,
-                _ => bail!("extension child unrevealed but not a hash"),
-            };
-            put_op(&mut self.out, Op::ExtensionHash);
-            put_u64(&mut self.out, nibs.len() as u64);
-            for &n in nibs {
-                put_u64(&mut self.out, n as u64);
-            }
-            self.out.extend_from_slice(&h);
-            return Ok(());
-        }
         self.emit_ext_chain(walked, nibs, cr, kind)
     }
 

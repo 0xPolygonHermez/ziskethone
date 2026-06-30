@@ -276,15 +276,16 @@ pub fn inject_diff_addresses(prestate: &mut Prestate, diff: &crate::rpc::Prestat
 /// the callee). Empty entries if not already present.
 pub fn inject_tx_addresses(prestate: &mut Prestate, current: &alloy::rpc::types::Block) {
     use alloy::consensus::TxEnvelope;
+    use alloy::network::TransactionResponse as _;
     use alloy::rpc::types::BlockTransactions;
     let mut added = 0usize;
     if let BlockTransactions::Full(txs) = &current.transactions {
         for tx in txs {
-            if prestate.entry(tx.from).or_insert_with(|| { added += 1; AccountPrestate::default() }).balance.is_none() {
+            if prestate.entry(tx.from()).or_insert_with(|| { added += 1; AccountPrestate::default() }).balance.is_none() {
                 // sender will be filled by witness walk if it exists in
                 // parent trie; otherwise stays empty until tx execution.
             }
-            if let Some(to) = tx_to(&tx.inner) {
+            if let Some(to) = tx_to(&*tx.inner) {
                 prestate.entry(to).or_insert_with(|| { added += 1; AccountPrestate::default() });
             }
             // NOTE: EIP-2930 access-list addrs/slots are deliberately NOT
@@ -300,7 +301,7 @@ pub fn inject_tx_addresses(prestate: &mut Prestate, current: &alloy::rpc::types:
             // seeded slots with 0, which `enrich_storage` then skipped as
             // "already present", masking real non-zero values.)
             // EIP-7702 authorization signers.
-            if let TxEnvelope::Eip7702(signed) = &tx.inner {
+            if let TxEnvelope::Eip7702(signed) = &*tx.inner {
                 for auth in &signed.tx().authorization_list {
                     if let Ok(sig) = auth.signature() {
                         if let Ok(vk) = sig.recover_from_prehash(&auth.inner().signature_hash()) {

@@ -122,6 +122,7 @@ target_include_directories(evmone-state PUBLIC ${evmone_SOURCE_DIR})
 
 set(GUEST_SOURCES
     src/main.cpp
+    src/run.cpp
     src/fatal.cpp
     src/accounts.cpp
     src/block_header.cpp
@@ -201,6 +202,50 @@ elseif(EVM_BACKEND STREQUAL "evmone")
     # (it needs evmone's headers + lib, which the zevm backend doesn't link).
     target_sources(zisk_eth_guest PRIVATE src/evmc2_evmone.cpp)
     target_link_libraries(zisk_eth_guest PRIVATE evmone)
+else()
+    message(FATAL_ERROR "EVM_BACKEND must be evmone | zevm (got ${EVM_BACKEND})")
+endif()
+
+# ----- native FFI static library --------------------------------------------
+#
+# `zeg_ffi` packages the same block-validation pipeline as the executable but
+# exposes it through the C entry point `zeg_run` (src/ffi.cpp), so the host
+# (zisk-eth-client) can run the EVM in-process instead of inside the ZisK ELF.
+#
+# It reuses GUEST_SOURCES but DROPS src/main.cpp: the lib's only entry point is
+# `zeg_run` (src/ffi.cpp). Leaving main.cpp in would bake a `main` symbol into
+# the archive, which collides at link time if the host links the lib with
+# --whole-archive (common in Rust links=/cc-rs setups). POSITION_INDEPENDENT_CODE
+# is required because the lib is linked into a Rust cdylib/rlib build.
+set(GUEST_FFI_SOURCES ${GUEST_SOURCES})
+list(REMOVE_ITEM GUEST_FFI_SOURCES src/main.cpp)
+add_library(zeg_ffi STATIC ${GUEST_FFI_SOURCES} src/ffi.cpp)
+set_target_properties(zeg_ffi PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+target_include_directories(zeg_ffi PUBLIC include)
+target_include_directories(zeg_ffi PRIVATE
+    ${evmone_SOURCE_DIR}/lib
+    ${evmone_SOURCE_DIR}/include)
+target_compile_options(zeg_ffi PRIVATE -Wall -Wextra -Wpedantic)
+# Re-import intx in case the executable block above (which also calls this)
+# was removed or reordered — the zevm backend drops the transitive evmone
+# link, so zeg_ffi must not rely on a sibling target having imported it.
+# find_package(... CONFIG) is idempotent, so calling it twice is harmless.
+find_package(intx CONFIG QUIET)
+target_link_libraries(zeg_ffi PUBLIC evmone::precompiles evmone::state intx::intx)
+
+if(EVM_BACKEND STREQUAL "zevm")
+    # The `zevm` target is normally created by the executable block above. Add
+    # it here too if that didn't run (e.g. the executable target is removed or
+    # reordered), so zeg_ffi doesn't depend on a sibling target's side effect.
+    if(NOT TARGET zevm)
+        add_subdirectory(src/zevm)
+    endif()
+    target_link_libraries(zeg_ffi PUBLIC zevm)
+    target_compile_definitions(zeg_ffi PRIVATE USE_ZEVM)
+elseif(EVM_BACKEND STREQUAL "evmone")
+    target_sources(zeg_ffi PRIVATE src/evmc2_evmone.cpp)
+    target_link_libraries(zeg_ffi PUBLIC evmone)
 else()
     message(FATAL_ERROR "EVM_BACKEND must be evmone | zevm (got ${EVM_BACKEND})")
 endif()

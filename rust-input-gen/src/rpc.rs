@@ -20,12 +20,12 @@
 use std::collections::{BTreeMap, HashSet};
 
 use alloy::eips::{BlockId, RpcBlockHash};
+use alloy::network::Ethereum;
 use alloy::primitives::{Address, Bytes, B256, U256};
-use alloy::providers::{Provider, ProviderBuilder, RootProvider};
+use alloy::providers::{DynProvider, Provider, ProviderBuilder};
 use alloy::rpc::types::{
-    Block, BlockNumberOrTag, BlockTransactionsKind, EIP1186AccountProofResponse,
+    Block, BlockNumberOrTag, EIP1186AccountProofResponse,
 };
-use alloy::transports::http::{Client as HttpClient, Http};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -34,7 +34,7 @@ use tracing::warn;
 use crate::errors::ReorgDetected;
 
 pub struct Client {
-    provider: RootProvider<Http<HttpClient>>,
+    provider: DynProvider<Ethereum>,
 }
 
 /// Block-start values for one account, as reported by the
@@ -126,7 +126,7 @@ impl Client {
         let parsed = url
             .parse()
             .with_context(|| format!("invalid RPC URL {url}"))?;
-        let provider = ProviderBuilder::new().on_http(parsed);
+        let provider = ProviderBuilder::new().connect_http(parsed).erased();
         Ok(Self { provider })
     }
 
@@ -136,10 +136,8 @@ impl Client {
     /// call. After that, switch to `block_by_hash_full` / `block_by_hash`.
     pub async fn block_by_number_full(&self, number: u64) -> Result<Block> {
         self.provider
-            .get_block_by_number(
-                BlockNumberOrTag::Number(number),
-                BlockTransactionsKind::Full,
-            )
+            .get_block_by_number(BlockNumberOrTag::Number(number))
+            .full()
             .await
             .with_context(|| format!("eth_getBlockByNumber({number}, full)"))?
             .ok_or_else(|| anyhow!("block {number} not found"))
@@ -150,7 +148,8 @@ impl Client {
     /// walking.
     pub async fn block_by_hash(&self, hash: B256) -> Result<Block> {
         self.provider
-            .get_block_by_hash(hash, BlockTransactionsKind::Hashes)
+            .get_block_by_hash(hash)
+            .hashes()
             .await
             .map_err(|e| {
                 promote_not_found_to_reorg(
@@ -177,7 +176,8 @@ impl Client {
     /// needs full tx data for an ancestor.
     pub async fn block_by_hash_full(&self, hash: B256) -> Result<Block> {
         self.provider
-            .get_block_by_hash(hash, BlockTransactionsKind::Full)
+            .get_block_by_hash(hash)
+            .full()
             .await
             .map_err(|e| {
                 promote_not_found_to_reorg(
@@ -350,7 +350,8 @@ impl Client {
         // to ReorgDetected so the caller retries cleanly.
         let pre = self
             .provider
-            .get_block_by_hash(hash, BlockTransactionsKind::Hashes)
+            .get_block_by_hash(hash)
+            .hashes()
             .await
             .map_err(|e| {
                 promote_not_found_to_reorg(
@@ -388,10 +389,8 @@ impl Client {
         // (c) Re-confirm canonical block at `number` still has our hash.
         let post = self
             .provider
-            .get_block_by_number(
-                BlockNumberOrTag::Number(number),
-                BlockTransactionsKind::Hashes,
-            )
+            .get_block_by_number(BlockNumberOrTag::Number(number))
+            .hashes()
             .await
             .with_context(|| format!("eth_getBlockByNumber({number}) post-witness"))?
             .ok_or_else(|| ReorgDetected {
@@ -495,6 +494,12 @@ impl Client {
         }
         // None active yet at this timestamp — fall back to `current`'s schedule.
         Ok(v.get("current").and_then(fraction_of))
+    }
+
+    /// Fetch the node's chain id (`eth_chainId`).
+    pub async fn chain_id(&self) -> anyhow::Result<u64> {
+        use alloy::providers::Provider;
+        Ok(self.provider.get_chain_id().await?)
     }
 
     // ---- private ----------------------------------------------------------

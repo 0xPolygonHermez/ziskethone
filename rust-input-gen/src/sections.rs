@@ -188,7 +188,7 @@ pub fn write_transactions(w: &mut Writer, current: &Block) -> Result<()> {
 
     w.u64_le(txs.len() as u64);
     for tx in txs {
-        let env: &TxEnvelope = &tx.inner;
+        let env: &TxEnvelope = &*tx.inner;
 
         // EIP-2718 canonical wire envelope (legacy = raw RLP list,
         // typed = `type_byte || rlp(...)`).
@@ -311,7 +311,7 @@ pub fn write_contracts(
     // EIP-7702 delegation stubs: 0xef0100 || delegate, for every auth.
     if let BlockTransactions::Full(txs) = &current.transactions {
         for tx in txs {
-            if let TxEnvelope::Eip7702(signed) = &tx.inner {
+            if let TxEnvelope::Eip7702(signed) = &*tx.inner {
                 for auth in &signed.tx().authorization_list {
                     let delegate = auth.inner().address;
                     let mut stub = [0u8; 23];

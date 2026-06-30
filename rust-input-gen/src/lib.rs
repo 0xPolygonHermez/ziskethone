@@ -8,8 +8,10 @@
 //! external test drivers (e.g. the planned `eest-runner` crate)
 //! without spawning a subprocess.
 
+pub(crate) mod fetch;
 pub mod enrich;
 pub mod errors;
+pub mod live;
 pub mod mpt;
 pub mod offline;
 pub mod rpc;
@@ -18,3 +20,5 @@ pub mod state_root;
 pub mod touchset;
 pub mod verify;
 pub mod writer;
+
+pub(crate) use fetch::fetch_offline_sources_online;
