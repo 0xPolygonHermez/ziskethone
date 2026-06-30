@@ -8,9 +8,9 @@
 //! external test drivers (e.g. the planned `eest-runner` crate)
 //! without spawning a subprocess.
 
-pub(crate) mod fetch;
 pub mod enrich;
 pub mod errors;
+pub(crate) mod fetch;
 pub mod live;
 pub mod mpt;
 pub mod offline;

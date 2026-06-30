@@ -84,7 +84,12 @@ pub async fn build_prestate_from_witness(
 
     // Step 1: collect every leaf in the parent state trie.
     let mut state_leaves: Vec<([u8; 32], Vec<u8>)> = Vec::new();
-    collect_leaves(&nodes, &parent_state_root.0, &mut Vec::new(), &mut state_leaves)?;
+    collect_leaves(
+        &nodes,
+        &parent_state_root.0,
+        &mut Vec::new(),
+        &mut state_leaves,
+    )?;
 
     let mut prestate = Prestate::default();
     let mut state_missing = 0usize;
@@ -102,9 +107,11 @@ pub async fn build_prestate_from_witness(
             }
         };
         let (nonce, balance, sroot, code_hash) = decode_account_rlp(&account_rlp)?;
-        let mut entry = AccountPrestate::default();
-        entry.nonce = Some(nonce);
-        entry.balance = Some(balance);
+        let mut entry = AccountPrestate {
+            nonce: Some(nonce),
+            balance: Some(balance),
+            ..Default::default()
+        };
         if code_hash != EMPTY_CODE_HASH {
             if let Some(c) = codes_by_hash.get(&code_hash) {
                 entry.code = Some(c.clone());
@@ -192,7 +199,12 @@ pub async fn enrich_state_leaves_from_witness(
     }
 
     let mut state_leaves: Vec<([u8; 32], Vec<u8>)> = Vec::new();
-    collect_leaves(&nodes, &parent_state_root.0, &mut Vec::new(), &mut state_leaves)?;
+    collect_leaves(
+        &nodes,
+        &parent_state_root.0,
+        &mut Vec::new(),
+        &mut state_leaves,
+    )?;
 
     let mut added = 0usize;
     let mut missing_preimage = 0usize;
@@ -208,9 +220,11 @@ pub async fn enrich_state_leaves_from_witness(
             continue;
         }
         let (nonce, balance, _sroot, code_hash) = decode_account_rlp(&account_rlp)?;
-        let mut entry = AccountPrestate::default();
-        entry.nonce = Some(nonce);
-        entry.balance = Some(balance);
+        let mut entry = AccountPrestate {
+            nonce: Some(nonce),
+            balance: Some(balance),
+            ..Default::default()
+        };
         if code_hash != EMPTY_CODE_HASH {
             if let Some(c) = codes_by_hash.get(&code_hash) {
                 entry.code = Some(c.clone());
@@ -233,8 +247,7 @@ pub async fn enrich_state_leaves_from_witness(
 
     info!(
         added,
-        missing_preimage,
-        "appended state-trie leaves into prestate"
+        missing_preimage, "appended state-trie leaves into prestate"
     );
     Ok(added)
 }
@@ -248,9 +261,16 @@ pub fn inject_diff_addresses(prestate: &mut Prestate, diff: &crate::rpc::Prestat
     let mut added = 0usize;
     for side in [&diff.pre, &diff.post] {
         for (addr, info) in side {
-            let entry = prestate.entry(*addr).or_insert_with(|| { added += 1; AccountPrestate::default() });
-            if entry.balance.is_none() { entry.balance = info.balance; }
-            if entry.nonce.is_none()   { entry.nonce   = info.nonce; }
+            let entry = prestate.entry(*addr).or_insert_with(|| {
+                added += 1;
+                AccountPrestate::default()
+            });
+            if entry.balance.is_none() {
+                entry.balance = info.balance;
+            }
+            if entry.nonce.is_none() {
+                entry.nonce = info.nonce;
+            }
             if entry.code.is_none() && info.code.is_some() {
                 entry.code = info.code.clone();
             }
@@ -268,7 +288,10 @@ pub fn inject_diff_addresses(prestate: &mut Prestate, diff: &crate::rpc::Prestat
             }
         }
     }
-    info!(added_accounts = added, "injected diff addresses into prestate");
+    info!(
+        added_accounts = added,
+        "injected diff addresses into prestate"
+    );
 }
 
 /// Inject every address that appears as a tx sender or `to` field —
@@ -281,12 +304,23 @@ pub fn inject_tx_addresses(prestate: &mut Prestate, current: &alloy::rpc::types:
     let mut added = 0usize;
     if let BlockTransactions::Full(txs) = &current.transactions {
         for tx in txs {
-            if prestate.entry(tx.from()).or_insert_with(|| { added += 1; AccountPrestate::default() }).balance.is_none() {
+            if prestate
+                .entry(tx.from())
+                .or_insert_with(|| {
+                    added += 1;
+                    AccountPrestate::default()
+                })
+                .balance
+                .is_none()
+            {
                 // sender will be filled by witness walk if it exists in
                 // parent trie; otherwise stays empty until tx execution.
             }
-            if let Some(to) = tx_to(&*tx.inner) {
-                prestate.entry(to).or_insert_with(|| { added += 1; AccountPrestate::default() });
+            if let Some(to) = tx_to(&tx.inner) {
+                prestate.entry(to).or_insert_with(|| {
+                    added += 1;
+                    AccountPrestate::default()
+                });
             }
             // NOTE: EIP-2930 access-list addrs/slots are deliberately NOT
             // injected. The access list only *declares* state a tx may
@@ -311,7 +345,10 @@ pub fn inject_tx_addresses(prestate: &mut Prestate, current: &alloy::rpc::types:
                                 let h = keccak256(&bytes[1..]);
                                 let mut a = [0u8; 20];
                                 a.copy_from_slice(&h[12..]);
-                                prestate.entry(Address::from(a)).or_insert_with(|| { added += 1; AccountPrestate::default() });
+                                prestate.entry(Address::from(a)).or_insert_with(|| {
+                                    added += 1;
+                                    AccountPrestate::default()
+                                });
                             }
                         }
                     }
@@ -319,7 +356,10 @@ pub fn inject_tx_addresses(prestate: &mut Prestate, current: &alloy::rpc::types:
             }
         }
     }
-    info!(added_addresses = added, "injected tx-derived addresses into prestate");
+    info!(
+        added_addresses = added,
+        "injected tx-derived addresses into prestate"
+    );
 }
 
 fn tx_to(env: &alloy::consensus::TxEnvelope) -> Option<Address> {
@@ -417,7 +457,10 @@ pub async fn enrich_prestate_from_witness(
         }
     }
 
-    info!(patched_accounts = patched, walk_skipped, "enriched prestate from witness");
+    info!(
+        patched_accounts = patched,
+        walk_skipped, "enriched prestate from witness"
+    );
     Ok(patched)
 }
 
@@ -475,10 +518,14 @@ pub fn enrich_storage_slots_from_witness(
                 walk_skipped += 1;
                 continue;
             }
-            Err(e) => return Err(e).with_context(|| format!(
-                "enrich: walking parent state trie for addr {addr} (hash 0x{})",
-                hex::encode(addr_hash)
-            )),
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!(
+                        "enrich: walking parent state trie for addr {addr} (hash 0x{})",
+                        hex::encode(addr_hash)
+                    )
+                })
+            }
         };
         let (_nonce, _balance, sroot, _ch) = decode_account_rlp(&leaf)?;
         if sroot == EMPTY_TRIE_ROOT {
@@ -613,7 +660,7 @@ fn collect_child(
     out: &mut Vec<([u8; 32], Vec<u8>)>,
 ) -> Result<()> {
     match child {
-        Rlp::Bytes(b) if b.is_empty() => Ok(()),
+        Rlp::Bytes([]) => Ok(()),
         Rlp::Bytes(b) if b.len() == 32 => {
             let h = <[u8; 32]>::try_from(*b).unwrap();
             collect_leaves(nodes, &h, path_nibs, out)
@@ -681,7 +728,7 @@ fn follow_child(
     depth: usize,
 ) -> Result<Option<Vec<u8>>> {
     match child {
-        Rlp::Bytes(b) if b.is_empty() => Ok(None),
+        Rlp::Bytes([]) => Ok(None),
         Rlp::Bytes(b) if b.len() == 32 => {
             let h = <[u8; 32]>::try_from(*b).unwrap();
             let raw = nodes
@@ -708,7 +755,7 @@ fn is_witness_missing(err: &anyhow::Error) -> bool {
 
 fn nibble(hash: &[u8; 32], i: usize) -> u8 {
     let b = hash[i / 2];
-    if i % 2 == 0 {
+    if i.is_multiple_of(2) {
         b >> 4
     } else {
         b & 0x0f
@@ -795,15 +842,11 @@ fn be_bytes(mut n: u64) -> Vec<u8> {
 }
 
 const EMPTY_CODE_HASH: [u8; 32] = [
-    0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c,
-    0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03, 0xc0,
-    0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b,
-    0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85, 0xa4, 0x70,
+    0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03, 0xc0,
+    0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85, 0xa4, 0x70,
 ];
 
 const EMPTY_TRIE_ROOT: [u8; 32] = [
-    0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6,
-    0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0, 0xf8, 0x6e,
-    0x5b, 0x48, 0xe0, 0x1b, 0x99, 0x6c, 0xad, 0xc0,
-    0x01, 0x62, 0x2f, 0xb5, 0xe3, 0x63, 0xb4, 0x21,
+    0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6, 0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0, 0xf8, 0x6e,
+    0x5b, 0x48, 0xe0, 0x1b, 0x99, 0x6c, 0xad, 0xc0, 0x01, 0x62, 0x2f, 0xb5, 0xe3, 0x63, 0xb4, 0x21,
 ];

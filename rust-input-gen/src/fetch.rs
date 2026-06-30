@@ -21,7 +21,6 @@ pub(crate) async fn fetch_offline_sources_online(
     block: u64,
     ancestors_depth: u64,
 ) -> Result<OfflineSources> {
-
     // ---- (1) Discover the canonical anchor hash ----
     //
     // Single by-number call in the whole run. From this point on,
@@ -76,7 +75,10 @@ pub(crate) async fn fetch_offline_sources_online(
         .blob_base_fee_update_fraction_at(current.header.timestamp)
         .await?
         .unwrap_or(0);
-    info!(blob_base_fee_update_fraction, "resolved blob base-fee update fraction");
+    info!(
+        blob_base_fee_update_fraction,
+        "resolved blob base-fee update fraction"
+    );
 
     {
         use alloy::rpc::types::BlockTransactions;
@@ -131,24 +133,15 @@ pub(crate) async fn fetch_offline_sources_online(
         "injected tx-derived addresses (incl. EIP-7702 signers)"
     );
 
-    let system_contract_slots = inject_system_contracts(
-        client,
-        &mut prestate,
-        &current,
-        block_hash,
-        parent_hash,
-    )
-    .await?;
+    let system_contract_slots =
+        inject_system_contracts(client, &mut prestate, &current, block_hash, parent_hash).await?;
     info!(
         accounts = prestate.len(),
         "added Pectra system-contract entries"
     );
 
     inject_withdrawal_recipients(client, &mut prestate, &current, parent_hash).await?;
-    info!(
-        accounts = prestate.len(),
-        "added withdrawal recipients"
-    );
+    info!(accounts = prestate.len(), "added withdrawal recipients");
 
     enrich::enrich_prestate_from_witness(
         client,
@@ -156,7 +149,8 @@ pub(crate) async fn fetch_offline_sources_online(
         parent_hash,
         &witness,
         &mut prestate,
-    ).await?;
+    )
+    .await?;
 
     backfill_witness_gaps(
         client,
@@ -164,7 +158,8 @@ pub(crate) async fn fetch_offline_sources_online(
         parent_hash,
         &prestate,
         &mut witness,
-    ).await?;
+    )
+    .await?;
 
     enrich::enrich_state_leaves_from_witness(
         client,
@@ -172,13 +167,10 @@ pub(crate) async fn fetch_offline_sources_online(
         parent_hash,
         &witness,
         &mut prestate,
-    ).await?;
+    )
+    .await?;
 
-    enrich::enrich_storage_slots_from_witness(
-        parent.header.state_root,
-        &witness,
-        &mut prestate,
-    )?;
+    enrich::enrich_storage_slots_from_witness(parent.header.state_root, &witness, &mut prestate)?;
 
     // ---- (5) End-of-run reorg reverify ----
     {
@@ -271,7 +263,6 @@ async fn backfill_witness_gaps(
     Ok(())
 }
 
-
 struct SystemContract {
     addr: &'static str,
     slots: fn(current_number: u64, current_timestamp: u64) -> Vec<alloy::primitives::B256>,
@@ -350,7 +341,7 @@ async fn inject_system_contracts(
 ) -> Result<std::collections::BTreeSet<(alloy::primitives::Address, alloy::primitives::B256)>> {
     use alloy::primitives::Address;
 
-    let number    = current.header.number;
+    let number = current.header.number;
     let timestamp = current.header.timestamp;
 
     let mut writable: std::collections::BTreeSet<(Address, alloy::primitives::B256)> =

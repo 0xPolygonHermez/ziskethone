@@ -26,12 +26,12 @@ use crate::writer::Writer;
 #[repr(u64)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Op {
-    Empty         = 0,
-    Hash          = 1,
+    Empty = 0,
+    Hash = 1,
     ExtensionHash = 2,
-    Leaf          = 3,
-    Branch        = 4,
-    PhantomLeaf   = 5,
+    Leaf = 3,
+    Branch = 4,
+    PhantomLeaf = 5,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,16 +130,16 @@ fn put_state_leaf_payload(
     code_hash: &B256,
 ) {
     out.extend_from_slice(addr.as_slice()); // 20
-    out.extend_from_slice(&[0u8; 4]);       // pad to 24
+    out.extend_from_slice(&[0u8; 4]); // pad to 24
     out.extend_from_slice(&balance.to_be_bytes::<32>()); // 32
-    put_u64(out, nonce);                    // 8
+    put_u64(out, nonce); // 8
     out.extend_from_slice(code_hash.as_slice()); // 32
 }
 
 /// Storage `Op::Leaf` payload: position(32) value(32) = 64 bytes.
 fn put_storage_leaf_payload(out: &mut Vec<u8>, position: &B256, value: &B256) {
     out.extend_from_slice(position.as_slice()); // 32
-    out.extend_from_slice(value.as_slice());    // 32
+    out.extend_from_slice(value.as_slice()); // 32
 }
 
 fn nibbles_to_bytes(nibs: &[u8]) -> Result<[u8; 32]> {
@@ -157,7 +157,7 @@ fn nibbles_to_bytes(nibs: &[u8]) -> Result<[u8; 32]> {
 /// reference: an empty string, a 32-byte hash, or a small inline node.
 fn child_ref(item: &Rlp<'_>) -> Result<ChildRef> {
     match item {
-        Rlp::Bytes(b) if b.is_empty() => Ok(ChildRef::Empty),
+        Rlp::Bytes([]) => Ok(ChildRef::Empty),
         Rlp::Bytes(b) if b.len() == 32 => Ok(ChildRef::Hash(<[u8; 32]>::try_from(*b).unwrap())),
         Rlp::List(_) => Ok(ChildRef::Inline(mpt::rlp_encode(item))),
         Rlp::Bytes(b) => bail!("MPT child has unexpected length {}", b.len()),
@@ -197,8 +197,8 @@ impl<'a> Encoder<'a> {
         match items.len() {
             17 => {
                 put_op(&mut self.out, Op::Branch);
-                for k in 0..16 {
-                    let cr = child_ref(&items[k])?;
+                for (k, item) in items.iter().enumerate().take(16) {
+                    let cr = child_ref(item)?;
                     let mut w = walked.to_vec();
                     w.push(k as u8);
                     self.emit_child(&w, cr, kind)?;

@@ -46,11 +46,7 @@ impl TouchSet {
         addr_set.extend(diff.post.keys().copied());
         let mut addrs: Vec<Address> = addr_set.into_iter().collect();
         addrs.sort_by_key(|a| keccak256(a.as_slice()));
-        let addr_idx = addrs
-            .iter()
-            .enumerate()
-            .map(|(i, a)| (*a, i))
-            .collect();
+        let addr_idx = addrs.iter().enumerate().map(|(i, a)| (*a, i)).collect();
 
         // (addr, slot) pairs — same union as sections::write_storages.
         let mut slot_set: BTreeSet<(Address, B256)> = BTreeSet::new();
@@ -72,13 +68,14 @@ impl TouchSet {
         // cpp-guest's storage-leaf counter.
         let mut slots: Vec<(Address, B256)> = slot_set.into_iter().collect();
         slots.sort_by_key(|(a, s)| (keccak256(a.as_slice()), keccak256(s.as_slice())));
-        let slot_idx = slots
-            .iter()
-            .enumerate()
-            .map(|(i, k)| (*k, i))
-            .collect();
+        let slot_idx = slots.iter().enumerate().map(|(i, k)| (*k, i)).collect();
 
-        Self { addrs, addr_idx, slots, slot_idx }
+        Self {
+            addrs,
+            addr_idx,
+            slots,
+            slot_idx,
+        }
     }
 
     /// Touched slots for one account, in `slots` order. Used by the
@@ -111,12 +108,7 @@ impl TouchSet {
         diff.pre.contains_key(addr) || diff.post.contains_key(addr)
     }
 
-    pub fn is_written_slot(
-        &self,
-        addr: &Address,
-        slot: &B256,
-        diff: &PrestateDiff,
-    ) -> bool {
+    pub fn is_written_slot(&self, addr: &Address, slot: &B256, diff: &PrestateDiff) -> bool {
         for side in [&diff.pre, &diff.post] {
             if let Some(info) = side.get(addr) {
                 if info.storage.contains_key(slot) {

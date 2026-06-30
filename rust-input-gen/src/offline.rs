@@ -92,8 +92,7 @@ pub fn build_binary(sources: &OfflineSources, output: &Path) -> Result<()> {
         std::fs::create_dir_all(parent_dir)
             .with_context(|| format!("creating output dir {}", parent_dir.display()))?;
     }
-    std::fs::write(output, &bytes)
-        .with_context(|| format!("writing {}", output.display()))?;
+    std::fs::write(output, &bytes).with_context(|| format!("writing {}", output.display()))?;
     info!(path = %output.display(), bytes = bytes.len(), "wrote input file");
     Ok(())
 }

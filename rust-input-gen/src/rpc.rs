@@ -23,9 +23,7 @@ use alloy::eips::{BlockId, RpcBlockHash};
 use alloy::network::Ethereum;
 use alloy::primitives::{Address, Bytes, B256, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder};
-use alloy::rpc::types::{
-    Block, BlockNumberOrTag, EIP1186AccountProofResponse,
-};
+use alloy::rpc::types::{Block, BlockNumberOrTag, EIP1186AccountProofResponse};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -50,9 +48,9 @@ pub struct AccountPrestate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub balance: Option<U256>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub nonce:   Option<u64>,
+    pub nonce: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub code:    Option<Bytes>,
+    pub code: Option<Bytes>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub storage: BTreeMap<B256, B256>,
 }
@@ -63,7 +61,7 @@ pub type Prestate = BTreeMap<Address, AccountPrestate>;
 /// that changed during the block.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PrestateDiff {
-    pub pre:  Prestate,
+    pub pre: Prestate,
     pub post: Prestate,
 }
 
@@ -78,7 +76,7 @@ pub struct PrestateDiff {
 pub struct ExecutionWitness {
     pub state: Vec<Bytes>,
     pub codes: Vec<Bytes>,
-    pub keys:  Vec<Bytes>,
+    pub keys: Vec<Bytes>,
 }
 
 /// Helper: wrap a `B256` block hash as the `BlockId` needed by
@@ -290,12 +288,7 @@ impl Client {
     /// inject the canonical block-start values for the Pectra system
     /// contracts' pre-allocated slots (the ring-buffer entries written
     /// by prior blocks).
-    pub async fn storage_at_hash(
-        &self,
-        addr: Address,
-        slot: B256,
-        hash: B256,
-    ) -> Result<B256> {
+    pub async fn storage_at_hash(&self, addr: Address, slot: B256, hash: B256) -> Result<B256> {
         self.provider
             .get_storage_at(addr, slot.into())
             .block_id(id(hash))
@@ -379,8 +372,7 @@ impl Client {
             .await
             .map_err(|e| {
                 promote_not_found_to_reorg(
-                    anyhow::Error::from(e)
-                        .context(format!("debug_executionWitness({number})")),
+                    anyhow::Error::from(e).context(format!("debug_executionWitness({number})")),
                     hash,
                     "debug_executionWitness",
                 )
@@ -393,7 +385,7 @@ impl Client {
             .hashes()
             .await
             .with_context(|| format!("eth_getBlockByNumber({number}) post-witness"))?
-            .ok_or_else(|| ReorgDetected {
+            .ok_or(ReorgDetected {
                 block: number,
                 expected: hash,
                 actual: None,
@@ -412,7 +404,7 @@ impl Client {
         Ok(ExecutionWitness {
             state: decode_hex_array(&v, "state")?,
             codes: decode_hex_array(&v, "codes")?,
-            keys:  decode_hex_array(&v, "keys")?,
+            keys: decode_hex_array(&v, "keys")?,
         })
     }
 
@@ -481,7 +473,8 @@ impl Client {
         let mut best: Option<(u64, u64)> = None; // (activationTime, fraction)
         for key in ["last", "current", "next"] {
             let Some(entry) = v.get(key) else { continue };
-            let (Some(act), Some(frac)) = (parse_u64(entry.get("activationTime")), fraction_of(entry))
+            let (Some(act), Some(frac)) =
+                (parse_u64(entry.get("activationTime")), fraction_of(entry))
             else {
                 continue;
             };
@@ -504,11 +497,7 @@ impl Client {
 
     // ---- private ----------------------------------------------------------
 
-    async fn debug_trace_prestate_by_hash(
-        &self,
-        hash: B256,
-        diff_mode: bool,
-    ) -> Result<Value> {
+    async fn debug_trace_prestate_by_hash(&self, hash: B256, diff_mode: bool) -> Result<Value> {
         let hash_hex = format!("0x{:x}", hash);
         let config = if diff_mode {
             json!({
@@ -519,10 +508,7 @@ impl Client {
             json!({ "tracer": "prestateTracer" })
         };
         self.provider
-            .raw_request(
-                "debug_traceBlockByHash".into(),
-                (hash_hex, config),
-            )
+            .raw_request("debug_traceBlockByHash".into(), (hash_hex, config))
             .await
             .map_err(|e| {
                 promote_not_found_to_reorg(
@@ -552,8 +538,8 @@ fn decode_hex_array(v: &Value, field: &'static str) -> Result<Vec<Bytes>> {
                 .as_str()
                 .ok_or_else(|| anyhow!("witness: `{}` item not string", field))?;
             let s = s.strip_prefix("0x").unwrap_or(s);
-            let bytes = hex::decode(s)
-                .with_context(|| format!("witness: decoding `{}` hex", field))?;
+            let bytes =
+                hex::decode(s).with_context(|| format!("witness: decoding `{}` hex", field))?;
             Ok(Bytes::from(bytes))
         })
         .collect()
@@ -563,7 +549,9 @@ fn decode_hex_array(v: &Value, field: &'static str) -> Result<Vec<Bytes>> {
 
 fn merge_prestate_traces(traces_raw: &Value, first_wins: bool) -> Prestate {
     let mut out = Prestate::default();
-    let Some(traces) = traces_raw.as_array() else { return out };
+    let Some(traces) = traces_raw.as_array() else {
+        return out;
+    };
     // Track which addresses have been "first-seen" so we can correctly
     // snapshot block-start state from the FIRST tx that touches each
     // address — including treating omitted JSON fields as their default
@@ -587,7 +575,9 @@ fn merge_one_into(
     first_wins: bool,
     mut seen: Option<&mut HashSet<Address>>,
 ) {
-    let Some(obj) = addrs_obj.as_object() else { return };
+    let Some(obj) = addrs_obj.as_object() else {
+        return;
+    };
     for (addr_str, info) in obj {
         let Ok(addr) = addr_str.parse::<Address>() else {
             warn!(%addr_str, "skipping malformed address in prestate trace");
@@ -598,8 +588,7 @@ fn merge_one_into(
         // caller (`merge_one_into(.., first_wins, None)`) doesn't track
         // first-appearance because diff JSON omits "unchanged" fields,
         // so omitted ≠ default there — only present-vs-absent matters.
-        let is_first_appearance =
-            seen.as_mut().map(|s| s.insert(addr)).unwrap_or(false);
+        let is_first_appearance = seen.as_mut().map(|s| s.insert(addr)).unwrap_or(false);
         let entry = out.entry(addr).or_default();
 
         if is_first_appearance {
@@ -607,8 +596,8 @@ fn merge_one_into(
             // state. The tracer omits zero balance / zero nonce / empty
             // code from the JSON, so omission means the default value.
             entry.balance = Some(parse_u256(info.get("balance")).unwrap_or(U256::ZERO));
-            entry.nonce   = Some(parse_u64(info.get("nonce")).unwrap_or(0));
-            entry.code    = Some(parse_bytes(info.get("code")).unwrap_or_default());
+            entry.nonce = Some(parse_u64(info.get("nonce")).unwrap_or(0));
+            entry.code = Some(parse_bytes(info.get("code")).unwrap_or_default());
         } else {
             if let Some(v) = parse_u256(info.get("balance")) {
                 if !first_wins || entry.balance.is_none() {
@@ -628,8 +617,12 @@ fn merge_one_into(
         }
         if let Some(stor) = info.get("storage").and_then(Value::as_object) {
             for (key_str, val_str) in stor {
-                let Ok(slot)  = key_str.parse::<B256>() else { continue };
-                let Some(val) = parse_b256(Some(val_str)) else { continue };
+                let Ok(slot) = key_str.parse::<B256>() else {
+                    continue;
+                };
+                let Some(val) = parse_b256(Some(val_str)) else {
+                    continue;
+                };
                 if first_wins {
                     entry.storage.entry(slot).or_insert(val);
                 } else {

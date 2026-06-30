@@ -60,11 +60,7 @@ pub async fn fetch_and_build_with_stats(
 
 /// Fetch + encode in one call, returning the `ZEG0` binary as bytes
 /// (no file written). This is what the host's ZiskethoneClient consumes.
-pub async fn fetch_and_build_bytes(
-    rpc_url: &str,
-    block: u64,
-    ancestors: u64,
-) -> Result<Vec<u8>> {
+pub async fn fetch_and_build_bytes(rpc_url: &str, block: u64, ancestors: u64) -> Result<Vec<u8>> {
     let sources = fetch_offline_sources(rpc_url, block, ancestors).await?;
     offline::encode_binary(&sources)
 }
@@ -84,8 +80,7 @@ mod tests {
             let rt = tokio::runtime::Runtime::new().unwrap();
             let _: OfflineSources =
                 rt.block_on(async { fetch_offline_sources("", 1, 0).await.unwrap() });
-            let _: Vec<u8> =
-                rt.block_on(async { fetch_and_build_bytes("", 1, 0).await.unwrap() });
+            let _: Vec<u8> = rt.block_on(async { fetch_and_build_bytes("", 1, 0).await.unwrap() });
             let _: (Vec<u8>, InputStats) =
                 rt.block_on(async { fetch_and_build_with_stats("", 1, 0).await.unwrap() });
         }

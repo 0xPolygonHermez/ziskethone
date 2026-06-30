@@ -188,7 +188,7 @@ pub fn write_transactions(w: &mut Writer, current: &Block) -> Result<()> {
 
     w.u64_le(txs.len() as u64);
     for tx in txs {
-        let env: &TxEnvelope = &*tx.inner;
+        let env: &TxEnvelope = &tx.inner;
 
         // EIP-2718 canonical wire envelope (legacy = raw RLP list,
         // typed = `type_byte || rlp(...)`).
@@ -206,10 +206,8 @@ pub fn write_transactions(w: &mut Writer, current: &Block) -> Result<()> {
 // ----- keccak helper used by Accounts + Contracts ----------------------------
 
 pub const EMPTY_CODE_HASH: B256 = B256::new([
-    0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c,
-    0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03, 0xc0,
-    0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b,
-    0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85, 0xa4, 0x70,
+    0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03, 0xc0,
+    0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85, 0xa4, 0x70,
 ]);
 
 fn keccak256(bytes: &[u8]) -> B256 {
@@ -224,12 +222,11 @@ fn keccak256(bytes: &[u8]) -> B256 {
 /// `Op::Leaf` payload; the guest builds its Accounts table from them.
 ///
 /// Field sourcing:
-///   * balance, nonce, code   ← prestate (block-start). Falls back to
-///                              diff.pre (also a block-start value) if
-///                              the address is only present there;
-///                              else zero/empty defaults (newly created
-///                              — was non-existent pre-block).
-///   * code_hash              ← keccak256(code) or EMPTY_CODE_HASH.
+///   * balance, nonce, code ← prestate (block-start). Falls back to
+///     diff.pre (also a block-start value) if the address is only present
+///     there; else zero/empty defaults (newly created — was non-existent
+///     pre-block).
+///   * code_hash ← keccak256(code) or EMPTY_CODE_HASH.
 pub fn account_original_fields(
     addr: &Address,
     prestate: &Prestate,
@@ -239,21 +236,23 @@ pub fn account_original_fields(
     // non-diff prestate may carry post-creation values (the first tx that
     // READ the account ran AFTER the CREATE), but the block-START values
     // must be empty for the old-root reconstruction to match.
-    let created_this_block =
-        !diff.pre.contains_key(addr) && diff.post.contains_key(addr);
+    let created_this_block = !diff.pre.contains_key(addr) && diff.post.contains_key(addr);
 
     if created_this_block {
         return (U256::ZERO, 0u64, EMPTY_CODE_HASH);
     }
     let ps_main = prestate.get(addr);
     let ps_fallback = diff.pre.get(addr);
-    let balance = ps_main.and_then(|p| p.balance)
+    let balance = ps_main
+        .and_then(|p| p.balance)
         .or_else(|| ps_fallback.and_then(|p| p.balance))
         .unwrap_or(U256::ZERO);
-    let nonce = ps_main.and_then(|p| p.nonce)
+    let nonce = ps_main
+        .and_then(|p| p.nonce)
         .or_else(|| ps_fallback.and_then(|p| p.nonce))
         .unwrap_or(0);
-    let code = ps_main.and_then(|p| p.code.as_ref())
+    let code = ps_main
+        .and_then(|p| p.code.as_ref())
         .or_else(|| ps_fallback.and_then(|p| p.code.as_ref()));
     let code_hash = match code {
         Some(c) if !c.is_empty() => keccak256(c),
@@ -315,7 +314,9 @@ pub fn write_contracts(
                 for auth in &signed.tx().authorization_list {
                     let delegate = auth.inner().address;
                     let mut stub = [0u8; 23];
-                    stub[0] = 0xef; stub[1] = 0x01; stub[2] = 0x00;
+                    stub[0] = 0xef;
+                    stub[1] = 0x01;
+                    stub[2] = 0x00;
                     stub[3..].copy_from_slice(delegate.as_slice());
                     insert(&mut by_hash, Bytes::from(stub.to_vec()));
                 }
