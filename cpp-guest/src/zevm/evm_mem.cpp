@@ -69,10 +69,17 @@ MemGas EVMMem::ensure(size_t need_bytes, int64_t gas) {
     // same-parity frames can cumulatively exhaust the zone. Growing past the
     // arena would memset/memcpy out of bounds (UB / segfault). Treat zone
     // exhaustion as out-of-gas so the guest fails cleanly instead of crashing.
-    // Memory cost is quadratic in gas, so within the current fork's per-tx gas
-    // cap the cumulative footprint stays far below a zone and this never fires
-    // on valid blocks; it only bounds adversarial deep-recursion + large-memory
-    // cases (old-fork state tests) — documented as a known divergence.
+    //
+    // Memory cost is quadratic in gas, so within any realistic per-tx gas cap the
+    // cumulative footprint stays far below a zone and this never fires on valid
+    // blocks (a zone holds ~80M-gas worth of memory even under an adversary-
+    // favorable bound; mainnet block limits are ~30-45M, EIP-7825 caps a tx at
+    // 16.7M). It only bounds one known adversarial EEST state test,
+    // stStaticCall/static_Call1MB1024Calldepth, which spends ~882e9 gas to hold
+    // ~1 MiB in each of 1024 simultaneously-live frames (~1 GiB total) — beyond
+    // what a fixed zero-init arena can hold, and impossible in a real block. On
+    // that one vector zevm returns out-of-gas where evmone (heap memory) succeeds;
+    // a documented, real-block-unreachable divergence, not a crash.
     const int    z   = s_cur & 1;
     const size_t off = static_cast<size_t>(h.start_ptr - s_zone[z]);
     if (off + new_size > kMemBlockSize)
