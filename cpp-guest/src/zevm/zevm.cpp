@@ -45,7 +45,7 @@ namespace {
 // makes this plain zeroed BSS. run() reset()s the slot on entry, teardown()s it
 // on return. Indexed by msg->depth — the same index EVMMem uses for its zones,
 // so the existing depth-limit light-fail keeps it in range.
-EvmState g_frames[kMaxCallDepth];
+EvmState g_frames[kMaxCallDepth + 1];  // frames live at depths 0..kMaxCallDepth
 
 // ----- straight-line opcode dispatch -----
 //

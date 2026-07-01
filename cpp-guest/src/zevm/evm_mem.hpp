@@ -26,7 +26,7 @@ namespace zevm {
 // until actually touched.
 inline constexpr size_t kMaxMemPerTx   = size_t(1) << 25;  //  32 MiB per frame
 inline constexpr size_t kMemBlockSize  = size_t(1) << 27;  // 128 MiB per zone
-inline constexpr size_t kMaxMemHandles = 1024;             // == EVM max call depth
+inline constexpr size_t kMaxMemHandles = 1025;             // EVM max call depth 1024 + 1 (frames at depths 0..1024)
 
 static_assert(kMemBlockSize > kMaxMemPerTx, "a zone must fit at least one tx");
 

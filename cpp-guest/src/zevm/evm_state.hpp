@@ -22,9 +22,11 @@ namespace zevm {
 
 inline constexpr size_t kStackLimit = 1024;
 
-// EVM maximum call depth — also the number of preallocated frames (one per live
-// depth) and == EVMMem's handle count. run() indexes its static frame array by
-// the message's call depth, the same index EVMMem uses for its zones.
+// EVM maximum call depth. A frame runs at every depth 0..kMaxCallDepth inclusive
+// (a CALL is allowed while depth < 1024, so a depth-1023 frame spawns a running
+// depth-1024 child), so the preallocated frame array and EVMMem's zone handles
+// must hold kMaxCallDepth + 1 entries — run() indexes them by the message's call
+// depth, the same index EVMMem uses for its zones.
 inline constexpr size_t kMaxCallDepth = 1024;
 
 // Fill `out` (ceil(codeSize/64) u64 words) with the JUMPDEST bitset: bit i is
