@@ -10,6 +10,8 @@
 
 pub mod enrich;
 pub mod errors;
+pub(crate) mod fetch;
+pub mod live;
 pub mod mpt;
 pub mod offline;
 pub mod rpc;
@@ -18,3 +20,5 @@ pub mod state_root;
 pub mod touchset;
 pub mod verify;
 pub mod writer;
+
+pub(crate) use fetch::fetch_offline_sources_online;

@@ -176,7 +176,11 @@ fn walk_node<'a>(
     if items.len() == 17 {
         if remaining.is_empty() {
             let v = items[16].as_bytes()?;
-            return Ok(if v.is_empty() { Lookup::Absent } else { Lookup::Found(v) });
+            return Ok(if v.is_empty() {
+                Lookup::Absent
+            } else {
+                Lookup::Found(v)
+            });
         }
         let n = remaining.remove(0);
         return follow_child(nodes, &items[n as usize], remaining);
@@ -199,7 +203,10 @@ fn walk_node<'a>(
         return follow_child(nodes, &items[1], remaining);
     }
 
-    Err(anyhow!("MPT: unexpected node shape (items={})", items.len()))
+    Err(anyhow!(
+        "MPT: unexpected node shape (items={})",
+        items.len()
+    ))
 }
 
 fn follow_child<'a>(
@@ -208,7 +215,7 @@ fn follow_child<'a>(
     remaining: Vec<u8>,
 ) -> Result<Lookup<'a>> {
     match child {
-        Rlp::Bytes(b) if b.is_empty() => Ok(Lookup::Absent),
+        Rlp::Bytes([]) => Ok(Lookup::Absent),
         Rlp::Bytes(b) if b.len() == 32 => {
             let h = <[u8; 32]>::try_from(*b).unwrap();
             match nodes.get(&h) {
@@ -296,19 +303,30 @@ pub fn account_storage_root(value: &[u8]) -> Result<[u8; 32]> {
     Ok(root)
 }
 
+/// Decoded account leaf fields: `(nonce, balance_be32, storageRoot, codeHash)`.
+/// `nonce` is a native integer; `balance` is left-padded big-endian;
+/// `storageRoot`/`codeHash` are exactly 32 bytes.
+pub type DecodedAccount = (u64, [u8; 32], [u8; 32], [u8; 32]);
+
 /// Decode an Ethereum account leaf value `RLP([nonce, balance, storageRoot,
 /// codeHash])` into `(nonce, balance_be32, storageRoot, codeHash)`. `nonce`
 /// and `balance` are left-padded big-endian; `storageRoot`/`codeHash` are
 /// exactly 32 bytes.
-pub fn decode_account(value: &[u8]) -> Result<(u64, [u8; 32], [u8; 32], [u8; 32])> {
+pub fn decode_account(value: &[u8]) -> Result<DecodedAccount> {
     let (item, _) = Rlp::decode(value)?;
     let fields = item.as_list()?;
     if fields.len() != 4 {
-        return Err(anyhow!("account leaf: expected 4 fields, got {}", fields.len()));
+        return Err(anyhow!(
+            "account leaf: expected 4 fields, got {}",
+            fields.len()
+        ));
     }
     let nonce_bytes = fields[0].as_bytes()?;
     if nonce_bytes.len() > 8 {
-        return Err(anyhow!("account leaf: nonce is {} bytes, want <= 8", nonce_bytes.len()));
+        return Err(anyhow!(
+            "account leaf: nonce is {} bytes, want <= 8",
+            nonce_bytes.len()
+        ));
     }
     let mut nonce = 0u64;
     for &b in nonce_bytes {
@@ -317,11 +335,17 @@ pub fn decode_account(value: &[u8]) -> Result<(u64, [u8; 32], [u8; 32], [u8; 32]
     let balance = left_pad_32(fields[1].as_bytes()?)?;
     let root = fields[2].as_bytes()?;
     if root.len() != 32 {
-        return Err(anyhow!("account leaf: storageRoot is {} bytes, want 32", root.len()));
+        return Err(anyhow!(
+            "account leaf: storageRoot is {} bytes, want 32",
+            root.len()
+        ));
     }
     let code_hash = fields[3].as_bytes()?;
     if code_hash.len() != 32 {
-        return Err(anyhow!("account leaf: codeHash is {} bytes, want 32", code_hash.len()));
+        return Err(anyhow!(
+            "account leaf: codeHash is {} bytes, want 32",
+            code_hash.len()
+        ));
     }
     Ok((
         nonce,

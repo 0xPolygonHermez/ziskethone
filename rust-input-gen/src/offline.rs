@@ -87,6 +87,22 @@ pub struct OfflineSources {
 /// paths are guaranteed to produce byte-identical outputs from the
 /// same `OfflineSources`.
 pub fn build_binary(sources: &OfflineSources, output: &Path) -> Result<()> {
+    let bytes = encode_binary(sources)?;
+    if let Some(parent_dir) = output.parent() {
+        std::fs::create_dir_all(parent_dir)
+            .with_context(|| format!("creating output dir {}", parent_dir.display()))?;
+    }
+    std::fs::write(output, &bytes).with_context(|| format!("writing {}", output.display()))?;
+    info!(path = %output.display(), bytes = bytes.len(), "wrote input file");
+    Ok(())
+}
+
+/// Encode an `OfflineSources` bundle into the in-memory `ZEG0` container,
+/// returning the bytes without touching the filesystem. `build_binary` is a
+/// thin wrapper that writes the result to disk; in-process consumers (the
+/// `live` module's `fetch_and_build_*` entry points) use this directly to
+/// avoid a tempfile round-trip.
+pub fn encode_binary(sources: &OfflineSources) -> Result<Vec<u8>> {
     // Enrich prestate from the witness storage-trie leaves before
     // building the TouchSet. The online RPC path used to do this in
     // main.rs; offline manifests (notably from eest-witness-gen)
@@ -148,14 +164,5 @@ pub fn build_binary(sources: &OfflineSources, output: &Path) -> Result<()> {
         &sources.witness.keys,
     )?;
 
-    let bytes = w.into_bytes();
-    if let Some(parent_dir) = output.parent() {
-        std::fs::create_dir_all(parent_dir)
-            .with_context(|| format!("creating output dir {}", parent_dir.display()))?;
-    }
-    std::fs::write(output, &bytes)
-        .with_context(|| format!("writing {}", output.display()))?;
-
-    info!(path = %output.display(), bytes = bytes.len(), "wrote input file");
-    Ok(())
+    Ok(w.into_bytes())
 }

@@ -14,8 +14,8 @@ use alloy::primitives::B256;
      expected hash {expected}, observed {actual:?}"
 )]
 pub struct ReorgDetected {
-    pub block:    u64,
+    pub block: u64,
     pub expected: B256,
-    pub actual:   Option<B256>,
-    pub phase:    &'static str,
+    pub actual: Option<B256>,
+    pub phase: &'static str,
 }

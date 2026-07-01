@@ -26,12 +26,12 @@ use crate::writer::Writer;
 #[repr(u64)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Op {
-    Empty         = 0,
-    Hash          = 1,
+    Empty = 0,
+    Hash = 1,
     ExtensionHash = 2,
-    Leaf          = 3,
-    Branch        = 4,
-    PhantomLeaf   = 5,
+    Leaf = 3,
+    Branch = 4,
+    PhantomLeaf = 5,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,16 +130,16 @@ fn put_state_leaf_payload(
     code_hash: &B256,
 ) {
     out.extend_from_slice(addr.as_slice()); // 20
-    out.extend_from_slice(&[0u8; 4]);       // pad to 24
+    out.extend_from_slice(&[0u8; 4]); // pad to 24
     out.extend_from_slice(&balance.to_be_bytes::<32>()); // 32
-    put_u64(out, nonce);                    // 8
+    put_u64(out, nonce); // 8
     out.extend_from_slice(code_hash.as_slice()); // 32
 }
 
 /// Storage `Op::Leaf` payload: position(32) value(32) = 64 bytes.
 fn put_storage_leaf_payload(out: &mut Vec<u8>, position: &B256, value: &B256) {
     out.extend_from_slice(position.as_slice()); // 32
-    out.extend_from_slice(value.as_slice());    // 32
+    out.extend_from_slice(value.as_slice()); // 32
 }
 
 fn nibbles_to_bytes(nibs: &[u8]) -> Result<[u8; 32]> {
@@ -157,7 +157,7 @@ fn nibbles_to_bytes(nibs: &[u8]) -> Result<[u8; 32]> {
 /// reference: an empty string, a 32-byte hash, or a small inline node.
 fn child_ref(item: &Rlp<'_>) -> Result<ChildRef> {
     match item {
-        Rlp::Bytes(b) if b.is_empty() => Ok(ChildRef::Empty),
+        Rlp::Bytes([]) => Ok(ChildRef::Empty),
         Rlp::Bytes(b) if b.len() == 32 => Ok(ChildRef::Hash(<[u8; 32]>::try_from(*b).unwrap())),
         Rlp::List(_) => Ok(ChildRef::Inline(mpt::rlp_encode(item))),
         Rlp::Bytes(b) => bail!("MPT child has unexpected length {}", b.len()),
@@ -197,8 +197,8 @@ impl<'a> Encoder<'a> {
         match items.len() {
             17 => {
                 put_op(&mut self.out, Op::Branch);
-                for k in 0..16 {
-                    let cr = child_ref(&items[k])?;
+                for (k, item) in items.iter().enumerate().take(16) {
+                    let cr = child_ref(item)?;
                     let mut w = walked.to_vec();
                     w.push(k as u8);
                     self.emit_child(&w, cr, kind)?;
@@ -219,10 +219,31 @@ impl<'a> Encoder<'a> {
         Ok(())
     }
 
-    /// Emit a revealed extension as a chain of single-child branches (one per
-    /// nibble); the guest's `reduce_branch` folds them back into an
-    /// extension. If the extension's child is itself unrevealed, emit a
-    /// single `Op::ExtensionHash` instead.
+    /// Emit an extension as a chain of single-child branches (one per nibble);
+    /// the guest's `reduce_branch` folds them back into an extension at hash
+    /// time. The chain terminates in whatever the extension's child resolves
+    /// to via `emit_child`: a revealed subtree, or — when the witness only
+    /// references the child by hash — an `Op::Hash`.
+    ///
+    /// We deliberately do NOT emit a single opaque `Op::ExtensionHash` even
+    /// for an unrevealed child. A bare `ExtensionHash` is unsplittable: when
+    /// the new-root pass inserts a CREATED key whose path diverges *inside*
+    /// the extension's nibbles, the guest can't break the extension apart and
+    /// aborts ("insert into an unrevealed (Hash) subtree — witness
+    /// incomplete"). reth's `debug_executionWitness` collapses the untouched
+    /// remainder of a storage trie to hashes, so this is common for created
+    /// storage slots, and the child node simply isn't fetchable offline (an
+    /// `eth_getProof` at the parent block falls outside the node's proof
+    /// window for non-recent blocks).
+    ///
+    /// Emitting the branch-chain instead exposes every nibble of the
+    /// extension as a single-child branch the guest CAN split — the created
+    /// key lands in an empty slot at the divergence branch, and the original
+    /// (still-hashed) child stays an `Op::Hash` sibling. `reduce_branch` folds
+    /// a single Hash child back into `ExtR{[nibble], child_hash}`, so the
+    /// reconstructed root is byte-identical to the `ExtensionHash` encoding.
+    /// (`Op::ExtensionHash` remains supported by the guest for back-compat;
+    /// the writer no longer produces it.)
     fn emit_extension(
         &mut self,
         walked: &[u8],
@@ -231,24 +252,6 @@ impl<'a> Encoder<'a> {
         kind: TreeKind,
     ) -> Result<()> {
         let cr = child_ref(child)?;
-        let revealed = match &cr {
-            ChildRef::Hash(h) => self.nodes.contains_key(h),
-            ChildRef::Inline(_) => true,
-            ChildRef::Empty => false,
-        };
-        if !revealed {
-            let h = match cr {
-                ChildRef::Hash(h) => h,
-                _ => bail!("extension child unrevealed but not a hash"),
-            };
-            put_op(&mut self.out, Op::ExtensionHash);
-            put_u64(&mut self.out, nibs.len() as u64);
-            for &n in nibs {
-                put_u64(&mut self.out, n as u64);
-            }
-            self.out.extend_from_slice(&h);
-            return Ok(());
-        }
         self.emit_ext_chain(walked, nibs, cr, kind)
     }
 
