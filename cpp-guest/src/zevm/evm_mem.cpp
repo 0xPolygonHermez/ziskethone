@@ -55,27 +55,46 @@ void EVMMem::destroyMemory() {
     --s_cur;
 }
 
-MemError EVMMem::ensure(size_t need_bytes, int64_t* gas) {
+MemGas EVMMem::ensure(size_t need_bytes, int64_t gas) {
     MemHandle& h = s_handles[s_cur];
     if (need_bytes <= h.size)
-        return MemError::Ok;
+        return {MemError::Ok, gas};
 
     const size_t new_size = round_up_word(need_bytes);
     if (new_size > kMaxMemPerTx)
-        return MemError::OutOfGas;  // beyond what any frame may address
+        return {MemError::OutOfGas, gas};  // beyond what any frame may address
+
+    // Zone-capacity guard. Same-parity frames stack within one fixed arena
+    // (kMemBlockSize): a single frame is capped at kMaxMemPerTx, but many live
+    // same-parity frames can cumulatively exhaust the zone. Growing past the
+    // arena would memset/memcpy out of bounds (UB / segfault). Treat zone
+    // exhaustion as out-of-gas so the guest fails cleanly instead of crashing.
+    //
+    // Memory cost is quadratic in gas, so within any realistic per-tx gas cap the
+    // cumulative footprint stays far below a zone and this never fires on valid
+    // blocks (a zone holds ~80M-gas worth of memory even under an adversary-
+    // favorable bound; mainnet block limits are ~30-45M, EIP-7825 caps a tx at
+    // 16.7M). It only bounds one known adversarial EEST state test,
+    // stStaticCall/static_Call1MB1024Calldepth, which spends ~882e9 gas to hold
+    // ~1 MiB in each of 1024 simultaneously-live frames (~1 GiB total) — beyond
+    // what a fixed zero-init arena can hold, and impossible in a real block. On
+    // that one vector zevm returns out-of-gas where evmone (heap memory) succeeds;
+    // a documented, real-block-unreachable divergence, not a crash.
+    const int    z   = s_cur & 1;
+    const size_t off = static_cast<size_t>(h.start_ptr - s_zone[z]);
+    if (off + new_size > kMemBlockSize)
+        return {MemError::OutOfGas, gas};
 
     const int64_t old_words = static_cast<int64_t>(h.size / kWord);
     const int64_t new_words = static_cast<int64_t>(new_size / kWord);
     const int64_t delta     = mem_cost(new_words) - mem_cost(old_words);
-    if (delta > *gas)
-        return MemError::OutOfGas;
-    *gas -= delta;
+    if (delta > gas)
+        return {MemError::OutOfGas, gas};
+    gas -= delta;
 
     // Clean any newly-exposed bytes that lie in already-dirtied (recycled)
     // space; everything at or above firstClean is already zero. firstClean is a
     // zone-relative offset, so derive the frame's offset from its pointer.
-    const int    z         = s_cur & 1;
-    const size_t off       = static_cast<size_t>(h.start_ptr - s_zone[z]);
     const size_t exp_start = off + h.size;
     const size_t exp_end   = off + new_size;
     const size_t dirty_end = min_size(exp_end, s_firstClean[z]);
@@ -85,46 +104,49 @@ MemError EVMMem::ensure(size_t need_bytes, int64_t* gas) {
         s_firstClean[z] = exp_end;
 
     h.size = new_size;
-    return MemError::Ok;
+    return {MemError::Ok, gas};
 }
 
-MemError EVMMem::readBytes(size_t addr, uint8_t* dst, size_t len, int64_t* gas) {
+MemGas EVMMem::readBytes(size_t addr, uint8_t* dst, size_t len, int64_t gas) {
     if (len == 0)
-        return MemError::Ok;
+        return {MemError::Ok, gas};
     if (addr > kMaxMemPerTx || len > kMaxMemPerTx)
-        return MemError::OutOfGas;
-    if (const MemError e = ensure(addr + len, gas); e != MemError::Ok)
-        return e;
+        return {MemError::OutOfGas, gas};
+    const MemGas r = ensure(addr + len, gas);
+    if (r.err != MemError::Ok)
+        return r;
     std::memcpy(dst, s_handles[s_cur].start_ptr + addr, len);
-    return MemError::Ok;
+    return r;
 }
 
-MemError EVMMem::writeBytes(size_t addr, const uint8_t* src, size_t len, int64_t* gas) {
+MemGas EVMMem::writeBytes(size_t addr, const uint8_t* src, size_t len, int64_t gas) {
     if (len == 0)
-        return MemError::Ok;
+        return {MemError::Ok, gas};
     if (addr > kMaxMemPerTx || len > kMaxMemPerTx)
-        return MemError::OutOfGas;
-    if (const MemError e = ensure(addr + len, gas); e != MemError::Ok)
-        return e;
+        return {MemError::OutOfGas, gas};
+    const MemGas r = ensure(addr + len, gas);
+    if (r.err != MemError::Ok)
+        return r;
     std::memcpy(s_handles[s_cur].start_ptr + addr, src, len);
-    return MemError::Ok;
+    return r;
 }
 
-MemError EVMMem::expand(size_t addr, size_t len, int64_t* gas) {
+MemGas EVMMem::expand(size_t addr, size_t len, int64_t gas) {
     if (len == 0)
-        return MemError::Ok;
+        return {MemError::Ok, gas};
     if (addr > kMaxMemPerTx || len > kMaxMemPerTx)
-        return MemError::OutOfGas;
+        return {MemError::OutOfGas, gas};
     return ensure(addr + len, gas);
 }
 
-MemError EVMMem::writeByte(size_t addr, uint8_t value, int64_t* gas) {
+MemGas EVMMem::writeByte(size_t addr, uint8_t value, int64_t gas) {
     if (addr > kMaxMemPerTx)
-        return MemError::OutOfGas;
-    if (const MemError e = ensure(addr + 1, gas); e != MemError::Ok)
-        return e;
+        return {MemError::OutOfGas, gas};
+    const MemGas r = ensure(addr + 1, gas);
+    if (r.err != MemError::Ok)
+        return r;
     s_handles[s_cur].start_ptr[addr] = value;
-    return MemError::Ok;
+    return r;
 }
 
 size_t EVMMem::size() {

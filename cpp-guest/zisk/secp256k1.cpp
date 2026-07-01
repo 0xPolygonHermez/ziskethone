@@ -101,6 +101,26 @@ const u64 P_PLUS_1_DIV_4[4] = {0xFFFFFFFFBFFFFF0CULL, 0xFFFFFFFFFFFFFFFFULL,
 // sqrt(alpha·NQR), which the guest verifies against alpha·NQR3.
 const u64 NQR3[4] = {3, 0, 0, 0};
 
+const u64 N_MINUS_ONE[4] = {0xBFD25E8CD0364140ULL, 0xBAAEDCE6AF48A03BULL,
+                            0xFFFFFFFFFFFFFFFEULL, 0xFFFFFFFFFFFFFFFFULL};
+const u64 P_MINUS_ONE[4] = {0xFFFFFFFEFFFFFC2EULL, 0xFFFFFFFFFFFFFFFFULL,
+                            0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL};
+
+// GLV endomorphism constants (zisklib lib/secp256k1/constants.rs). φ:(x,y)↦(β·x,y)
+// acts as [λ] on the group, so k·P = k1·P + k2·φ(P) with |k1|,|k2| < 2^128.
+const u64 BETA[4]   = {0xC1396C28719501EEULL, 0x9CF0497512F58995ULL,
+                       0x6E64479EAC3434E9ULL, 0x7AE96A2B657C0710ULL};
+const u64 LAMBDA[4] = {0xDF02967C1B23BD72ULL, 0x122E22EA20816678ULL,
+                       0xA5261C028812645AULL, 0x5363AD4CC05C30E0ULL};
+const u64 G_NEG_Y[4] = {0x63B82F6F04EF2777ULL, 0x02E84BB7597AABE6ULL,
+                        0xA25B0403F1EEF757ULL, 0xB7C52588D95C3B9AULL};
+const u64 G_PHI_X[4] = {0xA7BBA04400B88FCBULL, 0x872844067F15E98DULL,
+                        0xAB0102B696902325ULL, 0xBCACE2E99DA01887ULL};
+// φ(G) = (G_PHI_X, G_Y) and -φ(G) = (G_PHI_X, G_NEG_Y).
+const u64 G_PHI[8]     = {G_PHI_X[0],G_PHI_X[1],G_PHI_X[2],G_PHI_X[3], GY[0],GY[1],GY[2],GY[3]};
+const u64 G_PHI_NEG[8] = {G_PHI_X[0],G_PHI_X[1],G_PHI_X[2],G_PHI_X[3], G_NEG_Y[0],G_NEG_Y[1],G_NEG_Y[2],G_NEG_Y[3]};
+const u64 G_NEG[8]     = {GX[0],GX[1],GX[2],GX[3], G_NEG_Y[0],G_NEG_Y[1],G_NEG_Y[2],G_NEG_Y[3]};
+
 // Abort used when a verified hint turns out wrong — those paths must never
 // execute on a valid run. The shared trap from runtime.cpp (marchid-dispatched
 // unimp / magic write) fails the run/proof immediately — trapping beats an
@@ -229,6 +249,82 @@ void msb_pos256(const u64 x[4], u64 *limb, u64 *bit) {
     *limb=0; *bit=0;
 }
 
+// MSB position across four scalars (their bitwise-OR's MSB is the global MSB).
+void msb_pos256_4(const u64 a[4], const u64 b[4], const u64 c[4], const u64 d[4],
+                  u64 *limb, u64 *bit) {
+    u64 o[4] = {a[0]|b[0]|c[0]|d[0], a[1]|b[1]|c[1]|d[1],
+                a[2]|b[2]|c[2]|d[2], a[3]|b[3]|c[3]|d[3]};
+    msb_pos256(o, limb, bit);
+}
+
+// ---- GLV scalar decomposition (software Babai rounding) --------------------
+// Lattice short-basis constants (zisklib fcalls_impl/secp256k1/glv.rs), verified
+// A1 + B1·λ ≡ 0 and A2 + B2·λ ≡ 0 (mod N), B2 = A1, -B1 = MINUS_B1.
+namespace glv_sw {
+const u64 A1[2]       = {0xE86C90E49284EB15ULL, 0x3086D221A7D46BCDULL};
+const u64 MINUS_B1[2] = {0x6F547FA90ABFE4C3ULL, 0xE4437ED6010E8828ULL};
+const u64 A2[3]       = {0x57C1108D9D44CFD8ULL, 0x14CA50F7A8E2F3F6ULL, 0x1ULL};
+
+// 8-limb (512-bit) little-endian unsigned helpers.
+inline void u512_mul(const u64* a, int la, const u64* b, int lb, u64 o[8]) {
+    for (int i=0;i<8;++i) o[i]=0;
+    for (int i=0;i<la;++i) { u64 c=0;
+        for (int j=0;j<lb && i+j<8;++j) {
+            unsigned __int128 t=(unsigned __int128)a[i]*b[j]+o[i+j]+c; o[i+j]=(u64)t; c=(u64)(t>>64); }
+        if (i+lb<8) o[i+lb]+=c; }
+}
+inline bool u512_ge(const u64 a[8], const u64 b[8]) {
+    for (int i=7;i>=0;--i){ if(a[i]>b[i])return true; if(a[i]<b[i])return false; } return true;
+}
+inline void u512_sub(u64 a[8], const u64 b[8]) {
+    unsigned __int128 br=0; for(int i=0;i<8;++i){ unsigned __int128 t=(unsigned __int128)a[i]-b[i]-br; a[i]=(u64)t; br=(t>>64)&1; }
+}
+inline void u512_add(u64 a[8], const u64 b[8]) {
+    unsigned __int128 c=0; for(int i=0;i<8;++i){ unsigned __int128 t=(unsigned __int128)a[i]+b[i]+c; a[i]=(u64)t; c=t>>64; }
+}
+inline void u512_shl1(u64 a[8]) { u64 c=0; for(int i=0;i<8;++i){ u64 n=a[i]>>63; a[i]=(a[i]<<1)|c; c=n; } }
+inline void u512_set(u64 r[8], const u64* a, int la) { for(int i=0;i<8;++i) r[i]= i<la?a[i]:0; }
+inline void u512_div(const u64 num[8], const u64 den[8], u64 q[8]) {  // floor(num/den)
+    u64 r[8]={0,0,0,0,0,0,0,0}; for(int i=0;i<8;++i)q[i]=0;
+    for(int bit=511;bit>=0;--bit){ u512_shl1(r); r[0]|=(num[bit>>6]>>(bit&63))&1ULL;
+        if(u512_ge(r,den)){ u512_sub(r,den); q[bit>>6]|=1ULL<<(bit&63); } }
+}
+// q = round(a·k / N) for a,k ≥ 0 = floor((2·a·k + N) / (2·N)).
+inline void round_div_N(const u64* a, int la, const u64 k[4], u64 q[8]) {
+    u64 ak[8]; u512_mul(a,la,k,4,ak);
+    u64 num[8]; for(int i=0;i<8;++i)num[i]=ak[i]; u512_shl1(num);       // 2·a·k
+    u64 nn[8]; u512_set(nn,N,4); u512_add(num,nn);                      // +N
+    u64 twoN[8]; u512_set(twoN,N,4); u512_shl1(twoN);                   // 2N
+    u512_div(num,twoN,q);
+}
+// |a-b| with sign (1 if a<b).
+inline void signed_sub(const u64 a[8], const u64 b[8], u64 r[8], u64* sign) {
+    if (u512_ge(a,b)) { for(int i=0;i<8;++i)r[i]=a[i]; u512_sub(r,b); *sign=0; }
+    else              { for(int i=0;i<8;++i)r[i]=b[i]; u512_sub(r,a); *sign=1; }
+}
+} // namespace glv_sw
+
+// out = [k1(4), k2(4), sigma1, sigma2]; k = (-1)^s1·k1 + (-1)^s2·k2·λ (mod N),
+// |k1|,|k2| < 2^128. Mirrors the ZisK glv_decompose fcall (id 4).
+inline void glv_decompose_hint(const u64 k[4], u64 out[10]) {
+    using namespace glv_sw;
+    u64 c1[8], c2[8];
+    round_div_N(A1, 2, k, c1);          // c1 = round(B2·k/N),  B2 = A1
+    round_div_N(MINUS_B1, 2, k, c2);    // c2 = round(-B1·k/N)
+    u64 c1A1[8], c2A2[8], c1MB1[8], c2A1[8];
+    u512_mul(c1,8,A1,2,c1A1);
+    u512_mul(c2,8,A2,3,c2A2);
+    u512_mul(c1,8,MINUS_B1,2,c1MB1);
+    u512_mul(c2,8,A1,2,c2A1);
+    u64 neg1[8]; for(int i=0;i<8;++i)neg1[i]=c1A1[i]; u512_add(neg1,c2A2);  // c1·A1 + c2·A2
+    u64 kk[8]; u512_set(kk,k,4);
+    u64 k1[8], k2[8], s1, s2;
+    signed_sub(kk,  neg1,  k1, &s1);    // k1 = k - (c1·A1 + c2·A2)
+    signed_sub(c1MB1, c2A1, k2, &s2);   // k2 = c1·(-B1) - c2·B2
+    for(int i=0;i<4;++i){ out[i]=k1[i]; out[4+i]=k2[i]; }
+    out[8]=s1; out[9]=s2;
+}
+
 } // namespace
 
 #else  // ===================== ZisK precompiles / fcalls =====================
@@ -263,6 +359,24 @@ inline void msb_pos256(const u64 x[4], u64 *limb, u64 *bit) {  // fcall id 17
     asm volatile("csrs 0x8F2, %0" : : "r"(x)   : "memory");  // param: x, 4 words
     asm volatile("csrwi 0x8C0, 17" : : : "memory");          // trigger MSB_POS_256
     *limb=fcall_get(); *bit=fcall_get();
+}
+// MSB position across four scalars (fcall id 17, 4 inputs).
+inline void msb_pos256_4(const u64 a[4], const u64 b[4], const u64 c[4], const u64 d[4],
+                         u64 *limb, u64 *bit) {
+    u64 four = 4;
+    asm volatile("csrs 0x8F0, %0" : : "r"(four) : "memory");  // param: n=4 (direct value)
+    asm volatile("csrs 0x8F2, %0" : : "r"(a) : "memory");
+    asm volatile("csrs 0x8F2, %0" : : "r"(b) : "memory");
+    asm volatile("csrs 0x8F2, %0" : : "r"(c) : "memory");
+    asm volatile("csrs 0x8F2, %0" : : "r"(d) : "memory");
+    asm volatile("csrwi 0x8C0, 17" : : : "memory");          // trigger MSB_POS_256
+    *limb=fcall_get(); *bit=fcall_get();
+}
+// GLV decomposition hint (fcall id 4): out = [k1(4), k2(4), sigma1, sigma2].
+inline void glv_decompose_hint(const u64 k[4], u64 out[10]) {
+    asm volatile("csrs 0x8F2, %0" : : "r"(k) : "memory");    // param: k, 4 words
+    asm volatile("csrwi 0x8C0, 4" : : : "memory");           // trigger GLV_DECOMPOSE
+    for (int i = 0; i < 10; ++i) out[i] = fcall_get();
 }
 
 } // namespace
@@ -319,6 +433,129 @@ bool scalar_mul(const u64 k[4], const u64 P_in[8], u64 res[8]) {
         curbit=63;
     }
     if (!eq4(k_rec,k)) zeg_zisk_halt();             // recomposed scalar must match
+    return true;
+}
+
+// ===========================================================================
+// GLV endomorphism double-scalar multiplication: Q = u1·G + u2·R.
+// Faithful port of zisklib glv_double_scalar_mul_with_g_secp256k1: each scalar
+// is split into two ~128-bit halves (u1 → a1 + a2·λ over G, φ(G); u2 → b1 + b2·λ
+// over R, φ(R)), and all four half-scalars are consumed in a single Strauss-
+// Shamir pass over ~128 bits with a 4-bit precomputed base table. This roughly
+// halves the doublings and the additions versus two independent 256-bit
+// double-and-adds — cutting the secp256k1_add/dbl precompile calls per ecrecover.
+// ===========================================================================
+
+// φ(P) = (β·x, y).
+inline void phi_pt(const u64 p[8], u64 out[8]) {
+    arith256_mod(BETA, p, ZERO, P, out);   // β·x mod P
+    cp4(out + 4, p + 4);
+}
+// -P = (x, P - y).
+inline void neg_pt(const u64 p[8], u64 out[8]) {
+    cp4(out, p);
+    arith256_mod(p + 4, P_MINUS_ONE, ZERO, P, out + 4);   // (P-1)·y = -y mod P
+}
+inline void neg_fn(const u64 x[4], u64 o[4]) { arith256_mod(x, N_MINUS_ONE, ZERO, N, o); }
+inline void add_fn(const u64 x[4], const u64 y[4], u64 o[4]) { arith256_mod(x, ONE, y, N, o); }
+inline void sub_fn(const u64 x[4], const u64 y[4], u64 o[4]) { arith256_mod(y, N_MINUS_ONE, x, N, o); }
+
+// In-place p1 += p2 for on-curve non-infinity points; returns true iff the sum
+// is 𝒪. Mirrors add_non_infinity_points_secp256k1 (ec_add needs x1≠x2; equal
+// points double; p + (-p) = 𝒪).
+inline bool add_ni(u64 p1[8], const u64 p2[8]) {
+    if (!eq4(p1, p2))     { ec_add(p1, p2); return false; }
+    if (eq4(p1+4, p2+4))  { ec_dbl(p1);     return false; }
+    return true;
+}
+
+// GLV-decompose k ∈ [0,N) into (k1,k2,s1,s2) with |k1|,|k2| < 2^128 and
+// k ≡ (-1)^s1·k1 + (-1)^s2·k2·λ (mod N). Hinted then fully verified.
+inline void glv_decompose(const u64 k[4], u64 k1[4], u64 k2[4], u64* s1, u64* s2) {
+    u64 h[10]; glv_decompose_hint(k, h);
+    cp4(k1, h); cp4(k2, h + 4); *s1 = h[8]; *s2 = h[9];
+    if (k1[2] || k1[3] || k2[2] || k2[3]) zeg_zisk_halt();   // magnitudes < 2^128
+    if (*s1 > 1 || *s2 > 1) zeg_zisk_halt();                 // sign bits
+    u64 k1f[4], k2f[4];
+    if (*s1) neg_fn(k1, k1f); else cp4(k1f, k1);
+    if (*s2) neg_fn(k2, k2f); else cp4(k2f, k2);
+    u64 chk[4]; arith256_mod(LAMBDA, k2f, k1f, N, chk);      // λ·k2f + k1f mod N
+    if (!eq4(chk, k)) zeg_zisk_halt();                       // relation must hold
+}
+
+// Q = u1·G + u2·R (R on-curve, non-infinity, canonical). Returns false if 𝒪.
+bool glv_double_scalar_mul_with_g(const u64 u1[4], const u64 u2[4],
+                                  const u64 R[8], u64 out[8]) {
+    u64 k1[4], k2[4]; reduce_fn(u1, k1); reduce_fn(u2, k2);
+    const bool z1 = is_zero4(k1), z2 = is_zero4(k2);
+    if (z1 && z2) return false;                              // 𝒪
+    if (z1) return scalar_mul(k2, R, out);                  // u2·R
+    if (z2) return scalar_mul(k1, G, out);                  // u1·G
+    if (eq4(k1, k2)) {                                       // u1·(G+R)
+        u64 GR[8]; if (!point_add(G, R, GR)) return false;
+        return scalar_mul(k1, GR, out);
+    }
+    if (eq4(R, GX)) {                                        // R = ±G ⇒ (u1±u2)·G
+        u64 kk[4];
+        if (eq4(R + 4, G_NEG_Y)) sub_fn(k1, k2, kk); else add_fn(k1, k2, kk);
+        return scalar_mul(kk, G, out);
+    }
+
+    // GLV-decompose both scalars → four half-scalars.
+    u64 a1[4], a2[4], b1[4], b2[4], sa1, sa2, sb1, sb2;
+    glv_decompose(k1, a1, a2, &sa1, &sa2);
+    glv_decompose(k2, b1, b2, &sb1, &sb2);
+
+    // The four sign-adjusted bases: ±G, ±φ(G), ±R, ±φ(R).
+    u64 base_g[8];     cp8(base_g,     sa1 ? G_NEG     : G);
+    u64 base_g_phi[8]; cp8(base_g_phi, sa2 ? G_PHI_NEG : G_PHI);
+    u64 p_phi[8]; phi_pt(R, p_phi);
+    u64 base_p[8];     if (sb1) neg_pt(R,     base_p);     else cp8(base_p,     R);
+    u64 base_p_phi[8]; if (sb2) neg_pt(p_phi, base_p_phi); else cp8(base_p_phi, p_phi);
+    const u64* bases[4] = {base_g, base_g_phi, base_p, base_p_phi};
+
+    // Precompute the 15 base combinations, indexed by a 4-bit mask
+    // (bit0=base_g, bit1=base_g_phi, bit2=base_p, bit3=base_p_phi). T[0] = 𝒪.
+    u64 T[16][8]; bool Tinf[16]; Tinf[0] = true;
+    for (int m = 1; m < 16; ++m) {
+        bool inf = true;
+        for (int b = 0; b < 4; ++b) if (m & (1 << b)) {
+            if (inf) { cp8(T[m], bases[b]); inf = false; }
+            else       inf = add_ni(T[m], bases[b]);
+        }
+        Tinf[m] = inf;
+    }
+
+    // Bound the half-scalars against the hinted MSB (limb,bit). The Strauss loop
+    // below reads the (already verified) decomposed a1,a2,b1,b2 directly, so the
+    // only thing the hint must guarantee is that none of them has a set bit above
+    // (limb,bit) — else a high bit would go unprocessed. That is exactly captured
+    // by the bitwise-OR having its unique top set bit at (limb,bit), an O(1) check
+    // that replaces zisklib's per-bit reconstruction of all four half-scalars
+    // (which was the dominant MAIN-step cost of the loop).
+    u64 limb, bit; msb_pos256_4(a1, a2, b1, b2, &limb, &bit);
+    if (limb >= 4 || bit >= 64) zeg_zisk_halt();
+    const u64 orv[4] = {a1[0]|a2[0]|b1[0]|b2[0], a1[1]|a2[1]|b1[1]|b2[1],
+                        a1[2]|a2[2]|b1[2]|b2[2], a1[3]|a2[3]|b1[3]|b2[3]};
+    for (int i = (int)limb + 1; i < 4; ++i) if (orv[i]) zeg_zisk_halt();  // nothing above top limb
+    if ((orv[limb] >> bit) != 1) zeg_zisk_halt();                        // (limb,bit) is the exact MSB
+
+    u64 res[8]; bool res_inf = true;
+    int start = (int)bit;
+    for (int i = (int)limb; i >= 0; --i) {
+        const u64 wa1=a1[i], wa2=a2[i], wb1=b1[i], wb2=b2[i];
+        for (int j = start; j >= 0; --j) {
+            if (!res_inf) ec_dbl(res);
+            const u64 m = ((wa1>>j)&1) | (((wa2>>j)&1)<<1) | (((wb1>>j)&1)<<2) | (((wb2>>j)&1)<<3);
+            if (m && !Tinf[m]) {
+                if (res_inf) { cp8(res, T[m]); res_inf = false; }
+                else           res_inf = add_ni(res, T[m]);
+            }
+        }
+        start = 63;
+    }
+    if (res_inf) return false;
+    cp8(out, res);
     return true;
 }
 
@@ -433,16 +670,11 @@ extern "C" int secp256k1_ecdsa_recover(
     u64 u1[4]; mul_fn(negz, rinv, u1);
     u64 u2[4]; mul_fn(s,    rinv, u2);
 
-    // Q = u1·G + u2·R.
-    u64 A[8], B[8], Q[8];
-    bool hasA = scalar_mul(u1, G, A);
-    bool hasB = scalar_mul(u2, R, B);
-    bool hasQ;
-    if (hasA && hasB)      hasQ = point_add(A, B, Q);
-    else if (hasA)       { cp8(Q, A); hasQ = true; }
-    else if (hasB)       { cp8(Q, B); hasQ = true; }
-    else                   hasQ = false;
-    if (!hasQ) return 1;   // point at infinity → not recoverable
+    // Q = u1·G + u2·R, via the GLV endomorphism (Strauss-Shamir over four
+    // ~128-bit half-scalars) — the same result as two 256-bit scalar muls plus a
+    // point add, at roughly half the secp256k1_add/dbl precompile calls.
+    u64 Q[8];
+    if (!glv_double_scalar_mul_with_g(u1, u2, R, Q)) return 1;  // 𝒪 → not recoverable
 
     cp8(pubkey_out, Q);
     return 0;

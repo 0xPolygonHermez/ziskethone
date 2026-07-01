@@ -1,3 +1,4 @@
+#pragma once
 // system.cpp — the call/create subsystem: CALL (0xf1), CALLCODE (0xf2),
 // DELEGATECALL (0xf4), STATICCALL (0xfa), CREATE (0xf0), CREATE2 (0xf5); the
 // halting/output opcodes RETURN (0xf3), REVERT (0xfd) and SELFDESTRUCT (0xff);
@@ -24,7 +25,7 @@
 
 namespace zevm {
 
-namespace {
+namespace system_ops {
 
 constexpr int64_t WARM_ACCESS         = 100;    // warm_storage_read_cost (call base)
 constexpr int64_t COLD_ACCOUNT_ACCESS = 2600;   // EIP-2929
@@ -48,48 +49,47 @@ inline bool be_lt(const evmc_uint256be& a, const evmc_uint256be& b) {
 // Shared implementation of the four call opcodes.
 //   has_value      — CALL/CALLCODE take a value arg (DELEGATECALL/STATICCALL don't)
 //   static_forced  — STATICCALL forces the child into static mode
-bool call_impl(EvmState& s, evmc_call_kind kind, bool has_value, bool static_forced) {
-    const uint32_t nargs = has_value ? 7u : 6u;
+bool call_impl(EvmState& s, Regs& R, evmc_call_kind kind, bool has_value, bool static_forced) {
+    const size_t nargs = has_value ? 7u : 6u;
 
-    if (s.gas < WARM_ACCESS) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= WARM_ACCESS;
-    if (stack_depth(s) < nargs) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (R.gas < WARM_ACCESS) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= WARM_ACCESS;
+    if (depth_lt(R, nargs)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
 
-    const uint32_t sp       = s.stackPointer;
-    const uint32_t iGas     = sp;
-    const uint32_t iDst     = sp + 1;
-    const uint32_t iVal     = sp + 2;                 // only when has_value
-    const uint32_t b        = has_value ? sp + 3 : sp + 2;
-    const uint32_t iInOff   = b;
-    const uint32_t iInSize  = b + 1;
-    const uint32_t iOutOff  = b + 2;
-    const uint32_t iOutSize = b + 3;
-    const uint32_t iResult  = iOutSize;               // last popped slot -> pushed result
+    U256* const sp       = R.top;
+    U256* const iGas     = sp;
+    U256* const iDst     = sp + 1;
+    U256* const iVal     = sp + 2;                 // only when has_value
+    U256* const b        = has_value ? sp + 3 : sp + 2;
+    U256* const iInOff   = b;
+    U256* const iInSize  = b + 1;
+    U256* const iOutOff  = b + 2;
+    U256* const iOutSize = b + 3;
+    U256* const iResult  = iOutSize;               // last popped slot -> pushed result
 
     // ----- read operands (captured before any host call / overwrite) -----
     int64_t req_gas;
     {
-        const U256 g = ld_le(s, iGas);
+        const U256 g = ld_le(iGas);
         req_gas = ((g.limbs[1] | g.limbs[2] | g.limbs[3]) != 0 ||
                    g.limbs[0] > static_cast<uint64_t>(INT64_MAX))
                       ? INT64_MAX
                       : static_cast<int64_t>(g.limbs[0]);
     }
 
-    evmc_address dst;  // address = low 20 big-endian bytes of the word (slot is BE)
-    std::memcpy(dst.bytes, reinterpret_cast<const uint8_t*>(&s.stack[iDst]) + 12, 20);
+    const evmc_address dst = addr_from_slot(iDst[0]);  // low 20 bytes of the value
 
     bool nonzero_value = false;
     evmc_uint256be value_be{};
     if (has_value) {
-        nonzero_value = !u256_is_zero(s.stack[iVal]);
-        std::memcpy(value_be.bytes, &s.stack[iVal], 32);  // slot is big-endian
+        nonzero_value = !u256_is_zero(iVal[0]);
+        u256_to_be(iVal[0], value_be.bytes);  // LE slot -> BE wire value
     }
 
-    const uint64_t in_off   = mem_arg(s.stack[iInOff]);
-    const uint64_t in_size  = mem_arg(s.stack[iInSize]);
-    const uint64_t out_off  = mem_arg(s.stack[iOutOff]);
-    const uint64_t out_size = mem_arg(s.stack[iOutSize]);
+    const uint64_t in_off   = mem_arg(iInOff[0]);
+    const uint64_t in_size  = mem_arg(iInSize[0]);
+    const uint64_t out_off  = mem_arg(iOutOff[0]);
+    const uint64_t out_size = mem_arg(iOutSize[0]);
 
     // Supersede any prior return data (releasing it if it was heap-owned).
     if (s.returnDataOwner.release) s.returnDataOwner.release(&s.returnDataOwner);
@@ -97,9 +97,9 @@ bool call_impl(EvmState& s, evmc_call_kind kind, bool has_value, bool static_for
 
     // "light" failure (insufficient balance / depth): push 0 and continue.
     auto finish_light = [&]() {
-        s.stack[iResult] = U256{};  // zero is BE-agnostic
-        s.stackPointer = iResult;
-        ++s.pc;
+        iResult[0] = U256{};  // zero is BE-agnostic
+        R.top = iResult;
+        ++R.pc;
         return true;
     };
 
@@ -107,8 +107,8 @@ bool call_impl(EvmState& s, evmc_call_kind kind, bool has_value, bool static_for
     if (s.rev >= EVMC_BERLIN &&
         s.host->access_account(s.context, &dst) == EVMC_ACCESS_COLD) {
         const int64_t extra = COLD_ACCOUNT_ACCESS - WARM_ACCESS;  // 2500
-        if (s.gas < extra) { s.status = EVMC_OUT_OF_GAS; return false; }
-        s.gas -= extra;
+        if (R.gas < extra) { s.status = EVMC_OUT_OF_GAS; return false; }
+        R.gas -= extra;
     }
 
     // ----- gas: value transfer (+ static-mode violation) -----
@@ -118,16 +118,16 @@ bool call_impl(EvmState& s, evmc_call_kind kind, bool has_value, bool static_for
             return false;
         }
         if (nonzero_value) {
-            if (s.gas < CALL_VALUE_COST) { s.status = EVMC_OUT_OF_GAS; return false; }
-            s.gas -= CALL_VALUE_COST;
+            if (R.gas < CALL_VALUE_COST) { s.status = EVMC_OUT_OF_GAS; return false; }
+            R.gas -= CALL_VALUE_COST;
         }
     }
 
     // ----- gas: new-account creation (CALL with value to a missing account) -----
     if (kind == EVMC_CALL && nonzero_value &&
         !s.host->account_exists(s.context, &dst)) {
-        if (s.gas < ACCOUNT_CREATION) { s.status = EVMC_OUT_OF_GAS; return false; }
-        s.gas -= ACCOUNT_CREATION;
+        if (R.gas < ACCOUNT_CREATION) { s.status = EVMC_OUT_OF_GAS; return false; }
+        R.gas -= ACCOUNT_CREATION;
     }
 
     // ----- EIP-7702 (Prague+): resolve a delegated call target -----
@@ -145,22 +145,22 @@ bool call_impl(EvmState& s, evmc_call_kind kind, bool has_value, bool static_for
             const int64_t dcost =
                 s.host->access_account(s.context, &code_addr) == EVMC_ACCESS_COLD
                     ? COLD_ACCOUNT_ACCESS : WARM_ACCESS;
-            if (s.gas < dcost) { s.status = EVMC_OUT_OF_GAS; return false; }
-            s.gas -= dcost;
+            if (R.gas < dcost) { s.status = EVMC_OUT_OF_GAS; return false; }
+            R.gas -= dcost;
         }
     }
 
     // ----- gas: memory expansion for the input and output windows -----
-    if (EVMMem::expand(static_cast<size_t>(in_off), static_cast<size_t>(in_size), &s.gas) != MemError::Ok) {
+    if (mem_expand(R, static_cast<size_t>(in_off), static_cast<size_t>(in_size)) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
     }
-    if (EVMMem::expand(static_cast<size_t>(out_off), static_cast<size_t>(out_size), &s.gas) != MemError::Ok) {
+    if (mem_expand(R, static_cast<size_t>(out_off), static_cast<size_t>(out_size)) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
     }
 
     // ----- EIP-150 "all but one 64th" cap on the gas passed to the child -----
     int64_t call_gas = req_gas;
-    const int64_t cap = s.gas - s.gas / 64;
+    const int64_t cap = R.gas - R.gas / 64;
     if (call_gas > cap) call_gas = cap;
 
     // ----- build the child message -----
@@ -184,7 +184,7 @@ bool call_impl(EvmState& s, evmc_call_kind kind, bool has_value, bool static_for
     // ----- stipend + caller-balance light failure -----
     if (has_value && nonzero_value) {
         msg.gas += CALL_STIPEND;
-        s.gas   += CALL_STIPEND;
+        R.gas   += CALL_STIPEND;
         const evmc_uint256be bal = s.host->get_balance(s.context, &s.evmcMsg->recipient);
         if (be_lt(bal, value_be)) return finish_light();
     }
@@ -195,7 +195,7 @@ bool call_impl(EvmState& s, evmc_call_kind kind, bool has_value, bool static_for
     // ----- run the child frame via the host -----
     evmc_result r = s.host->call(s.context, &msg);
 
-    st_le(s, iResult, (r.status_code == EVMC_SUCCESS) ? U256{{1, 0, 0, 0}} : U256{});
+    st_le(iResult, (r.status_code == EVMC_SUCCESS) ? U256{{1, 0, 0, 0}} : U256{});
 
     if (const size_t copy = std::min<size_t>(static_cast<size_t>(out_size), r.output_size); copy > 0)
         std::memcpy(EVMMem::data(static_cast<size_t>(out_off)), r.output_data, copy);
@@ -206,64 +206,64 @@ bool call_impl(EvmState& s, evmc_call_kind kind, bool has_value, bool static_for
     // supersedes it or the frame ends.
     s.returnDataOwner = r;
 
-    s.gas        -= (msg.gas - r.gas_left);  // reclaim the child's leftover gas
+    R.gas        -= (msg.gas - r.gas_left);  // reclaim the child's leftover gas
     s.gas_refund += r.gas_refund;
 
-    s.stackPointer = iResult;
-    ++s.pc;
+    R.top = iResult;
+    ++R.pc;
     return true;
 }
 
-bool op_call(EvmState& s)         { return call_impl(s, EVMC_CALL,         /*has_value=*/true,  /*static=*/false); }
-bool op_callcode(EvmState& s)     { return call_impl(s, EVMC_CALLCODE,     /*has_value=*/true,  /*static=*/false); }
-bool op_delegatecall(EvmState& s) { return call_impl(s, EVMC_DELEGATECALL, /*has_value=*/false, /*static=*/false); }
-bool op_staticcall(EvmState& s)   { return call_impl(s, EVMC_CALL,         /*has_value=*/false, /*static=*/true); }
+bool op_call(EvmState& s, Regs& R)         { return call_impl(s, R, EVMC_CALL,         /*has_value=*/true,  /*static=*/false); }
+bool op_callcode(EvmState& s, Regs& R)     { return call_impl(s, R, EVMC_CALLCODE,     /*has_value=*/true,  /*static=*/false); }
+bool op_delegatecall(EvmState& s, Regs& R) { return call_impl(s, R, EVMC_DELEGATECALL, /*has_value=*/false, /*static=*/false); }
+bool op_staticcall(EvmState& s, Regs& R)   { return call_impl(s, R, EVMC_CALL,         /*has_value=*/false, /*static=*/true); }
 
 // Shared implementation of CREATE / CREATE2. The host (ZiskStateDB::call_create)
 // derives the new address, runs the init code, and charges the code deposit;
 // here we charge what the interpreter owns (base, init-code memory, EIP-3860
 // size + word cost, CREATE2's keccak word cost, the 63/64 cap), build the
 // message, and push the created address (0 on failure).
-bool create_impl(EvmState& s, evmc_call_kind kind) {
+bool create_impl(EvmState& s, Regs& R, evmc_call_kind kind) {
     const bool     is2   = (kind == EVMC_CREATE2);
-    const uint32_t nargs = is2 ? 4u : 3u;
+    const size_t nargs = is2 ? 4u : 3u;
 
-    if (s.gas < GAS_CREATE) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_CREATE;
-    if (stack_depth(s) < nargs) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (R.gas < GAS_CREATE) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_CREATE;
+    if (depth_lt(R, nargs)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
 
-    const uint32_t sp      = s.stackPointer;
-    const uint32_t iVal    = sp;
-    const uint32_t iOff    = sp + 1;
-    const uint32_t iSize   = sp + 2;
-    const uint32_t iSalt   = sp + 3;          // CREATE2 only
-    const uint32_t iResult = is2 ? sp + 3 : sp + 2;
+    U256* const sp      = R.top;
+    U256* const iVal    = sp;
+    U256* const iOff    = sp + 1;
+    U256* const iSize   = sp + 2;
+    U256* const iSalt   = sp + 3;          // CREATE2 only
+    U256* const iResult = is2 ? sp + 3 : sp + 2;
 
-    const bool nonzero_value = !u256_is_zero(s.stack[iVal]);
+    const bool nonzero_value = !u256_is_zero(iVal[0]);
     evmc_uint256be value_be;
-    std::memcpy(value_be.bytes, &s.stack[iVal], 32);  // slot is big-endian
+    u256_to_be(iVal[0], value_be.bytes);  // LE slot -> BE wire value
 
-    const uint64_t off  = mem_arg(s.stack[iOff]);
-    const uint64_t size = mem_arg(s.stack[iSize]);
+    const uint64_t off  = mem_arg(iOff[0]);
+    const uint64_t size = mem_arg(iSize[0]);
 
     evmc_bytes32 salt{};
     if (is2)
-        std::memcpy(salt.bytes, &s.stack[iSalt], 32);  // slot is big-endian
+        u256_to_be(iSalt[0], salt.bytes);  // LE slot -> BE wire salt
 
     // Supersede any prior return data (releasing it if it was heap-owned).
     if (s.returnDataOwner.release) s.returnDataOwner.release(&s.returnDataOwner);
     s.returnDataOwner = evmc_result{};
 
     auto finish_fail = [&]() {  // "light" failure (depth / balance): push 0, continue
-        s.stack[iResult] = U256{};  // zero is BE-agnostic
-        s.stackPointer = iResult;
-        ++s.pc;
+        iResult[0] = U256{};  // zero is BE-agnostic
+        R.top = iResult;
+        ++R.pc;
         return true;
     };
 
     // init-code memory expansion
-    if (EVMMem::expand(static_cast<size_t>(off), static_cast<size_t>(size), &s.gas) != MemError::Ok) {
+    if (mem_expand(R, static_cast<size_t>(off), static_cast<size_t>(size)) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS; return false;
     }
     // EIP-3860 (Shanghai+): cap init-code size and add 2 gas/word. The CREATE2
@@ -274,8 +274,8 @@ bool create_impl(EvmState& s, evmc_call_kind kind) {
     const int64_t word_cost = (is2 ? KECCAK_WORD_COST : 0) + (eip3860 ? INITCODE_WORD_COST : 0);
     if (word_cost != 0) {
         const int64_t init_cost = num_words(size) * word_cost;
-        if (s.gas < init_cost) { s.status = EVMC_OUT_OF_GAS; return false; }
-        s.gas -= init_cost;
+        if (R.gas < init_cost) { s.status = EVMC_OUT_OF_GAS; return false; }
+        R.gas -= init_cost;
     }
 
     if (s.evmcMsg->depth >= 1024) return finish_fail();
@@ -287,7 +287,7 @@ bool create_impl(EvmState& s, evmc_call_kind kind) {
     // EIP-150 cap on the gas handed to the init frame.
     evmc_message msg{};
     msg.kind   = kind;
-    msg.gas    = s.gas - s.gas / 64;
+    msg.gas    = R.gas - R.gas / 64;
     msg.sender = s.evmcMsg->recipient;
     msg.depth  = s.evmcMsg->depth + 1;
     msg.value  = value_be;
@@ -298,33 +298,30 @@ bool create_impl(EvmState& s, evmc_call_kind kind) {
     }
 
     evmc_result r = s.host->call(s.context, &msg);
-    s.gas        -= (msg.gas - r.gas_left);
+    R.gas        -= (msg.gas - r.gas_left);
     s.gas_refund += r.gas_refund;
     s.returnDataOwner = r;  // keep revert output (empty on success) as return data
 
     if (r.status_code == EVMC_SUCCESS) {
-        // the 20-byte address, right-aligned in the 256-bit word -> BE form
-        U256 a{};
-        std::memcpy(reinterpret_cast<uint8_t*>(&a) + 12, r.create_address.bytes, 20);
-        s.stack[iResult] = a;
+        iResult[0] = slot_from_address(r.create_address);  // 20-byte address -> LE slot
     } else {
-        s.stack[iResult] = U256{};  // zero is BE-agnostic
+        iResult[0] = U256{};  // zero is BE-agnostic
     }
-    s.stackPointer = iResult;
-    ++s.pc;
+    R.top = iResult;
+    ++R.pc;
     return true;
 }
 
-bool op_create(EvmState& s)  { return create_impl(s, EVMC_CREATE); }
-bool op_create2(EvmState& s) { return create_impl(s, EVMC_CREATE2); }
+bool op_create(EvmState& s, Regs& R)  { return create_impl(s, R, EVMC_CREATE); }
+bool op_create2(EvmState& s, Regs& R) { return create_impl(s, R, EVMC_CREATE2); }
 
 // RETURN (success) / REVERT — set the frame's output window and halt.
-bool return_impl(EvmState& s, evmc_status_code st) {
-    if (stack_depth(s) < 2) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const uint64_t off  = mem_arg(s.stack[s.stackPointer]);
-    const uint64_t size = mem_arg(s.stack[s.stackPointer + 1]);
+bool return_impl(EvmState& s, Regs& R, evmc_status_code st) {
+    if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const uint64_t off  = mem_arg(R.top[0]);
+    const uint64_t size = mem_arg(R.top[1]);
     if (size > 0) {
-        if (EVMMem::expand(static_cast<size_t>(off), static_cast<size_t>(size), &s.gas) != MemError::Ok) {
+        if (mem_expand(R, static_cast<size_t>(off), static_cast<size_t>(size)) != MemError::Ok) {
             s.status = EVMC_OUT_OF_GAS;
             return false;
         }
@@ -337,30 +334,28 @@ bool return_impl(EvmState& s, evmc_status_code st) {
     return false;  // halt the frame
 }
 
-bool op_return(EvmState& s) { return return_impl(s, EVMC_SUCCESS); }
-bool op_revert(EvmState& s) { return return_impl(s, EVMC_REVERT); }
+bool op_return(EvmState& s, Regs& R) { return return_impl(s, R, EVMC_SUCCESS); }
+bool op_revert(EvmState& s, Regs& R) { return return_impl(s, R, EVMC_REVERT); }
 
 // 0x3d RETURNDATASIZE — size of the last sub-call's output.
-bool op_returndatasize(EvmState& s) {
-    if (s.gas < GAS_BASE) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_BASE;
-    if (stack_depth(s) >= kStackLimit) { s.status = EVMC_STACK_OVERFLOW; return false; }
-    --s.stackPointer;
-    st_le(s, s.stackPointer, U256{{static_cast<uint64_t>(s.returnDataOwner.output_size), 0, 0, 0}});
-    ++s.pc;
+bool op_returndatasize(EvmState& s, Regs& R) {
+    if (R.gas < GAS_BASE) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_BASE;
+    if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    st_le(R.top - 1, U256{{static_cast<uint64_t>(s.returnDataOwner.output_size), 0, 0, 0}});
     return true;
 }
 
 // 0x3e RETURNDATACOPY — copy return data into memory (EIP-211 bounds-checked).
-bool op_returndatacopy(EvmState& s) {
-    if (s.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= GAS_VERYLOW;
-    if (stack_depth(s) < 3) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const uint64_t mem_off = mem_arg(s.stack[s.stackPointer]);
-    const uint64_t ret_off = mem_arg(s.stack[s.stackPointer + 1]);
-    const uint64_t size    = mem_arg(s.stack[s.stackPointer + 2]);
+bool op_returndatacopy(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    if (depth_lt(R, 3)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const uint64_t mem_off = mem_arg(R.top[0]);
+    const uint64_t ret_off = mem_arg(R.top[1]);
+    const uint64_t size    = mem_arg(R.top[2]);
 
-    if (EVMMem::expand(static_cast<size_t>(mem_off), static_cast<size_t>(size), &s.gas) != MemError::Ok) {
+    if (mem_expand(R, static_cast<size_t>(mem_off), static_cast<size_t>(size)) != MemError::Ok) {
         s.status = EVMC_OUT_OF_GAS;
         return false;
     }
@@ -370,19 +365,17 @@ bool op_returndatacopy(EvmState& s) {
         return false;
     }
     const int64_t cost = 3 * static_cast<int64_t>((size + 31) / 32);  // 3 per word
-    if (s.gas < cost) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= cost;
+    if (R.gas < cost) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= cost;
 
     if (size > 0)
         std::memcpy(EVMMem::data(static_cast<size_t>(mem_off)),
                     s.returnDataOwner.output_data + ret_off, static_cast<size_t>(size));
-    s.stackPointer += 3;
-    ++s.pc;
     return true;
 }
 
 // 0xfe INVALID — designated invalid opcode; halts with failure.
-bool op_invalid(EvmState& s) {
+bool op_invalid(EvmState& s, Regs& R) {
     s.status = EVMC_INVALID_INSTRUCTION;
     return false;
 }
@@ -390,20 +383,19 @@ bool op_invalid(EvmState& s) {
 // 0xff SELFDESTRUCT — transfer the account's balance to the beneficiary and halt.
 // Deletion itself is host-side (EIP-6780: only if the account was created in this
 // tx); the interpreter just charges gas and calls host->selfdestruct.
-bool op_selfdestruct(EvmState& s) {
-    if (s.gas < SELFDESTRUCT_GAS) { s.status = EVMC_OUT_OF_GAS; return false; }
-    s.gas -= SELFDESTRUCT_GAS;
-    if (stack_depth(s) < 1) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+bool op_selfdestruct(EvmState& s, Regs& R) {
+    if (R.gas < SELFDESTRUCT_GAS) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= SELFDESTRUCT_GAS;
+    if (depth_lt(R, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
 
-    evmc_address ben;  // low 20 big-endian bytes of the word (slot is BE)
-    std::memcpy(ben.bytes, reinterpret_cast<const uint8_t*>(&s.stack[s.stackPointer]) + 12, 20);
+    const evmc_address ben = addr_from_slot(R.top[0]);  // low 20 bytes of the value
 
     // Cold beneficiary access (Berlin+): the full 2600 (no warm base for SELFDESTRUCT).
     if (s.rev >= EVMC_BERLIN &&
         s.host->access_account(s.context, &ben) == EVMC_ACCESS_COLD) {
-        if (s.gas < COLD_ACCOUNT_ACCESS) { s.status = EVMC_OUT_OF_GAS; return false; }
-        s.gas -= COLD_ACCOUNT_ACCESS;
+        if (R.gas < COLD_ACCOUNT_ACCESS) { s.status = EVMC_OUT_OF_GAS; return false; }
+        R.gas -= COLD_ACCOUNT_ACCESS;
     }
     // New-account surcharge: charged when the account has balance to send and the
     // beneficiary does not yet exist.
@@ -412,8 +404,8 @@ bool op_selfdestruct(EvmState& s) {
     for (int i = 0; i < 32; ++i)
         if (bal.bytes[i] != 0) { bal_nonzero = true; break; }
     if (bal_nonzero && !s.host->account_exists(s.context, &ben)) {
-        if (s.gas < ACCOUNT_CREATION) { s.status = EVMC_OUT_OF_GAS; return false; }
-        s.gas -= ACCOUNT_CREATION;
+        if (R.gas < ACCOUNT_CREATION) { s.status = EVMC_OUT_OF_GAS; return false; }
+        R.gas -= ACCOUNT_CREATION;
     }
 
     const bool first = s.host->selfdestruct(s.context, &s.evmcMsg->recipient, &ben);
@@ -425,23 +417,5 @@ bool op_selfdestruct(EvmState& s) {
 
 }  // namespace
 
-void register_system(InstrTable& t, evmc_revision rev) {
-    t[0xf0] = &op_create;
-    t[0xf1] = &op_call;
-    t[0xf2] = &op_callcode;
-    t[0xf3] = &op_return;
-    t[0xfe] = &op_invalid;
-    t[0xff] = &op_selfdestruct;
-    if (rev >= EVMC_HOMESTEAD)  // EIP-7
-        t[0xf4] = &op_delegatecall;
-    if (rev >= EVMC_BYZANTIUM) {  // EIP-211 (RETURNDATA*), EIP-214 (STATICCALL), EIP-140 (REVERT)
-        t[0x3d] = &op_returndatasize;
-        t[0x3e] = &op_returndatacopy;
-        t[0xfa] = &op_staticcall;
-        t[0xfd] = &op_revert;
-    }
-    if (rev >= EVMC_CONSTANTINOPLE)  // EIP-1014
-        t[0xf5] = &op_create2;
-}
 
 }  // namespace zevm

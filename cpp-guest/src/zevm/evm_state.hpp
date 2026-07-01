@@ -22,9 +22,11 @@ namespace zevm {
 
 inline constexpr size_t kStackLimit = 1024;
 
-// EVM maximum call depth — also the number of preallocated frames (one per live
-// depth) and == EVMMem's handle count. run() indexes its static frame array by
-// the message's call depth, the same index EVMMem uses for its zones.
+// EVM maximum call depth. A frame runs at every depth 0..kMaxCallDepth inclusive
+// (a CALL is allowed while depth < 1024, so a depth-1023 frame spawns a running
+// depth-1024 child), so the preallocated frame array and EVMMem's zone handles
+// must hold kMaxCallDepth + 1 entries — run() indexes them by the message's call
+// depth, the same index EVMMem uses for its zones.
 inline constexpr size_t kMaxCallDepth = 1024;
 
 // Fill `out` (ceil(codeSize/64) u64 words) with the JUMPDEST bitset: bit i is
@@ -54,15 +56,16 @@ struct EvmState {
     bool            ownsAnalysis;
 
     // ----- operand stack -----
-    // 256-bit words, each held in big-endian wire form (the 32 memory/storage/
-    // PUSH bytes, stored as four little-endian words == byteswap256 of the
-    // value). Arithmetic/positional handlers convert to little-endian limbs
-    // locally via detail.hpp's ld_le/st_le; everything else touches these BE
-    // slots directly. stackPointer follows the spec's convention: it counts DOWN
-    // from kStackLimit (empty) toward 0 (full). A push pre-decrements, a pop
-    // post-increments. Number of live items == kStackLimit - stackPointer.
+    // 256-bit words, each held as a little-endian integer (limbs[0] = least
+    // significant) — the limb layout zeg::bi and the u256_* helpers consume, so
+    // arithmetic and positional handlers touch the slots directly (ld_le/st_le
+    // are identity). The wire-facing ops (memory/storage/PUSH/addresses/hashes)
+    // byteswap into/out of this form via u256_from_be / u256_to_be. stackPointer
+    // follows the spec's convention: it counts DOWN from kStackLimit (empty)
+    // toward 0 (full). A push pre-decrements, a pop post-increments. Number of
+    // live items == kStackLimit - stackPointer.
     U256           stack[kStackLimit];
-    uint32_t       stackPointer;       // kStackLimit == empty
+    size_t         stackPointer;       // kStackLimit == empty (64-bit: indexes the stack)
 
     // ----- memory -----
     // Handle into the static EVMMem manager (== this frame's call depth). The

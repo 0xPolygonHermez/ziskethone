@@ -12,11 +12,32 @@
 #include <cstdint>
 #include <cstring>    // std::memcpy (unaligned PUSH loads)
 
+#include "evm_mem.hpp"       // EVMMem, MemError (memory-gas wrappers below)
 #include "evm_state.hpp"     // EvmState, kStackLimit
-#include "instructions.hpp"  // InstrFn, InstrTable
+#include "instructions.hpp"  // EvmState include
 #include "u256.hpp"          // U256, byteswap256, u256_* value helpers
 
 namespace zevm {
+
+// Hot interpreter state the dispatch loop holds in locals and threads by
+// reference into the (inlined) handlers, so the compiler keeps gas / stack
+// pointer / pc in registers across the loop instead of round-tripping them
+// through EvmState memory on every opcode (the dominant ZisK cost). The dispatch
+// loop seeds these from EvmState on entry and writes them back when the frame
+// halts; nothing else reads the EvmState copies while a frame runs. Crucially,
+// R.gas's address is never taken (see the mem_* wrappers) so it stays a register.
+struct Regs {
+    int64_t      gas;   // mirrors EvmState::gas
+    U256*        top;   // pointer to the current top-of-stack slot (&s.stack[stackPointer]);
+                        // evmone-style — avoids the per-access index*sizeof + zero-extend,
+                        // and sidesteps a GCC 15/16 RISC-V miscompile of the 64-bit index.
+    size_t       pc;    // mirrors EvmState::pc
+    const U256*  empty; // s.stack + kStackLimit — the empty-stack marker (one past the
+                        // deepest slot). Hoisted into a register so the per-op underflow
+                        // check is `top > empty - need` (a single addi + branch) instead
+                        // of re-forming s.stack + (kStackLimit - need) (lui+addi+add: the
+                        // base sits ~32 KB past s.stack, beyond the 12-bit immediate).
+};
 
 // EVM gas cost tiers (subset; grows as opcodes land).
 inline constexpr int64_t GAS_JUMPDEST = 1;  // JUMPDEST
@@ -28,10 +49,16 @@ inline constexpr int64_t GAS_HIGH    = 10;  // JUMPI
 inline constexpr int64_t GAS_EXP     = 10;  // EXP base
 inline constexpr int64_t GAS_EXPBYTE = 50;  // EXP per byte of exponent (>= Spurious Dragon)
 
-// Number of live operands on the stack. stackPointer counts DOWN from
-// kStackLimit (empty) toward 0 (full), so depth == kStackLimit - stackPointer.
-inline size_t stack_depth(const EvmState& s) {
-    return kStackLimit - s.stackPointer;
+// Stack bounds as pointer comparisons (evmone-style; no index math). The top
+// pointer counts DOWN from s.stack+kStackLimit (empty) toward s.stack (full).
+// depth_lt(need): fewer than `need` operands present (underflow). Uses the
+// hoisted empty marker (R.empty == s.stack + kStackLimit): `top > empty - need`.
+inline bool depth_lt(const Regs& R, size_t need) {
+    return R.top > R.empty - need;
+}
+// stack_full: no room left to push (depth == kStackLimit).
+inline bool stack_full(const EvmState& s, const U256* top) {
+    return top <= s.stack;
 }
 
 // Unaligned 64-bit load from code.
@@ -41,31 +68,46 @@ inline uint64_t load_u64(const uint8_t* p) {
     return v;
 }
 
-// Stack representation: every slot holds its value in big-endian wire form (the
-// 32 bytes memory / storage / PUSH / the host's evmc_bytes32 use, stored as four
-// little-endian words == byteswap256 of the integer value). That makes the
-// common ops — DUP/SWAP/POP, MLOAD/MSTORE, SLOAD/SSTORE, addresses, hashes —
-// conversion-free, since they're already BE. Only the arithmetic and positional
-// ops need little-endian limbs (what zeg::bi and the integer helpers consume):
-// they load a local LE copy with ld_le, compute, and write the result back as BE
-// with st_le. The bit-parallel ops (AND/OR/XOR/NOT) and zero/equality tests
-// (ISZERO/EQ) are representation-agnostic and work on the BE slots directly.
+// Stack representation: every slot holds its value as a little-endian integer
+// (limbs[0] = least significant, exactly the limb layout zeg::bi and the u256_*
+// integer helpers consume). That makes the arithmetic and positional ops
+// conversion-free — ld_le/st_le below are now identity. The cost moves to the
+// *wire boundary*: memory / storage / PUSH / addresses / hashes are big-endian on
+// the wire, so they byteswap into/out of the slot via u256_from_be / u256_to_be.
+// The bit-parallel ops (AND/OR/XOR/NOT) and zero/equality tests (ISZERO/EQ) are
+// representation-agnostic and work on the slots directly.
 
-// Big-endian stack slot `i` -> its little-endian value (a copy; slot unchanged).
-inline U256 ld_le(const EvmState& s, uint32_t i) { return byteswap256(s.stack[i]); }
+// Stack slot `i` as a little-endian value. The slot already holds LE limbs, so
+// this is just a copy (kept as a named accessor so the arithmetic handlers read
+// clearly and to localize the representation choice).
+inline U256 ld_le(const U256* p) { return *p; }
 
-// Store a little-endian value into slot `i` in big-endian form.
-inline void st_le(EvmState& s, uint32_t i, const U256& v) { s.stack[i] = byteswap256(v); }
+// Store a little-endian value into slot `*p` (the slot is LE — a plain copy).
+inline void st_le(U256* p, const U256& v) { *p = v; }
 
-// A 256-bit big-endian stack slot used as a memory offset/size: its integer
-// value when it fits in 64 bits, or UINT64_MAX when any higher byte is set
-// (which forces an out-of-gas in EVMMem::expand, matching the EVM "offset too
-// large" behaviour). Reads the slot directly — only the low lane (limbs[3], the
-// big-endian least-significant 8 bytes) is byteswapped, and the three high lanes
-// just have to be zero — rather than a full byteswap256 via ld_le.
-inline uint64_t mem_arg(const U256& be) {
-    return (be.limbs[0] | be.limbs[1] | be.limbs[2]) != 0 ? UINT64_MAX
-                                                          : bswap64(be.limbs[3]);
+// A 256-bit little-endian stack slot used as a memory offset/size: its integer
+// value when it fits in 64 bits (the low lane), or UINT64_MAX when any higher
+// lane is set (which forces an out-of-gas in EVMMem::expand, matching the EVM
+// "offset too large" behaviour).
+inline uint64_t mem_arg(const U256& v) {
+    return (v.limbs[1] | v.limbs[2] | v.limbs[3]) != 0 ? UINT64_MAX : v.limbs[0];
+}
+
+// The 20-byte address held in stack slot value `v` (its low 160 bits): the
+// value's big-endian bytes with the high 12 dropped.
+inline evmc_address addr_from_slot(const U256& v) {
+    uint8_t be[32];
+    u256_to_be(v, be);
+    evmc_address a;
+    std::memcpy(a.bytes, be + 12, 20);
+    return a;
+}
+
+// A stack slot value holding a 20-byte address right-aligned in the low 160 bits.
+inline U256 slot_from_address(const evmc_address& a) {
+    uint8_t be[32] = {};
+    std::memcpy(be + 12, a.bytes, 20);
+    return u256_from_be(be);
 }
 
 // Number of 32-byte EVM words spanned by `n` bytes.
@@ -79,22 +121,33 @@ inline int64_t copy_cost(uint64_t n) {
     return num_words(n) * 3;
 }
 
-// Per-category table registration. Each is defined in its own translation unit
-// (instructions/<category>.cpp) and slots its handlers into `t`; table.cpp calls
-// them all over the default-filled table.
-// The `rev` overloads gate fork-introduced opcodes: an opcode is registered only
-// when `rev` is at or past the fork that introduced it (otherwise it stays
-// op_unimplemented, i.e. undefined).
-void register_arith(InstrTable& t);
-void register_bitwise(InstrTable& t, evmc_revision rev);
-void register_keccak(InstrTable& t);
-void register_env(InstrTable& t, evmc_revision rev);
-void register_memory(InstrTable& t, evmc_revision rev);
-void register_storage(InstrTable& t, evmc_revision rev);
-void register_control(InstrTable& t);
-void register_stack(InstrTable& t);
-void register_push(InstrTable& t, evmc_revision rev);
-void register_log(InstrTable& t);
-void register_system(InstrTable& t, evmc_revision rev);
+// EVMMem charges memory-expansion / copy gas by value and returns the remaining
+// gas (MemGas), so R.gas stays register-resident: it is passed in and written
+// back without its address ever being taken (no spill through EvmState::gas).
+inline MemError mem_expand(Regs& R, size_t addr, size_t len) {
+    const MemGas r = EVMMem::expand(addr, len, R.gas);
+    R.gas = r.gas;
+    return r.err;
+}
+inline MemError mem_read(Regs& R, size_t addr, uint8_t* dst, size_t len) {
+    const MemGas r = EVMMem::readBytes(addr, dst, len, R.gas);
+    R.gas = r.gas;
+    return r.err;
+}
+inline MemError mem_write(Regs& R, size_t addr, const uint8_t* src, size_t len) {
+    const MemGas r = EVMMem::writeBytes(addr, src, len, R.gas);
+    R.gas = r.gas;
+    return r.err;
+}
+inline MemError mem_write_byte(Regs& R, size_t addr, uint8_t v) {
+    const MemGas r = EVMMem::writeByte(addr, v, R.gas);
+    R.gas = r.gas;
+    return r.err;
+}
+
+// Opcode handlers live in the per-category headers (instructions/<category>.inl.hpp),
+// each in its own `zevm::<category>_ops` namespace, and are dispatched by the
+// straight-line switch in zevm.cpp (no runtime table). Fork gating is done there
+// at compile time via `if constexpr (Rev >= …)`.
 
 }  // namespace zevm
