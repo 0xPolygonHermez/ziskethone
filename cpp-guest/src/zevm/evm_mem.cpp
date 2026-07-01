@@ -64,6 +64,20 @@ MemGas EVMMem::ensure(size_t need_bytes, int64_t gas) {
     if (new_size > kMaxMemPerTx)
         return {MemError::OutOfGas, gas};  // beyond what any frame may address
 
+    // Zone-capacity guard. Same-parity frames stack within one fixed arena
+    // (kMemBlockSize): a single frame is capped at kMaxMemPerTx, but many live
+    // same-parity frames can cumulatively exhaust the zone. Growing past the
+    // arena would memset/memcpy out of bounds (UB / segfault). Treat zone
+    // exhaustion as out-of-gas so the guest fails cleanly instead of crashing.
+    // Memory cost is quadratic in gas, so within the current fork's per-tx gas
+    // cap the cumulative footprint stays far below a zone and this never fires
+    // on valid blocks; it only bounds adversarial deep-recursion + large-memory
+    // cases (old-fork state tests) — documented as a known divergence.
+    const int    z   = s_cur & 1;
+    const size_t off = static_cast<size_t>(h.start_ptr - s_zone[z]);
+    if (off + new_size > kMemBlockSize)
+        return {MemError::OutOfGas, gas};
+
     const int64_t old_words = static_cast<int64_t>(h.size / kWord);
     const int64_t new_words = static_cast<int64_t>(new_size / kWord);
     const int64_t delta     = mem_cost(new_words) - mem_cost(old_words);
@@ -74,8 +88,6 @@ MemGas EVMMem::ensure(size_t need_bytes, int64_t gas) {
     // Clean any newly-exposed bytes that lie in already-dirtied (recycled)
     // space; everything at or above firstClean is already zero. firstClean is a
     // zone-relative offset, so derive the frame's offset from its pointer.
-    const int    z         = s_cur & 1;
-    const size_t off       = static_cast<size_t>(h.start_ptr - s_zone[z]);
     const size_t exp_start = off + h.size;
     const size_t exp_end   = off + new_size;
     const size_t dirty_end = min_size(exp_end, s_firstClean[z]);
