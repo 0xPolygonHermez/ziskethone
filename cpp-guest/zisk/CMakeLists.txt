@@ -312,6 +312,29 @@ add_custom_command(TARGET modexp_bench.elf POST_BUILD
     $<TARGET_FILE:modexp_bench.elf> $<TARGET_FILE:modexp_bench.elf>
   COMMENT "Stripping ZisK-incompatible sections")
 
+# --- ecrecover_bench.elf: secp256k1 ECRECOVER selftest + GLV cost benchmark ---
+add_executable(ecrecover_bench.elf
+  ${CMAKE_CURRENT_SOURCE_DIR}/bigint/test/bench_ecrecover_zisk.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/secp256k1.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
+  ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
+  ${DMA_SRC}
+  ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
+target_compile_definitions(ecrecover_bench.elf PRIVATE ZEG_ZISK)
+target_compile_options(ecrecover_bench.elf PRIVATE $<$<CONFIG:Release>:-Os>)
+target_include_directories(ecrecover_bench.elf PRIVATE ${GUEST_ROOT}/include)
+target_link_options(ecrecover_bench.elf PRIVATE
+  -T ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld -nostdlib -nostartfiles -Wl,--gc-sections)
+set_target_properties(ecrecover_bench.elf PROPERTIES LINK_DEPENDS
+  ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld)
+add_custom_command(TARGET ecrecover_bench.elf POST_BUILD
+  COMMAND ${CMAKE_OBJCOPY}
+    --remove-section .eh_frame --remove-section .eh_frame_hdr
+    --remove-section '.gcc_except_table*' --remove-section .comment
+    --remove-section .riscv.attributes
+    $<TARGET_FILE:ecrecover_bench.elf> $<TARGET_FILE:ecrecover_bench.elf>
+  COMMENT "Stripping ZisK-incompatible sections")
+
 # --- bls2537_selftest.elf: on-emulator self-test of the EIP-2537 layers ---
 # Exercises mul/msm, pairing_check and map-to-curve (SWU + isogeny + cofactor)
 # on the precompile/fcall backend. See bls12_381/test/selftest_eip2537_zisk.cpp.
