@@ -24,28 +24,59 @@ constexpr int64_t WARM_STORAGE_READ_COST = 100;
 constexpr int64_t COLD_SLOAD_COST        = 2100;
 constexpr int64_t SSTORE_SENTRY_GAS      = 2300;   // EIP-1706
 
-// Net-metering SSTORE schedule for London..Prague, derived from the spec
-// constants exactly as evmone builds its table (so refunds can't be mistyped).
-constexpr int64_t SS_SET    = 20000;                       // 0 -> nonzero
-constexpr int64_t SS_RESET  = 5000 - COLD_SLOAD_COST;      // 2900 (cold surcharge split out)
-constexpr int64_t SS_CLEAR  = 4800;                        // EIP-3529 clear refund
-
 struct SStoreCost { int64_t cost; int64_t refund; };
 
-// Indexed by evmc_storage_status (0..8): ASSIGNED, ADDED, DELETED, MODIFIED,
-// DELETED_ADDED, MODIFIED_DELETED, DELETED_RESTORED, ADDED_DELETED,
-// MODIFIED_RESTORED.
-constexpr SStoreCost SSTORE_COST[] = {
-    {WARM_STORAGE_READ_COST, 0},                                          // ASSIGNED
-    {SS_SET, 0},                                                          // ADDED
-    {SS_RESET, SS_CLEAR},                                                 // DELETED
-    {SS_RESET, 0},                                                        // MODIFIED
-    {WARM_STORAGE_READ_COST, -SS_CLEAR},                                  // DELETED_ADDED
-    {WARM_STORAGE_READ_COST, SS_CLEAR},                                   // MODIFIED_DELETED
-    {WARM_STORAGE_READ_COST, SS_RESET - WARM_STORAGE_READ_COST - SS_CLEAR}, // DELETED_RESTORED
-    {WARM_STORAGE_READ_COST, SS_SET - WARM_STORAGE_READ_COST},            // ADDED_DELETED
-    {WARM_STORAGE_READ_COST, SS_RESET - WARM_STORAGE_READ_COST},          // MODIFIED_RESTORED
-};
+// Per-revision SSTORE schedule, mirroring evmone's storage_cost_spec table
+// (lib/evmone/instructions_storage.cpp). The clear refund and the warm/reset
+// bases changed across forks; a single London+ table over-charged pre-London
+// (Berlin's storage-clear refund is 15000, not EIP-3529's 4800 — a 10200 gas
+// delta that showed up on every fork_Berlin state test that SSTOREs a value).
+//   net_cost — EIP-2200 net metering active (false = legacy full-cost schedule)
+//   warm     — warm-access base (200/800 pre-Berlin, 100 = warm_storage_read on Berlin+)
+//   set/reset— 0->nonzero / nonzero->nonzero base (cold surcharge added separately on Berlin+)
+//   clear    — storage-deletion refund R_sclear (15000 pre-London, 4800 EIP-3529)
+struct StorageCostSpec { bool net_cost; int64_t warm; int64_t set; int64_t reset; int64_t clear; };
+
+constexpr StorageCostSpec storage_spec(evmc_revision rev) {
+    if (rev >= EVMC_LONDON)         return {true, WARM_STORAGE_READ_COST, 20000, 5000 - COLD_SLOAD_COST, 4800};
+    if (rev == EVMC_BERLIN)         return {true, WARM_STORAGE_READ_COST, 20000, 5000 - COLD_SLOAD_COST, 15000};
+    if (rev == EVMC_ISTANBUL)       return {true, 800, 20000, 5000, 15000};
+    if (rev == EVMC_CONSTANTINOPLE) return {true, 200, 20000, 5000, 15000};
+    return {false, 200, 20000, 5000, 15000};  // legacy: Frontier..Byzantium, Petersburg
+}
+
+// SSTORE {cost, refund} for a storage-update status under the active revision's
+// schedule. Faithful to evmone's sstore_costs table build (both legacy and net).
+constexpr SStoreCost sstore_cost(evmc_revision rev, evmc_storage_status st) {
+    const StorageCostSpec c = storage_spec(rev);
+    const int64_t W = c.warm;
+    if (!c.net_cost) {  // legacy full-cost schedule (pre-Constantinople / Petersburg)
+        switch (st) {
+            case EVMC_STORAGE_ADDED:             return {c.set,   0};
+            case EVMC_STORAGE_DELETED:           return {c.reset, c.clear};
+            case EVMC_STORAGE_MODIFIED:          return {c.reset, 0};
+            case EVMC_STORAGE_ASSIGNED:          return {c.reset, 0};        // = MODIFIED
+            case EVMC_STORAGE_DELETED_ADDED:     return {c.set,   0};        // = ADDED
+            case EVMC_STORAGE_MODIFIED_DELETED:  return {c.reset, c.clear};  // = DELETED
+            case EVMC_STORAGE_DELETED_RESTORED:  return {c.set,   0};        // = ADDED
+            case EVMC_STORAGE_ADDED_DELETED:     return {c.reset, c.clear};  // = DELETED
+            case EVMC_STORAGE_MODIFIED_RESTORED: return {c.reset, 0};        // = MODIFIED
+        }
+    } else {  // net metering (EIP-2200/2929/3529)
+        switch (st) {
+            case EVMC_STORAGE_ASSIGNED:          return {W, 0};
+            case EVMC_STORAGE_ADDED:             return {c.set,   0};
+            case EVMC_STORAGE_DELETED:           return {c.reset, c.clear};
+            case EVMC_STORAGE_MODIFIED:          return {c.reset, 0};
+            case EVMC_STORAGE_DELETED_ADDED:     return {W, -c.clear};
+            case EVMC_STORAGE_MODIFIED_DELETED:  return {W, c.clear};
+            case EVMC_STORAGE_DELETED_RESTORED:  return {W, c.reset - W - c.clear};
+            case EVMC_STORAGE_ADDED_DELETED:     return {W, c.set - W};
+            case EVMC_STORAGE_MODIFIED_RESTORED: return {W, c.reset - W};
+        }
+    }
+    return {W, 0};
+}
 
 // The 32 big-endian bytes of stack slot `i` (its LE integer value byteswapped to
 // the on-wire evmc_bytes32 form the host expects for keys/values).
@@ -91,7 +122,7 @@ bool op_sstore(EvmState& s, Regs& R) {
     }
     const evmc_storage_status st =
         s.host->set_storage(s.context, &s.evmcMsg->recipient, &key, &value);
-    const SStoreCost sc = SSTORE_COST[st];
+    const SStoreCost sc = sstore_cost(s.rev, st);
     const int64_t cost = sc.cost + cold;
     if (R.gas < cost) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= cost;
