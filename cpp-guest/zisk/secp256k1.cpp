@@ -526,36 +526,34 @@ bool glv_double_scalar_mul_with_g(const u64 u1[4], const u64 u2[4],
         Tinf[m] = inf;
     }
 
-    // Strauss-Shamir over ~128 bits with bit-by-bit reconstruction of each half.
+    // Bound the half-scalars against the hinted MSB (limb,bit). The Strauss loop
+    // below reads the (already verified) decomposed a1,a2,b1,b2 directly, so the
+    // only thing the hint must guarantee is that none of them has a set bit above
+    // (limb,bit) — else a high bit would go unprocessed. That is exactly captured
+    // by the bitwise-OR having its unique top set bit at (limb,bit), an O(1) check
+    // that replaces zisklib's per-bit reconstruction of all four half-scalars
+    // (which was the dominant MAIN-step cost of the loop).
     u64 limb, bit; msb_pos256_4(a1, a2, b1, b2, &limb, &bit);
     if (limb >= 4 || bit >= 64) zeg_zisk_halt();
-    if ((((a1[limb] | a2[limb] | b1[limb] | b2[limb]) >> bit) & 1) != 1) zeg_zisk_halt();
+    const u64 orv[4] = {a1[0]|a2[0]|b1[0]|b2[0], a1[1]|a2[1]|b1[1]|b2[1],
+                        a1[2]|a2[2]|b1[2]|b2[2], a1[3]|a2[3]|b1[3]|b2[3]};
+    for (int i = (int)limb + 1; i < 4; ++i) if (orv[i]) zeg_zisk_halt();  // nothing above top limb
+    if ((orv[limb] >> bit) != 1) zeg_zisk_halt();                        // (limb,bit) is the exact MSB
 
     u64 res[8]; bool res_inf = true;
-    u64 a1r[4]={0,0,0,0}, a2r[4]={0,0,0,0}, b1r[4]={0,0,0,0}, b2r[4]={0,0,0,0};
     int start = (int)bit;
     for (int i = (int)limb; i >= 0; --i) {
         const u64 wa1=a1[i], wa2=a2[i], wb1=b1[i], wb2=b2[i];
-        u64 ra1=0, ra2=0, rb1=0, rb2=0;
         for (int j = start; j >= 0; --j) {
             if (!res_inf) ec_dbl(res);
             const u64 m = ((wa1>>j)&1) | (((wa2>>j)&1)<<1) | (((wb1>>j)&1)<<2) | (((wb2>>j)&1)<<3);
-            if (m) {
-                if (!Tinf[m]) {
-                    if (res_inf) { cp8(res, T[m]); res_inf = false; }
-                    else           res_inf = add_ni(res, T[m]);
-                }
-                const u64 oj = 1ULL << j;
-                if (m & 1) ra1 |= oj;
-                if (m & 2) ra2 |= oj;
-                if (m & 4) rb1 |= oj;
-                if (m & 8) rb2 |= oj;
+            if (m && !Tinf[m]) {
+                if (res_inf) { cp8(res, T[m]); res_inf = false; }
+                else           res_inf = add_ni(res, T[m]);
             }
         }
-        a1r[i]=ra1; a2r[i]=ra2; b1r[i]=rb1; b2r[i]=rb2;
         start = 63;
     }
-    if (!eq4(a1r,a1) || !eq4(a2r,a2) || !eq4(b1r,b1) || !eq4(b2r,b2)) zeg_zisk_halt();
     if (res_inf) return false;
     cp8(out, res);
     return true;
