@@ -61,38 +61,40 @@ pub fn check(
                 state_walk_skipped += 1;
                 continue;
             }
-            Err(e) => return Err(e).with_context(|| format!(
-                "verify: walking parent state trie for addr {addr} (hash 0x{})",
-                hex::encode(addr_hash)
-            )),
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!(
+                        "verify: walking parent state trie for addr {addr} (hash 0x{})",
+                        hex::encode(addr_hash)
+                    )
+                })
+            }
         };
 
         // Our written values (matches sections::write_accounts).
-        let created_this_block =
-            !diff.pre.contains_key(addr) && diff.post.contains_key(addr);
-        let (our_balance, our_nonce, our_code_hash): (U256, u64, [u8; 32]) =
-            if created_this_block {
-                (U256::ZERO, 0u64, EMPTY_CODE_HASH)
-            } else {
-                let ps_main = prestate.get(addr);
-                let ps_fallback = diff.pre.get(addr);
-                let bal = ps_main
-                    .and_then(|p| p.balance)
-                    .or_else(|| ps_fallback.and_then(|p| p.balance))
-                    .unwrap_or(U256::ZERO);
-                let nonce = ps_main
-                    .and_then(|p| p.nonce)
-                    .or_else(|| ps_fallback.and_then(|p| p.nonce))
-                    .unwrap_or(0);
-                let code = ps_main
-                    .and_then(|p| p.code.as_ref())
-                    .or_else(|| ps_fallback.and_then(|p| p.code.as_ref()));
-                let chash: [u8; 32] = match code {
-                    Some(c) if !c.is_empty() => keccak256(c),
-                    _ => EMPTY_CODE_HASH,
-                };
-                (bal, nonce, chash)
+        let created_this_block = !diff.pre.contains_key(addr) && diff.post.contains_key(addr);
+        let (our_balance, our_nonce, our_code_hash): (U256, u64, [u8; 32]) = if created_this_block {
+            (U256::ZERO, 0u64, EMPTY_CODE_HASH)
+        } else {
+            let ps_main = prestate.get(addr);
+            let ps_fallback = diff.pre.get(addr);
+            let bal = ps_main
+                .and_then(|p| p.balance)
+                .or_else(|| ps_fallback.and_then(|p| p.balance))
+                .unwrap_or(U256::ZERO);
+            let nonce = ps_main
+                .and_then(|p| p.nonce)
+                .or_else(|| ps_fallback.and_then(|p| p.nonce))
+                .unwrap_or(0);
+            let code = ps_main
+                .and_then(|p| p.code.as_ref())
+                .or_else(|| ps_fallback.and_then(|p| p.code.as_ref()));
+            let chash: [u8; 32] = match code {
+                Some(c) if !c.is_empty() => keccak256(c),
+                _ => EMPTY_CODE_HASH,
             };
+            (bal, nonce, chash)
+        };
 
         let chain_account = match chain_leaf {
             Some(v) => v,
@@ -100,9 +102,8 @@ pub fn check(
                 // Account doesn't exist in the parent state trie. For
                 // the old-pass to match, our values must yield an empty
                 // account (`is_empty_account` returns true).
-                let empty = our_nonce == 0
-                    && our_balance == U256::ZERO
-                    && our_code_hash == EMPTY_CODE_HASH;
+                let empty =
+                    our_nonce == 0 && our_balance == U256::ZERO && our_code_hash == EMPTY_CODE_HASH;
                 if !empty {
                     warn!(
                         idx = i,
@@ -297,7 +298,7 @@ fn follow_child(
     depth: usize,
 ) -> Result<Option<Vec<u8>>> {
     match child {
-        Rlp::Bytes(b) if b.is_empty() => Ok(None),
+        Rlp::Bytes([]) => Ok(None),
         Rlp::Bytes(b) if b.len() == 32 => {
             let h = <[u8; 32]>::try_from(*b).unwrap();
             let raw = nodes
@@ -317,7 +318,7 @@ fn follow_child(
 
 fn nibble(hash: &[u8; 32], i: usize) -> u8 {
     let b = hash[i / 2];
-    if i % 2 == 0 {
+    if i.is_multiple_of(2) {
         b >> 4
     } else {
         b & 0x0f
@@ -421,17 +422,13 @@ fn be_bytes(mut n: u64) -> Vec<u8> {
 // ===== constants ============================================================
 
 const EMPTY_CODE_HASH: [u8; 32] = [
-    0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c,
-    0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03, 0xc0,
-    0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b,
-    0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85, 0xa4, 0x70,
+    0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03, 0xc0,
+    0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85, 0xa4, 0x70,
 ];
 
 const EMPTY_TRIE_ROOT: [u8; 32] = [
-    0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6,
-    0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0, 0xf8, 0x6e,
-    0x5b, 0x48, 0xe0, 0x1b, 0x99, 0x6c, 0xad, 0xc0,
-    0x01, 0x62, 0x2f, 0xb5, 0xe3, 0x63, 0xb4, 0x21,
+    0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6, 0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0, 0xf8, 0x6e,
+    0x5b, 0x48, 0xe0, 0x1b, 0x99, 0x6c, 0xad, 0xc0, 0x01, 0x62, 0x2f, 0xb5, 0xe3, 0x63, 0xb4, 0x21,
 ];
 
 // Suppress unused warnings.
