@@ -252,48 +252,6 @@ pub async fn enrich_state_leaves_from_witness(
     Ok(added)
 }
 
-/// Inject every address that appears in the prestate diff but isn't
-/// already in `prestate` — these are accounts CREATEd this block (no
-/// leaf in the parent trie). Empty entries; values get filled by the
-/// EVM execution and end up in the post-state via `write_accounts`'s
-/// is_read_only=false flagging.
-pub fn inject_diff_addresses(prestate: &mut Prestate, diff: &crate::rpc::PrestateDiff) {
-    let mut added = 0usize;
-    for side in [&diff.pre, &diff.post] {
-        for (addr, info) in side {
-            let entry = prestate.entry(*addr).or_insert_with(|| {
-                added += 1;
-                AccountPrestate::default()
-            });
-            if entry.balance.is_none() {
-                entry.balance = info.balance;
-            }
-            if entry.nonce.is_none() {
-                entry.nonce = info.nonce;
-            }
-            if entry.code.is_none() && info.code.is_some() {
-                entry.code = info.code.clone();
-            }
-            // Storage slots from diff.pre carry the block-start values
-            // for slots that aren't visible in the witness storage
-            // trie (e.g. slots only touched in reverted frames; or
-            // chain.diff.pre entries that have value=0 implicitly).
-            for (slot, val) in &info.storage {
-                prestate
-                    .get_mut(addr)
-                    .unwrap()
-                    .storage
-                    .entry(*slot)
-                    .or_insert(*val);
-            }
-        }
-    }
-    info!(
-        added_accounts = added,
-        "injected diff addresses into prestate"
-    );
-}
-
 /// Inject every address that appears as a tx sender or `to` field —
 /// these are guaranteed to be EVM-accessed (sender pays gas; `to` is
 /// the callee). Empty entries if not already present.

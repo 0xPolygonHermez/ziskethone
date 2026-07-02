@@ -53,11 +53,15 @@ pub(crate) async fn fetch_offline_sources_online(
         "fetched execution witness",
     );
 
+    // Fetch `eth_config` once; both the Osaka check and the blob-schedule
+    // lookup below derive from it.
+    let eth_config = client.eth_config().await;
+
     // Resolve whether this block runs under Osaka. Osaka shares Prague's
     // header layout, so the only signal is the node's fork schedule
     // (eth_config) vs. the block timestamp. Best-effort: a node without
     // eth_config yields `None` → treated as pre-Osaka (Prague).
-    let osaka_at = client.osaka_activation_time().await?;
+    let osaka_at = rpc::Client::osaka_activation_time(eth_config.as_ref());
     let is_osaka = matches!(osaka_at, Some(t) if current.header.timestamp >= t);
     if is_osaka {
         info!(
@@ -71,10 +75,11 @@ pub(crate) async fn fetch_offline_sources_online(
     // schedule (eth_config). 0 ⇒ unresolved/pre-Cancun → the guest applies its
     // current-mainnet default. Threaded into ConsensusInfo so blob base fees
     // match the active schedule (mainnet BPO forks; EEST base-Osaka differs).
-    let blob_base_fee_update_fraction = client
-        .blob_base_fee_update_fraction_at(current.header.timestamp)
-        .await?
-        .unwrap_or(0);
+    let blob_base_fee_update_fraction = rpc::Client::blob_base_fee_update_fraction_at(
+        eth_config.as_ref(),
+        current.header.timestamp,
+    )
+    .unwrap_or(0);
     info!(
         blob_base_fee_update_fraction,
         "resolved blob base-fee update fraction"
@@ -93,26 +98,9 @@ pub(crate) async fn fetch_offline_sources_online(
     let parent = client.block_by_hash(parent_hash).await?;
     info!(parent_state_root = %parent.header.state_root, "fetched parent header");
 
-    // ---- (3) Ancestor chain walked by parent-hash. This is
-    //         intrinsically reorg-immune: each fetched header's hash
-    //         must match the previous one's parent_hash by construction.
-    let mut ancestors = vec![parent.clone()];
-    let zero_hash = B256::ZERO;
-    while (ancestors.len() as u64) < ancestors_depth {
-        let prev = ancestors.last().unwrap();
-        if prev.header.number == 0 {
-            // Reached genesis; no further ancestors exist.
-            break;
-        }
-        let next_hash = prev.header.parent_hash;
-        if next_hash == zero_hash {
-            // Defensive: should never happen for non-genesis headers,
-            // but a malformed node response shouldn't loop forever.
-            break;
-        }
-        let next = client.block_by_hash(next_hash).await?;
-        ancestors.push(next);
-    }
+    // ---- (3) Ancestor chain: `ancestors[0]` is the parent, `ancestors[i]`
+    //         is block parent.number - i. Fetched concurrently by number.
+    let ancestors = fetch_ancestor_chain(client, &parent, ancestors_depth).await?;
     info!(count = ancestors.len(), "fetched ancestor chain");
 
     // ---- (4) Phase 3: fetch all data sources in parallel, all
@@ -198,6 +186,68 @@ pub(crate) async fn fetch_offline_sources_online(
         is_osaka,
         blob_base_fee_update_fraction,
     })
+}
+
+/// Max ancestor requests in flight at once — caps load on the node.
+const ANCESTOR_FETCH_CONCURRENCY: usize = 32;
+
+/// Fetch `[parent, grandparent, …]` (index `i` = block `parent.number - i`),
+/// fetching the ancestors concurrently by number.
+///
+/// Reorg-safety: fetching by number could resolve to an off-canonical
+/// block if the node reorgs mid-run, so we then assert the parent-hash
+/// linkage in memory — `child.parent_hash == ancestor.hash` at every
+/// step. A mismatch is a reorg, surfaced as `ReorgDetected` for retry.
+async fn fetch_ancestor_chain(
+    client: &rpc::Client,
+    parent: &alloy::rpc::types::Block,
+    ancestors_depth: u64,
+) -> Result<Vec<alloy::rpc::types::Block>> {
+    use crate::errors::ReorgDetected;
+    use futures::stream::{self, StreamExt, TryStreamExt};
+
+    // Ancestor numbers, from parent-1 down, clamped at genesis (block 0).
+    let parent_number = parent.header.number;
+    let want = ancestors_depth.saturating_sub(1).min(parent_number);
+    if want == 0 {
+        return Ok(vec![parent.clone()]);
+    }
+    let numbers: Vec<u64> = (1..=want).map(|i| parent_number - i).collect();
+
+    // `buffered` preserves input order, so `fetched[j]` is `numbers[j]`.
+    let fetched: Vec<alloy::rpc::types::Block> = stream::iter(numbers.iter().copied())
+        .map(|n| async move {
+            client.block_by_number(n).await?.ok_or_else(|| {
+                // Empty for a number that should exist ⇒ pruned/reorged out.
+                anyhow::Error::new(ReorgDetected {
+                    block: n,
+                    expected: B256::ZERO,
+                    actual: None,
+                    phase: "ancestor eth_getBlockByNumber (Ok(None))",
+                })
+            })
+        })
+        .buffered(ANCESTOR_FETCH_CONCURRENCY)
+        .try_collect()
+        .await?;
+
+    // Verify each block links to the next (see reorg-safety note above).
+    let mut ancestors = Vec::with_capacity(fetched.len() + 1);
+    ancestors.push(parent.clone());
+    for next in fetched {
+        let prev = ancestors.last().unwrap();
+        if prev.header.parent_hash != next.header.hash {
+            return Err(ReorgDetected {
+                block: next.header.number,
+                expected: prev.header.parent_hash,
+                actual: Some(next.header.hash),
+                phase: "ancestor chain linkage",
+            }
+            .into());
+        }
+        ancestors.push(next);
+    }
+    Ok(ancestors)
 }
 
 /// Splice in account leaves that reth's `debug_executionWitness` omitted.
@@ -320,13 +370,39 @@ async fn inject_withdrawal_recipients(
         }
     }
 
-    for addr in uniq {
+    // Fetch each recipient's missing balance/nonce concurrently, then apply.
+    let needs: Vec<(Address, bool, bool)> = uniq
+        .into_iter()
+        .map(|addr| {
+            let e = prestate.entry(addr).or_default();
+            (addr, e.balance.is_none(), e.nonce.is_none())
+        })
+        .collect();
+
+    let fetched = futures::future::try_join_all(needs.iter().map(
+        |&(addr, need_bal, need_nonce)| async move {
+            let balance = if need_bal {
+                Some(client.balance_at_hash(addr, parent_hash).await?)
+            } else {
+                None
+            };
+            let nonce = if need_nonce {
+                Some(client.nonce_at_hash(addr, parent_hash).await?)
+            } else {
+                None
+            };
+            anyhow::Ok((addr, balance, nonce))
+        },
+    ))
+    .await?;
+
+    for (addr, balance, nonce) in fetched {
         let entry = prestate.entry(addr).or_default();
-        if entry.balance.is_none() {
-            entry.balance = Some(client.balance_at_hash(addr, parent_hash).await?);
+        if let Some(b) = balance {
+            entry.balance = Some(b);
         }
-        if entry.nonce.is_none() {
-            entry.nonce = Some(client.nonce_at_hash(addr, parent_hash).await?);
+        if let Some(n) = nonce {
+            entry.nonce = Some(n);
         }
     }
     Ok(())
@@ -347,23 +423,69 @@ async fn inject_system_contracts(
     let mut writable: std::collections::BTreeSet<(Address, alloy::primitives::B256)> =
         Default::default();
 
+    // Plan each contract's needed fields + writable slots (no RPC), then
+    // fetch code/balance/nonce/storage for all four contracts concurrently.
+    struct Plan {
+        addr: Address,
+        need_code: bool,
+        need_balance: bool,
+        need_nonce: bool,
+        slots: Vec<alloy::primitives::B256>,
+    }
+    let mut plans = Vec::with_capacity(SYSTEM_CONTRACTS.len());
     for sc in SYSTEM_CONTRACTS {
         let addr: Address = sc.addr.parse().context("bad SYSTEM_CONTRACTS addr")?;
         let entry = prestate.entry(addr).or_default();
+        let slots = (sc.slots)(number, timestamp);
+        for slot in &slots {
+            writable.insert((addr, *slot));
+        }
+        plans.push(Plan {
+            addr,
+            need_code: entry.code.is_none(),
+            need_balance: entry.balance.is_none(),
+            need_nonce: entry.nonce.is_none(),
+            slots,
+        });
+    }
 
-        if entry.code.is_none() {
-            entry.code = Some(client.code_at_hash(addr, block_hash).await?);
-        }
-        if entry.balance.is_none() {
-            entry.balance = Some(client.balance_at_hash(addr, parent_hash).await?);
-        }
-        if entry.nonce.is_none() {
-            entry.nonce = Some(client.nonce_at_hash(addr, parent_hash).await?);
-        }
+    let fetched = futures::future::try_join_all(plans.iter().map(|p| async move {
+        let code = if p.need_code {
+            Some(client.code_at_hash(p.addr, block_hash).await?)
+        } else {
+            None
+        };
+        let balance = if p.need_balance {
+            Some(client.balance_at_hash(p.addr, parent_hash).await?)
+        } else {
+            None
+        };
+        let nonce = if p.need_nonce {
+            Some(client.nonce_at_hash(p.addr, parent_hash).await?)
+        } else {
+            None
+        };
+        let storage = futures::future::try_join_all(p.slots.iter().map(|&slot| async move {
+            let v = client.storage_at_hash(p.addr, slot, parent_hash).await?;
+            anyhow::Ok((slot, v))
+        }))
+        .await?;
+        anyhow::Ok((p.addr, code, balance, nonce, storage))
+    }))
+    .await?;
 
-        for slot in (sc.slots)(number, timestamp) {
-            writable.insert((addr, slot));
-            let v = client.storage_at_hash(addr, slot, parent_hash).await?;
+    for (addr, code, balance, nonce, storage) in fetched {
+        let entry = prestate.entry(addr).or_default();
+        if let Some(c) = code {
+            entry.code = Some(c);
+        }
+        if let Some(b) = balance {
+            entry.balance = Some(b);
+        }
+        if let Some(n) = nonce {
+            entry.nonce = Some(n);
+        }
+        for (slot, v) in storage {
             entry.storage.insert(slot, v);
         }
     }
