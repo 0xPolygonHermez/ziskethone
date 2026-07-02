@@ -83,13 +83,10 @@ inline Fp2 fp2_sqr(const Fp2& a) { return fp2_mul(a, a); }
 inline Fp2 fp2_conjugate(const Fp2& a) { return { a.c0, fp_neg(a.c1) }; }
 inline Fp2 fp2_frobenius(const Fp2& a) { return fp2_conjugate(a); }  // x^p in Fp2
 inline Fp2 fp2_scalar_mul(const Fp2& a, const Fp& s) { return { fp_mul(a.c0, s), fp_mul(a.c1, s) }; }
-// multiply by the Fp6 non-residue ξ = 9 + u: (9 a0 - a1) + (a0 + 9 a1) u
+// multiply by the Fp6 non-residue ξ = 9 + u
 inline Fp2 fp2_mul_by_nonresidue(const Fp2& a) {
-    Fp a0_9 = fp_add(fp_add(fp_add(a.c0, a.c0), fp_add(a.c0, a.c0)), fp_add(fp_add(a.c0, a.c0), fp_add(a.c0, a.c0)));  // 8·a0
-    a0_9 = fp_add(a0_9, a.c0);  // 9·a0
-    Fp a1_9 = fp_add(fp_add(fp_add(a.c1, a.c1), fp_add(a.c1, a.c1)), fp_add(fp_add(a.c1, a.c1), fp_add(a.c1, a.c1)));  // 8·a1
-    a1_9 = fp_add(a1_9, a.c1);  // 9·a1
-    return { fp_sub(a0_9, a.c1), fp_add(a.c0, a1_9) };
+    static constexpr Fp2 XI = {{{9, 0, 0, 0}}, {{1, 0, 0, 0}}};
+    return fp2_mul(a, XI);
 }
 
 // 1/a (0↦0). Hint then verify a·inv == 1.
