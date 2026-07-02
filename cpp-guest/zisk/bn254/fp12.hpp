@@ -41,6 +41,38 @@ inline Fp12 fp12_sqr(const Fp12& a) {
     return { c0, c1 };
 }
 
+// Granger–Scott squaring in the cyclotomic subgroup; valid only for elements
+// from the easy part of the final exp. Result == fp12_sqr, fewer Fp2 ops.
+inline Fp12 fp12_cyclotomic_sqr(const Fp12& a) {
+    const Fp2& g0 = a.c0.c0; const Fp2& g1 = a.c0.c1; const Fp2& g2 = a.c0.c2;
+    const Fp2& g3 = a.c1.c0; const Fp2& g4 = a.c1.c1; const Fp2& g5 = a.c1.c2;
+
+    // Fp4 sqr in Fp2[w]/(w²-ξ): o0 = c0² + ξ·c1², o1 = (c0+c1)² - c0² - c1²
+    auto fp4_sqr = [](const Fp2& c0, const Fp2& c1, Fp2& o0, Fp2& o1) {
+        Fp2 s0 = fp2_sqr(c0);
+        Fp2 s1 = fp2_sqr(c1);
+        o1 = fp2_sub(fp2_sub(fp2_sqr(fp2_add(c0, c1)), s0), s1);
+        o0 = fp2_add(s0, fp2_mul_by_nonresidue(s1));
+    };
+    Fp2 T0, T1, T2, T3, T4, T5;
+    fp4_sqr(g0, g4, T0, T1);
+    fp4_sqr(g3, g2, T2, T3);
+    fp4_sqr(g1, g5, T4, T5);
+
+    // h = 3·T ± 2·g (pairing/signs pinned by test_pairing.cpp)
+    auto h = [](const Fp2& T, const Fp2& g, bool minus) {
+        Fp2 t3 = fp2_add(fp2_dbl(T), T);
+        return minus ? fp2_sub(t3, fp2_dbl(g)) : fp2_add(t3, fp2_dbl(g));
+    };
+    Fp2 h0 = h(T0, g0, true);
+    Fp2 h1 = h(T2, g1, true);
+    Fp2 h2 = h(T4, g2, true);
+    Fp2 h3 = h(fp2_mul_by_nonresidue(T5), g3, false);
+    Fp2 h4 = h(T1, g4, false);
+    Fp2 h5 = h(T3, g5, false);
+    return { Fp6{ h0, h1, h2 }, Fp6{ h3, h4, h5 } };
+}
+
 inline Fp12 fp12_inv(const Fp12& a) {
     Fp6 t = fp6_inv(fp6_sub(fp6_sqr(a.c0), fp6_mul_by_v(fp6_sqr(a.c1))));
     return { fp6_mul(a.c0, t), fp6_neg(fp6_mul(a.c1, t)) };

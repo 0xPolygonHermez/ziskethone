@@ -130,8 +130,9 @@ inline Fp12 exp_by_x(const Fp12& a) {
         1,0,0,0,1,0,0,1,1,1,0,1,0,0,1,1,0,0,1,0,0,1,0,1,0,1,1,0,1,0,
         0,0,1,0,0,1,0,1,0,0,1,1,0,1,0,0,1,0,0,0,0,1,0,0,1,1,1,1,1,0,
         0,0,1 };
+    // input is cyclotomic (only called from final_exp), so squaring is cheap
     Fp12 r = a;
-    for (int i = 1; i < 63; ++i) { r = fp12_sqr(r); if (X[i]) r = fp12_mul(r, a); }
+    for (int i = 1; i < 63; ++i) { r = fp12_cyclotomic_sqr(r); if (X[i]) r = fp12_mul(r, a); }
     return r;
 }
 
@@ -150,14 +151,15 @@ inline Fp12 final_exp(const Fp12& f) {
     Fp12 y5 = fp12_conjugate(fp12_mul(mx, mxxp));
     Fp12 y6 = fp12_conjugate(mxx);
     Fp12 y7 = fp12_conjugate(fp12_mul(mxxx, mxxxp));
-    Fp12 t11 = fp12_mul(fp12_mul(fp12_sqr(y7), y5), y6);
+    // all operands stay cyclotomic, so squarings use the cheap form
+    Fp12 t11 = fp12_mul(fp12_mul(fp12_cyclotomic_sqr(y7), y5), y6);
     Fp12 t21 = fp12_mul(fp12_mul(t11, y4), y6);
     Fp12 t12 = fp12_mul(t11, mxxpp);                            // y3 = (m^x²)^p²
-    Fp12 t22 = fp12_mul(fp12_sqr(t21), t12);
-    Fp12 t23 = fp12_sqr(t22);
+    Fp12 t22 = fp12_mul(fp12_cyclotomic_sqr(t21), t12);
+    Fp12 t23 = fp12_cyclotomic_sqr(t22);
     Fp12 t24 = fp12_mul(t23, y1);
     Fp12 t13 = fp12_mul(t23, y2);
-    Fp12 t14 = fp12_mul(fp12_sqr(t13), t24);
+    Fp12 t14 = fp12_mul(fp12_cyclotomic_sqr(t13), t24);
     return t14;
 }
 
