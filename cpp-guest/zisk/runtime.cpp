@@ -35,8 +35,8 @@
 extern "C" {
 
 // Linker-script symbols bounding the heap region (see zisk.ld).
-extern char _kernel_heap_bottom;
-extern char _kernel_heap_top;
+extern char _heap_bottom;
+extern char _heap_top;
 
 // Abnormal termination (abort / fatal / unreachable stubs). Unlike a clean
 // program exit (handled in _start.s via `ecall a7=93`), an abort must FAIL the
@@ -72,10 +72,10 @@ static char *g_next = nullptr;
 void *memcpy(void *dst, const void *src, size_t n);
 
 static inline char *heap_alloc(size_t size) {
-    if (!g_next) g_next = &_kernel_heap_bottom;
+    if (!g_next) g_next = &_heap_bottom;
     size = (size + 15) & ~size_t(15);            // 16-byte align (max_align_t)
     char *p = g_next;
-    if (p + size > &_kernel_heap_top) halt();    // OOM -> stop loudly
+    if (p + size > &_heap_top) halt();    // OOM -> stop loudly
     g_next += size;
     return p;
 }
@@ -96,7 +96,7 @@ void *realloc(void *ptr, size_t size) {
 }
 
 void *aligned_alloc(size_t alignment, size_t size) {
-    if (!g_next) g_next = &_kernel_heap_bottom;
+    if (!g_next) g_next = &_heap_bottom;
     uintptr_t cur = reinterpret_cast<uintptr_t>(g_next);
     uintptr_t aligned = (cur + (alignment - 1)) & ~(uintptr_t)(alignment - 1);
     g_next = reinterpret_cast<char *>(aligned);
