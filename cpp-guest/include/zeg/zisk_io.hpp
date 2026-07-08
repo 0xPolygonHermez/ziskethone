@@ -4,8 +4,12 @@
 // the ziskemu emulator and ZisK hardware expose (see ../../hello-zisk-c/src/zisk.h):
 //
 //   INPUT  at 0x40000000 : [0..8) reserved, [8..16) u64 LE length, [16..) payload
-//   OUTPUT at 0xA0010000 : array of u32 public-output slots
-//   UART   at 0xA0000200 : write a byte to print it (debug)
+//   OUTPUT at 0xA0410000 : array of u32 public-output slots (= SYS_ADDR + SYS_SIZE)
+//   UART   at 0xA0400200 : write a byte to print it (debug)  (= SYS_ADDR + 0x200)
+//
+// OUTPUT/UART track the ZisK memory map in `zisk core/src/mem.rs`
+// (RAM_ADDR=0xa0000000, SYS_ADDR=RAM_ADDR+STACK_SIZE(4MB)=0xa0400000,
+//  OUTPUT_ADDR=SYS_ADDR+SYS_SIZE(0x10000)=0xa0410000, UART_ADDR=SYS_ADDR+0x200).
 //
 // The host (rust-input-gen) writes the block container starting with the
 // `ZEG0` magic; to feed it to ziskemu it is framed as [u64 LE len][payload],
@@ -38,7 +42,7 @@ inline Input read_input() {
 
 // Write a u32 public-output slot (proof-visible).
 inline void set_output_u32(unsigned slot, uint32_t value) {
-    reinterpret_cast<volatile uint32_t *>(0xA0010000ULL)[slot] = value;
+    reinterpret_cast<volatile uint32_t *>(0xA0410000ULL)[slot] = value;
 }
 
 // Emit a 32-byte value (e.g. the block hash) as 8 u32 slots. Each word is
@@ -58,7 +62,7 @@ inline void set_output_bytes32(const uint8_t bytes[32]) {
 
 // UART debug: write one byte to the console.
 inline void uart_putc(char c) {
-    *reinterpret_cast<volatile unsigned char *>(0xA0000200) =
+    *reinterpret_cast<volatile unsigned char *>(0xA0400200) =
         static_cast<unsigned char>(c);
 }
 
