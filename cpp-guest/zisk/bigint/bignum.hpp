@@ -89,14 +89,13 @@ inline void rem_short(const uint64_t* a, int len_a, const uint64_t* b, uint64_t 
     verify_division_short(a, len_a, b, quo, lq_u64/4, rem);
 }
 
-// ---- combined multiply/square + reduce (modulus = 1 word) ------------------
-inline void mul_and_reduce_short(const uint64_t a[4], const uint64_t b[4], const uint64_t m[4], uint64_t r[4]) {
-    uint64_t out[8]; int len = mul_short_one_limb(a, b, out);
-    rem_short(out, len, m, r);
-}
-inline void square_and_reduce_short(const uint64_t a[4], const uint64_t m[4], uint64_t r[4]) {
-    uint64_t out[8]; int len = square_short(a, out);
-    rem_short(out, len, m, r);
+// ---- combined multiply + reduce (modulus = 1 word) -------------------------
+// r = (a * b) mod m for single-word operands, via the arith256_mod precompile
+// (d = a*b + c mod m, c = 0). Inputs need not be canonical; the result is always
+// reduced. Cheaper than the multiply + hint-verified division it replaced.
+inline void mulmod_short(const uint64_t a[4], const uint64_t b[4], const uint64_t m[4], uint64_t r[4]) {
+    uint64_t zero[4] = {0,0,0,0};
+    arith256_mod(a, b, zero, m, r);
 }
 
 // ===========================================================================

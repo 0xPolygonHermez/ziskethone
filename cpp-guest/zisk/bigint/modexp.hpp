@@ -59,9 +59,9 @@ inline void modexp_short(const uint64_t* base, int lb, const uint64_t* exp, int 
     uint64_t cur[4]; cp4(cur, base_mod);
     for (int bi = 1; bi < nb; ++bi) {
         if (is_zero4(cur)) { out[0]=out[1]=out[2]=out[3]=0; return; }
-        uint64_t t[4]; square_and_reduce_short(cur, m, t); cp4(cur, t);
+        uint64_t t[4]; mulmod_short(cur, cur, m, t); cp4(cur, t);   // cur = cur^2 mod m
         if (bits[bi] == 1) {
-            uint64_t u[4]; mul_and_reduce_short(cur, base_mod, m, u); cp4(cur, u);
+            uint64_t u[4]; mulmod_short(cur, base_mod, m, u); cp4(cur, u);   // cur *= base_mod mod m
             int pos = nb - 1 - bi; rec[pos >> 6] |= 1ULL << (pos & 63);
         }
     }
