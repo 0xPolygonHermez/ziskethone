@@ -10,10 +10,18 @@
 //
 // Each block is a fixed-size field-by-field record in the input stream;
 // the constructor parses them, recomputes each block's hash from
-// canonical Pectra-era RLP, and verifies that every
-// block[i].parent_hash equals hash(block[i+1]). The link from
-// hash(block[0]) to the current block's parent_hash is checked outside
-// this class (in main.cpp, against `ConsensusInfo::parent_hash()`).
+// canonical Pectra-era RLP, and verifies parent-linkage only between
+// records that are consecutive by block number. The set may be SPARSE:
+// the witness ships exactly the ancestors the block referenced for
+// BLOCKHASH (e.g. {parent, N-100}), so gaps are legitimate and are not
+// treated as an error — only records that ARE adjacent (number differs
+// by 1) must link by parent_hash. The link from hash(block[0]) to the
+// current block's parent_hash is checked outside this class (in run.cpp,
+// against `ConsensusInfo::parent_hash()`).
+//
+// Index 0 is ALWAYS the parent (the previous block). Deeper entries are
+// ordered descending by number but need not be contiguous. Lookup by block
+// number (for BLOCKHASH) goes through `hash_of_number`.
 //
 // The collection may legitimately be empty — e.g. a stateless run that
 // has no need to reach any ancestor block. Callers must handle the
@@ -115,17 +123,24 @@ public:
     };
 
     // Parse `u64 count` followed by `count` × 728-byte records, compute
-    // each header's keccak hash, and verify the full parent-hash chain.
-    // Aborts via zeg::fatal on chain mismatch.
+    // each header's keccak hash, verify parent-linkage between records
+    // that are consecutive by number (gaps allowed — sparse sets are
+    // valid), and build the number→index map. Aborts via zeg::fatal on a
+    // linkage mismatch between adjacent records.
     explicit PreviousBlocks(const uint8_t*& cursor);
 
     size_t size () const noexcept { return views_.size(); }
     bool   empty() const noexcept { return views_.empty(); }
 
     // Block 0 = parent (previous block); block i = i-th ancestor of the
-    // current block.
+    // current block (descending by number, possibly sparse).
     const View&          at  (size_t idx) const { return views_[idx]; }
     const evmc::bytes32& hash(size_t idx) const { return hashes_[idx]; }
+
+    // Look up a record by its block number and return its recomputed hash,
+    // or nullptr if absent. Used by BLOCKHASH so a sparse ancestor set
+    // resolves the right hash for each depth the block referenced.
+    const evmc::bytes32* hash_of_number(uint64_t number) const noexcept;
 
 private:
     std::vector<View>          views_;

@@ -63,7 +63,8 @@ enum ChildRef {
 struct Encoder<'a> {
     nodes: &'a HashMap<[u8; 32], Vec<u8>>,
     /// keccak(preimage) → preimage (addresses for the state trie, slots for
-    /// storage tries). Only accessed keys have a preimage.
+    /// storage tries). Only accessed keys have a preimage; keyless siblings
+    /// stay `Op::PhantomLeaf`.
     preimages: &'a HashMap<[u8; 32], Vec<u8>>,
     out: Vec<u8>,
     n_accounts: u64,
@@ -120,8 +121,11 @@ fn put_op(out: &mut Vec<u8>, op: Op) {
     put_u64(out, op as u64);
 }
 
-/// State `Op::Leaf` payload: address(20) pad(4) balance(u256be,32)
-/// nonce(u64,LE) code_hash(32) = 96 bytes.
+/// State `Op::Leaf` payload (after the suffix-nibble prefix): the PLAINTEXT
+/// key first — address(20) pad(4) — so the guest keys its runtime table by
+/// plaintext (fast hot path), then the value fields balance(u256be,32)
+/// nonce(u64,LE) code_hash(32). The suffix nibbles carry the trie key hash;
+/// the guest binds the two via keccak(address) == pack(walked ++ suffix).
 fn put_state_leaf_payload(
     out: &mut Vec<u8>,
     addr: &Address,
@@ -136,12 +140,14 @@ fn put_state_leaf_payload(
     out.extend_from_slice(code_hash.as_slice()); // 32
 }
 
-/// Storage `Op::Leaf` payload: position(32) value(32) = 64 bytes.
+/// Storage `Op::Leaf` payload (after the suffix-nibble prefix): the PLAINTEXT
+/// slot position(32) then value(32). Position keys the runtime table.
 fn put_storage_leaf_payload(out: &mut Vec<u8>, position: &B256, value: &B256) {
     out.extend_from_slice(position.as_slice()); // 32
     out.extend_from_slice(value.as_slice()); // 32
 }
 
+/// Pack a full 64-nibble trie path into the 32-byte key hash.
 fn nibbles_to_bytes(nibs: &[u8]) -> Result<[u8; 32]> {
     if nibs.len() != 64 {
         bail!("leaf path must be 64 nibbles, got {}", nibs.len());
@@ -292,6 +298,9 @@ impl<'a> Encoder<'a> {
         value: &[u8],
         kind: TreeKind,
     ) -> Result<()> {
+        // With a preimage → Op::Leaf carrying suffix nibbles + plaintext key +
+        // value (the guest keys runtime tables by plaintext). Keyless siblings
+        // → Op::PhantomLeaf (trie-only, never entered into the tables).
         let mut full = walked.to_vec();
         full.extend_from_slice(leaf_nibs);
         let key_hash = nibbles_to_bytes(&full)?;
@@ -300,6 +309,11 @@ impl<'a> Encoder<'a> {
         match preimage {
             Some(pre) => {
                 put_op(&mut self.out, Op::Leaf);
+                // suffix nibbles: count + one u64 per nibble.
+                put_u64(&mut self.out, leaf_nibs.len() as u64);
+                for &n in leaf_nibs {
+                    put_u64(&mut self.out, n as u64);
+                }
                 match kind {
                     TreeKind::State => {
                         self.n_accounts += 1;

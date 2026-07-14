@@ -113,6 +113,17 @@ evmc::bytes32 Accounts::code_hash(const evmc::address& addr, uint64_t tx_idx) {
     return mods_[i].code_hash_dirty ? mods_[i].code_hash : originals_[i].code_hash();
 }
 
+void Accounts::record_phantom_balance(const evmc::bytes32& addr_hash,
+                                      const evmc::uint256be& balance) {
+    phantom_balance_.emplace(addr_hash, balance);
+}
+
+const evmc::uint256be* Accounts::phantom_balance(
+    const evmc::bytes32& addr_hash) const {
+    const auto it = phantom_balance_.find(addr_hash);
+    return it == phantom_balance_.end() ? nullptr : &it->second;
+}
+
 const evmc::address& Accounts::address_at(size_t idx) const noexcept {
     return originals_[idx].address();
 }
