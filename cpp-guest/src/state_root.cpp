@@ -41,15 +41,21 @@ enum class Op : uint64_t {
 
 // ===== helpers ==============================================================
 
-void verify_path_prefix(const std::vector<uint8_t>& walked,
-                        const evmc::bytes32& hash) {
-    for (size_t i = 0; i < walked.size(); ++i) {
-        const uint8_t b = hash.bytes[i / 2];
-        const uint8_t expected = (i % 2 == 0) ? (b >> 4) : (b & 0x0f);
-        if (walked[i] != expected) {
-            fatal("state_root: leaf hash prefix doesn't match walked path");
-        }
+// Reconstruct keccak(address)/keccak(slot) from the trie path (walked prefix
+// + leaf suffix), which must total 64 nibbles = 32 bytes. No preimage needed.
+evmc::bytes32 pack_key_hash(const std::vector<uint8_t>& walked,
+                            const std::vector<uint8_t>& suffix) {
+    if (walked.size() + suffix.size() != 64) {
+        fatal("state_root: leaf key path is not 64 nibbles");
     }
+    uint8_t nibs[64];
+    std::memcpy(nibs, walked.data(), walked.size());
+    std::memcpy(nibs + walked.size(), suffix.data(), suffix.size());
+    evmc::bytes32 out{};
+    for (size_t j = 0; j < 32; ++j) {
+        out.bytes[j] = static_cast<uint8_t>((nibs[2 * j] << 4) | (nibs[2 * j + 1] & 0x0f));
+    }
+    return out;
 }
 
 // ===== pack* (RLP + HP + keccak) ============================================
@@ -414,11 +420,38 @@ Child build_node(const uint8_t*& cursor,
             std::vector<uint8_t> value(cursor, cursor + value_len);
             cursor += value_len;
             align_to_u64(cursor, value_len);
+
+            // A preimage-less STATE account (a pre-funded CREATE2 target) has
+            // its balance only in this phantom leaf, never in the Accounts
+            // table. Record keccak(addr) -> balance so a CREATE here inherits
+            // the balance and the new-root pass supersedes the phantom. Account
+            // RLP = [nonce, balance, ...]; balance is item 2.
+            if (kind == TreeKind::State) {
+                const evmc::bytes32 key_hash = pack_key_hash(walked, path);
+                rlp::ListIter it(rlp::decode_item(rlp::BytesView{value}).payload);
+                it.next();  // nonce
+                const evmc::uint256be bal = rlp::as_u256(it.next());
+                if (bal != evmc::uint256be{}) {
+                    ctx.accounts.record_phantom_balance(key_hash, bal);
+                }
+            }
             return Child{NodeType::PhantomLeaf,
-                         aux_push(ctx, mk_node<PhantomLeafR>(std::move(path), std::move(value)))};
+                         aux_push(ctx, mk_node<PhantomLeafR>(std::move(path),
+                                                             std::move(value)))};
         }
 
         case Op::Leaf: {
+            // Payload: suffix nibbles (count u64 + one u64/nibble), then the
+            // plaintext key + value. The trie key hash is pack(walked ++
+            // suffix); the runtime tables are keyed by the plaintext, bound to
+            // the path by keccak(plaintext) == that hash.
+            const uint64_t suffix_n = read_u64_le(cursor);
+            std::vector<uint8_t> suffix;
+            suffix.reserve(suffix_n);
+            for (uint64_t i = 0; i < suffix_n; ++i) {
+                suffix.push_back(static_cast<uint8_t>(read_u64_le(cursor) & 0x0f));
+            }
+
             if (kind == TreeKind::State) {
                 // address(20) pad(4) balance(u256be,32) nonce(u64) code_hash(32)
                 evmc::address addr;
@@ -432,14 +465,14 @@ Child build_node(const uint8_t*& cursor,
                 std::memcpy(code_hash.bytes, cursor, sizeof(code_hash.bytes));
                 cursor += sizeof(code_hash.bytes);
 
+                const evmc::bytes32 addr_hash = pack_key_hash(walked, suffix);
+                if (keccak256_bytes32(addr.bytes, sizeof(addr.bytes)) != addr_hash) {
+                    fatal("state_root: keccak(address) != leaf path hash");
+                }
+
                 const size_t idx = ctx.next_state_idx++;
                 const size_t a = ctx.accounts.append(addr, nonce, balance, code_hash);
                 if (a != idx) fatal("state_root: account append index desync");
-
-                const evmc::bytes32 addr_hash =
-                    keccak256_bytes32(addr.bytes, sizeof(addr.bytes));
-                // Bind the payload address to its trie position.
-                verify_path_prefix(walked, addr_hash);
 
                 // Build the per-account storage subtree (`addr` is a stable
                 // local for the duration of the nested walk).
@@ -466,13 +499,14 @@ Child build_node(const uint8_t*& cursor,
                 std::memcpy(value.bytes, cursor, sizeof(value.bytes));
                 cursor += sizeof(value.bytes);
 
+                const evmc::bytes32 pos_hash = pack_key_hash(walked, suffix);
+                if (keccak256_bytes32(position.bytes, sizeof(position.bytes)) != pos_hash) {
+                    fatal("state_root: keccak(position) != leaf path hash");
+                }
+
                 const size_t idx = ctx.next_storage_idx++;
                 const size_t a = ctx.storages.append(*owning_address, position, value);
                 if (a != idx) fatal("state_root: storage append index desync");
-
-                const evmc::bytes32 pos_hash =
-                    keccak256_bytes32(position.bytes, sizeof(position.bytes));
-                verify_path_prefix(walked, pos_hash);
 
                 auto nib = nibbles_from(pos_hash, walked.size());
                 ctx.storages.build_value(idx, nib, pos_hash);
@@ -626,7 +660,7 @@ StateRoot::StateRoot(const uint8_t*& cursor,
     // No bijection check needed: the tables ARE the leaves (built here), so
     // every row appears as exactly one leaf by construction. Soundness comes
     // from old_root_ == the trusted parent anchor (checked by the caller)
-    // plus each leaf's verify_path_prefix binding its key to its position.
+    // plus each leaf's keccak(key) == path-hash bind (in build_node).
 }
 
 // ===== new-root insert (Stage 3) ============================================
@@ -651,7 +685,17 @@ Child StateRoot::split_leaf(Child existing, const evmc::bytes32& key_hash,
     // First nibble at which the new key and the existing leaf's key diverge.
     std::size_t d = depth;
     while (true) {
-        if (d >= 64) fatal("state_root: insert collides with an identical key");
+        if (d >= 64) {
+            // Identical key. The ONLY sound reason two leaves share a full key
+            // is a created account materializing a pre-funded phantom leaf at
+            // the same keccak(addr): the created row supersedes the phantom, so
+            // return it. Any other identical-key collision is a real bug (a
+            // genuine keccak collision or a double-insert) — keep the abort.
+            if (existing.type == NodeType::PhantomLeaf) {
+                return leaf;
+            }
+            fatal("state_root: insert collides with an identical key");
+        }
         if (nibble_at(key_hash, d) != existing_leaf_nibble(existing, d, depth)) break;
         ++d;
     }
@@ -714,8 +758,9 @@ evmc::bytes32 StateRoot::calculate_new_state_root() {
     // Rows appended beyond the witness counts are created keys. Splice them
     // into the node array (index-based, so branch_nodes_ may grow freely).
 
-    // Initialise each created account's leaf metadata (it was appended at
-    // run-time via ensure_account, not through build_value).
+    // Initialise each created account's leaf metadata (appended at run-time
+    // via ensure_account, not through build_value). Created rows are keyed by
+    // plaintext, so derive the trie key hash here (once, cold).
     for (std::size_t i = num_witness_accounts_; i < accounts_.size(); ++i) {
         const evmc::address& a = accounts_.address_at(i);
         accounts_.set_addr_hash(i, keccak256_bytes32(a.bytes, sizeof(a.bytes)));
@@ -739,14 +784,22 @@ evmc::bytes32 StateRoot::calculate_new_state_root() {
         accounts_.set_storage_root_child(acct, new_root);
     }
 
-    // Insert created accounts into the state trie (skip ones that ended empty,
-    // e.g. created-then-SELFDESTRUCT'd).
+    // Insert created accounts into the state trie. Skip ones that ended empty —
+    // UNLESS they superseded a pre-funded phantom leaf: those are inserted even
+    // when empty so insert_into replaces the phantom (updating the branch child
+    // type Phantom->Account, so eval re-hashes instead of reusing the cached
+    // phantom hash). ensure_account seeded the row's ORIGINAL from the phantom
+    // balance, so eval sees original != current and re-hashes correctly.
     for (std::size_t i = num_witness_accounts_; i < accounts_.size(); ++i) {
-        if (is_empty_account(accounts_.nonce_at(i), accounts_.balance_at(i),
-                             accounts_.code_hash_at(i))) {
+        const bool empty = is_empty_account(accounts_.nonce_at(i),
+                                            accounts_.balance_at(i),
+                                            accounts_.code_hash_at(i));
+        const evmc::bytes32& ah = accounts_.addr_hash_at(i);
+        const bool superseded_phantom = accounts_.phantom_balance(ah) != nullptr;
+        if (empty && !superseded_phantom) {
             continue;
         }
-        root_ = insert_into(root_, accounts_.addr_hash_at(i),
+        root_ = insert_into(root_, ah,
                             Child{NodeType::Account, static_cast<uint32_t>(i)}, 0);
     }
 

@@ -103,43 +103,40 @@ pub fn build_binary(sources: &OfflineSources, output: &Path) -> Result<()> {
 /// `live` module's `fetch_and_build_*` entry points) use this directly to
 /// avoid a tempfile round-trip.
 pub fn encode_binary(sources: &OfflineSources) -> Result<Vec<u8>> {
-    // Enrich prestate from the witness storage-trie leaves before
-    // building the TouchSet. The online RPC path used to do this in
-    // main.rs; offline manifests (notably from eest-witness-gen)
-    // arrive with a prestate populated only from reth's BundleState,
-    // which omits slots the EVM READ but didn't WRITE. The witness
-    // has those leaves, and we pull them in here so the cpp-guest's
-    // Storages table covers every (addr, slot) the EVM touches.
+    // `prestate`/`diff` are populated only by the manifest path (eest-witness-gen
+    // ships a BundleState prestate). The online RPC path is witness-only and
+    // leaves them empty, so the enrich + TouchSet + verify below are pure
+    // no-ops there — skip them. The output bytes come from `witness` +
+    // `prestate` (codes) regardless; `state_root::write` no longer consumes
+    // prestate/diff/touch at all (see below).
     let mut prestate = sources.prestate.clone();
-    enrich::enrich_storage_slots_from_witness(
-        sources.parent.header.state_root,
-        &sources.witness,
-        &mut prestate,
-    )?;
-    // Inject every address that appears in the tx envelope: sender,
-    // tx.to, EIP-2930 access list, and EIP-7702 authorization signers
-    // (recovered from the auth signatures). cpp-guest registers the
-    // authority addresses in its Accounts table even when the auth is
-    // invalid (test_account_warming, etc.), and fatals if a referenced
-    // address isn't in the table. The eest-witness-gen bridge can't
-    // pre-recover authorities (it would require ECDSA), so we do it
-    // here from the manifest's tx envelopes.
-    enrich::inject_tx_addresses(&mut prestate, &sources.current);
+    if !prestate.is_empty() {
+        // Enrich prestate from the witness storage-trie leaves (the manifest
+        // prestate omits slots the EVM READ but didn't WRITE), then inject the
+        // tx-envelope addresses (sender/to/access-list/EIP-7702 authorities)
+        // the guest must have in its Accounts table. Both only matter when a
+        // manifest prestate is present.
+        enrich::enrich_storage_slots_from_witness(
+            sources.parent.header.state_root,
+            &sources.witness,
+            &mut prestate,
+        )?;
+        enrich::inject_tx_addresses(&mut prestate, &sources.current);
 
-    let touch = TouchSet::build(&prestate, &sources.diff);
-    info!(
-        accounts = touch.addrs.len(),
-        slots = touch.slots.len(),
-        "built TouchSet",
-    );
-
-    verify::check(
-        sources.parent.header.state_root,
-        &sources.witness,
-        &prestate,
-        &sources.diff,
-        &touch,
-    )?;
+        let touch = TouchSet::build(&prestate, &sources.diff);
+        info!(
+            accounts = touch.addrs.len(),
+            slots = touch.slots.len(),
+            "built TouchSet",
+        );
+        verify::check(
+            sources.parent.header.state_root,
+            &sources.witness,
+            &prestate,
+            &sources.diff,
+            &touch,
+        )?;
+    }
 
     let mut w = Writer::new();
     sections::write_magic(&mut w);
@@ -151,7 +148,7 @@ pub fn encode_binary(sources: &OfflineSources) -> Result<Vec<u8>> {
         sources.blob_base_fee_update_fraction,
     );
     sections::write_transactions(&mut w, &sources.current)?;
-    sections::write_contracts(&mut w, &prestate, &sources.diff, &sources.current)?;
+    sections::write_contracts(&mut w, &prestate, &sources.witness, &sources.current)?;
     sections::write_previous_blocks(&mut w, &sources.ancestors);
     // The StateRoot trie hints are now witness-only: `state_root::write`
     // transcribes the pre-state MPT straight from `witness.state` +

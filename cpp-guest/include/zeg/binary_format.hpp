@@ -12,6 +12,10 @@ namespace zeg {
 
 constexpr uint32_t kMagic   = 0x3047455Au; // "ZEG0" little-endian
 // Format version, stored in the 4 bytes immediately after the magic.
+// v7: stateless StateRoot — each `Op::Leaf` carries its key-suffix nibbles
+//     (the guest packs walked ++ suffix into the trie key hash, no preimage)
+//     plus the plaintext key + block-start values. The guest keys its runtime
+//     tables by plaintext and binds keccak(plaintext) == the path hash.
 // v6: no secp256k1 pubkey hints — the per-tx 64 B sender pubkey and the
 //     Type-4 per-authorization 64 B pubkeys are removed from the Transactions
 //     section; the guest recovers every signer itself via ecrecover
@@ -34,7 +38,7 @@ constexpr uint32_t kMagic   = 0x3047455Au; // "ZEG0" little-endian
 //     guest derives read-only-ness dynamically (original == current).
 // v1: StateRoot `Op::Leaf` carries no index; keccak-sorted tables.
 // The guest rejects any version != kVersion.
-constexpr uint32_t kVersion = 6;
+constexpr uint32_t kVersion = 7;  // v7 leaf: suffix nibbles + plaintext key + value
 
 enum class SectionKind : uint32_t {
     ParentHeader      = 1,

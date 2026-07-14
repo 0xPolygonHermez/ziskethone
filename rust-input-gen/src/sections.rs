@@ -13,7 +13,7 @@ use alloy::rpc::types::{Block, BlockTransactions};
 use anyhow::Result;
 use sha3::{Digest, Keccak256};
 
-use crate::rpc::{Prestate, PrestateDiff};
+use crate::rpc::{ExecutionWitness, Prestate, PrestateDiff};
 use crate::writer::Writer;
 
 /// On-wire format version, written in the 4 bytes after the magic.
@@ -35,7 +35,7 @@ use crate::writer::Writer;
 /// derives read-only-ness dynamically (original == current).
 /// v1: StateRoot `Op::Leaf` carries no index (keccak-sorted tables +
 /// counter-derived index in the guest).
-pub const FORMAT_VERSION: u32 = 6;
+pub const FORMAT_VERSION: u32 = 7; // v7: leaf = suffix nibbles + plaintext key + value
 
 /// File magic prefix (8 bytes): 4 B ASCII `"ZEG0"` + 4 B little-endian
 /// format version, which also keeps the cursor 8-byte aligned for the
@@ -263,23 +263,30 @@ pub fn account_original_fields(
 
 /// Section 4 — `Contracts`.
 ///
-/// One record per unique deployed bytecode the block touches. Sources:
-///   * `prestate.code` — block-start code for every contract whose
-///     code the tx prestate captured.
-///   * `diff.post[addr].code` — newly-deployed contracts (so calls
-///     into the new address later in the block can find their code).
-///   * EIP-7702 delegation stubs (`0xef0100 || delegate`, 23 B) —
-///     for every authorization in every Type-4 tx, regardless of
-///     whether the auth's validity checks pass. The cpp-guest
-///     computes the hash of this stub when it processes the auth and
-///     then looks it up later via `Contracts::by_hash` when something
-///     CALLs the delegated EOA.
+/// One record per unique deployed bytecode the block may touch. Sources:
+///   * `witness.codes` — every bytecode reth put in the execution witness.
+///     Sourcing contracts from here lets us drop the diff-mode
+///     `prestateTracer` call (whose only output role was supplying
+///     newly-deployed contract code). It's a *superset* of what the tracer
+///     set carried (a few extra pre-existing codes the guest never looks
+///     up), so output is no longer byte-identical to the old path — but
+///     every code the guest resolves by hash is present, and
+///     CREATE'd-in-block contracts are self-registered by the guest at
+///     runtime anyway. (Correctness is validated by the guest producing the
+///     correct block hash across a wide block range + both EVM backends.)
+///   * `prestate.code` — from the full `prestateTracer` prestate (still
+///     fetched — it's load-bearing for account/storage state). Redundant
+///     with `witness.codes` for contracts but harmless (dedup by hash).
+///   * EIP-7702 delegation stubs (`0xef0100 || delegate`, 23 B) — for every
+///     authorization in every Type-4 tx (valid or not). The cpp-guest hashes
+///     this stub when it processes the auth and later resolves it via
+///     `Contracts::by_hash` when something CALLs the delegated EOA.
 ///
 /// Deduplicated by `keccak256(code)`.
 pub fn write_contracts(
     w: &mut Writer,
     prestate: &Prestate,
-    diff: &PrestateDiff,
+    witness: &ExecutionWitness,
     current: &Block,
 ) -> Result<()> {
     use alloy::primitives::Bytes;
@@ -296,12 +303,10 @@ pub fn write_contracts(
         dst.entry(h).or_insert(code);
     };
 
-    for ps in prestate.values() {
-        if let Some(c) = &ps.code {
-            insert(&mut by_hash, c.clone());
-        }
+    for code in &witness.codes {
+        insert(&mut by_hash, code.clone());
     }
-    for ps in diff.post.values() {
+    for ps in prestate.values() {
         if let Some(c) = &ps.code {
             insert(&mut by_hash, c.clone());
         }
