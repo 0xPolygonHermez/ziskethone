@@ -802,18 +802,23 @@ size_t ZiskStateDB::ensure_account(const evmc::address& addr) noexcept {
     // restores the fields to empty via their own journal logs, rendering the
     // row non-existent again (the now-empty row is harmless).
     //
-    // EXCEPTION: a pre-funded, preimage-less account (a CREATE2 target funded
-    // in a prior block whose keccak(addr) preimage the witness omitted) exists
-    // only as an Op::PhantomLeaf — its balance is in the trie, not this table.
-    // StateRoot recorded keccak(addr) -> balance; if this address matches, seed
-    // the row's ORIGINAL balance from it so a CREATE here preserves the pre-
-    // existing funds (Yellow Paper: CREATE keeps any balance already there).
-    // Seeding the ORIGINAL (not just current) is load-bearing: the new-root
-    // pass supersedes the phantom leaf only when original != current, which
-    // requires the original to reflect the pre-state balance.
+    // EXCEPTION: a non-empty, preimage-less account (a CREATE2 target funded
+    // in a prior block, or simply a real contract the tracer never touched)
+    // exists only as an Op::PhantomLeaf — its fields are in the trie, not
+    // this table. StateRoot recorded keccak(addr) -> {nonce, balance,
+    // code_hash}; if this address matches, seed the row's ORIGINAL from it
+    // so any touch here (a CREATE preserving pre-existing funds, or merely an
+    // EIP-2929 access-warm probe that never mutates the account) reflects the
+    // REAL pre-state fields instead of silently reverting to an empty
+    // account. Seeding the ORIGINAL (not just current) is load-bearing: the
+    // new-root pass supersedes the phantom leaf only when original != empty,
+    // which requires the original to reflect the true pre-state fields —
+    // and a probe that never mutates the row leaves current == original, so
+    // the resurrected leaf rebuilds to the exact same RLP/hash as the
+    // phantom it replaces.
     const evmc::bytes32 addr_hash = keccak256_bytes32(addr.bytes, sizeof(addr.bytes));
-    if (const evmc::uint256be* bal = accounts_.phantom_balance(addr_hash)) {
-        return accounts_.append(addr, 0, *bal, EMPTY_CODE_HASH);
+    if (const Accounts::PhantomAccount* ph = accounts_.phantom_account(addr_hash)) {
+        return accounts_.append(addr, ph->nonce, ph->balance, ph->code_hash);
     }
     return accounts_.append(addr, 0, evmc::uint256be{}, EMPTY_CODE_HASH);
 }
