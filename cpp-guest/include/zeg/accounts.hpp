@@ -151,17 +151,36 @@ public:
         return index_.find(addr) != index_.end();
     }
 
-    // ----- pre-funded phantom accounts (preimage-less CREATE2 targets) -----
+    // ----- non-empty phantom accounts (preimage-less, but not "empty") -----
     //
-    // A pre-state account with balance but no witness key-preimage arrives as an
-    // Op::PhantomLeaf (trie-only, never in this table). If the block CREATEs a
-    // contract there, it must inherit that balance. StateRoot records
-    // keccak(addr) -> balance at build; ensure_account seeds the created row's
-    // balance from it, and calculate_new_state_root supersedes the stale phantom
-    // leaf (a non-null lookup here means "this created row superseded a phantom").
-    void record_phantom_balance(const evmc::bytes32& addr_hash,
-                                const evmc::uint256be& balance);
-    const evmc::uint256be* phantom_balance(const evmc::bytes32& addr_hash) const;
+    // A pre-state account with no witness key-preimage arrives as an
+    // Op::PhantomLeaf (trie-only, never in this table) — this includes both
+    // pre-funded CREATE2 targets AND ordinary contracts the tracer never
+    // touched. If anything later resurrects the row (a CREATE lands there, or
+    // it's merely EIP-2929 access-warmed by a call that never dispatches),
+    // the row must inherit the phantom's FULL field set — not just balance —
+    // or the resurrected leaf's RLP (and hash) silently loses the account's
+    // real nonce/code. StateRoot records keccak(addr) -> {nonce, balance,
+    // code_hash} at build (whenever the phantom isn't the fully-empty
+    // account); ensure_account seeds the created row from it, and
+    // calculate_new_state_root supersedes the stale phantom leaf (a non-null
+    // lookup here means "this created row superseded a phantom").
+    struct PhantomAccount {
+        uint64_t        nonce;
+        evmc::uint256be balance;
+        evmc::bytes32   code_hash;
+        // The phantom's block-start storage root. A resurrected phantom is
+        // rebuilt with EMPTY storage (the witness ships no storage subtree for
+        // a preimage-less account), which is only correct when this root is
+        // itself empty. calculate_new_state_root fatals otherwise — see there.
+        evmc::bytes32   storage_root;
+    };
+    void record_phantom_account(const evmc::bytes32& addr_hash,
+                                uint64_t nonce,
+                                const evmc::uint256be& balance,
+                                const evmc::bytes32& code_hash,
+                                const evmc::bytes32& storage_root);
+    const PhantomAccount* phantom_account(const evmc::bytes32& addr_hash) const;
 
     // ----- per-tx warm/cold tracking (EIP-2929) -----
     //
@@ -277,9 +296,10 @@ private:
     std::vector<LeafCache> leaf_;
     std::unordered_map<evmc::address, size_t, AddressHash, AddressEq> index_;
 
-    // keccak(addr) -> pre-funded balance for phantom (preimage-less) accounts.
-    // See record_phantom_balance(). Keyed by hash (the plaintext is unknown);
-    // the addr_hash bytes are uniform keccak output, so splice the first 8.
+    // keccak(addr) -> full field set for non-empty phantom (preimage-less)
+    // accounts. See record_phantom_account(). Keyed by hash (the plaintext is
+    // unknown); the addr_hash bytes are uniform keccak output, so splice the
+    // first 8.
     struct AddrHashHash {
         size_t operator()(const evmc::bytes32& h) const noexcept {
             uint64_t v; std::memcpy(&v, h.bytes, sizeof(v));
@@ -291,8 +311,8 @@ private:
             return std::memcmp(x.bytes, y.bytes, sizeof(x.bytes)) == 0;
         }
     };
-    std::unordered_map<evmc::bytes32, evmc::uint256be, AddrHashHash, AddrHashEq>
-        phantom_balance_;
+    std::unordered_map<evmc::bytes32, PhantomAccount, AddrHashHash, AddrHashEq>
+        phantom_accounts_;
 };
 
 } // namespace zeg

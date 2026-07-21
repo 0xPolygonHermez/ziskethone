@@ -421,18 +421,40 @@ Child build_node(const uint8_t*& cursor,
             cursor += value_len;
             align_to_u64(cursor, value_len);
 
-            // A preimage-less STATE account (a pre-funded CREATE2 target) has
-            // its balance only in this phantom leaf, never in the Accounts
-            // table. Record keccak(addr) -> balance so a CREATE here inherits
-            // the balance and the new-root pass supersedes the phantom. Account
-            // RLP = [nonce, balance, ...]; balance is item 2.
+            // A preimage-less STATE account (a pre-funded CREATE2 target, or
+            // simply a real contract the tracer never touched) has its full
+            // field set only in this phantom leaf, never in the Accounts
+            // table. Record keccak(addr) -> {nonce, balance, code_hash} so a
+            // later resurrection (a CREATE landing here, or merely an
+            // EIP-2929 access-warm touch) inherits the REAL fields instead of
+            // silently reverting to nonce=0/EMPTY_CODE_HASH, and the new-root
+            // pass supersedes the phantom. Account RLP = [nonce, balance,
+            // storageRoot, codeHash].
             if (kind == TreeKind::State) {
                 const evmc::bytes32 key_hash = pack_key_hash(walked, path);
                 rlp::ListIter it(rlp::decode_item(rlp::BytesView{value}).payload);
-                it.next();  // nonce
+                const uint64_t nonce = rlp::as_u64(it.next());
                 const evmc::uint256be bal = rlp::as_u256(it.next());
-                if (bal != evmc::uint256be{}) {
-                    ctx.accounts.record_phantom_balance(key_hash, bal);
+                const rlp::Item sroot_item = it.next();  // storageRoot
+                evmc::bytes32 sroot{};
+                if (sroot_item.payload.size() == sizeof(sroot.bytes))
+                    std::memcpy(sroot.bytes, sroot_item.payload.data(), sizeof(sroot.bytes));
+                const rlp::Item code_hash_item = it.next();
+                evmc::bytes32 code_hash{};
+                if (code_hash_item.payload.size() == sizeof(code_hash.bytes)) {
+                    std::memcpy(code_hash.bytes, code_hash_item.payload.data(),
+                               sizeof(code_hash.bytes));
+                } else if (!code_hash_item.payload.empty()) {
+                    fatal("state_root: phantom leaf code hash has unexpected length");
+                }
+                // EMPTY_CODE_HASH itself RLP-encodes as a 32-byte string (RLP
+                // byte-strings aren't leading-zero-trimmed like integers), so
+                // an empty payload here only happens for the hash of an
+                // all-zero 32-byte value, which keccak256("") never is —
+                // `code_hash` is already correctly {0}-initialized for that
+                // case regardless.
+                if (nonce != 0 || bal != evmc::uint256be{} || code_hash != kEmptyCodeHash) {
+                    ctx.accounts.record_phantom_account(key_hash, nonce, bal, code_hash, sroot);
                 }
             }
             return Child{NodeType::PhantomLeaf,
@@ -785,17 +807,34 @@ evmc::bytes32 StateRoot::calculate_new_state_root() {
     }
 
     // Insert created accounts into the state trie. Skip ones that ended empty —
-    // UNLESS they superseded a pre-funded phantom leaf: those are inserted even
-    // when empty so insert_into replaces the phantom (updating the branch child
-    // type Phantom->Account, so eval re-hashes instead of reusing the cached
-    // phantom hash). ensure_account seeded the row's ORIGINAL from the phantom
-    // balance, so eval sees original != current and re-hashes correctly.
+    // UNLESS they superseded a phantom leaf: those are inserted even when empty
+    // so insert_into replaces the phantom (updating the branch child type
+    // Phantom->Account, so eval re-hashes instead of reusing the cached phantom
+    // hash). ensure_account seeded the row's ORIGINAL from the phantom's fields,
+    // so eval sees original != current and re-hashes correctly.
     for (std::size_t i = num_witness_accounts_; i < accounts_.size(); ++i) {
         const bool empty = is_empty_account(accounts_.nonce_at(i),
                                             accounts_.balance_at(i),
                                             accounts_.code_hash_at(i));
         const evmc::bytes32& ah = accounts_.addr_hash_at(i);
-        const bool superseded_phantom = accounts_.phantom_balance(ah) != nullptr;
+        const Accounts::PhantomAccount* ph = accounts_.phantom_account(ah);
+        const bool superseded_phantom = ph != nullptr;
+        if (superseded_phantom && ph->storage_root != kEmptyTrieRoot) {
+            // A resurrected phantom is rebuilt above with storage_root_child =
+            // Empty (Phase-1 loop), which the account leaf will hash as an
+            // empty storage root. That is only correct when the phantom's
+            // block-start storage was itself empty. A non-empty storage root
+            // here means the row lost the account's real storage — and we
+            // cannot rebuild it (a preimage-less phantom ships no storage
+            // subtree in the witness). This never arises from a faithful reth
+            // witness: any account whose storage the block touches has its
+            // storage nodes revealed, so it arrives as a real Op::Leaf, not a
+            // phantom; and a phantom that is merely balance-credited or
+            // access-warmed has its storage untouched. Refuse rather than emit
+            // a silently-wrong root.
+            fatal("state_root: resurrected phantom has non-empty storage "
+                  "(witness lacks its storage subtree)");
+        }
         if (empty && !superseded_phantom) {
             continue;
         }
