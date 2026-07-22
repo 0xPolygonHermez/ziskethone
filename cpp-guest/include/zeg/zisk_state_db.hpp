@@ -352,6 +352,15 @@ private:
         return active_revision() >= EVMC_SHANGHAI;
     }
 
+    // EIP-3529 (London) halved the gas-refund cap from gas_used/2 to
+    // gas_used/5 (and dropped the SSTORE clear refund from 15000 to
+    // 4800, and the SELFDESTRUCT refund to 0 — both already handled by
+    // evmone itself, fork-gated on `state.rev`). Pre-London blocks
+    // (Frontier..Berlin) still use the original /2 cap in settle_tx_gas.
+    bool is_london_or_later() const noexcept {
+        return active_revision() >= EVMC_LONDON;
+    }
+
     // ----- Per-tx pipeline (called in this order by process_transactions) -----
     //
     // Each helper takes the next tx (plus any cross-phase scalar it

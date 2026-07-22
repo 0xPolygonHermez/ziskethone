@@ -1822,11 +1822,13 @@ uint64_t ZiskStateDB::settle_tx_gas(const Transactions::View& tx,
                                     int64_t                   auth_refund) noexcept {
     // result.gas_left is what remains of `msg.gas` (already net of
     // intrinsic). Total tx gas used is gas_limit − gas_left. EIP-3529
-    // (London+): refund is capped at gas_used / 5.
+    // (London+) halved the refund cap from gas_used/2 to gas_used/5;
+    // pre-London forks (Frontier..Berlin) still use the original /2.
     const int64_t gas_left      = result.gas_left;
     const int64_t gas_used_pre  =
         static_cast<int64_t>(tx.gas_limit()) - gas_left;
-    const int64_t max_refund    = gas_used_pre / 5;
+    const int64_t max_refund    =
+        gas_used_pre / (is_london_or_later() ? 5 : 2);
     // EVM-level refund (storage clears, etc.) plus EIP-7702 auth-list
     // refund (12500 per pre-existing signer). Both are subject to the
     // same EIP-3529 cap.
