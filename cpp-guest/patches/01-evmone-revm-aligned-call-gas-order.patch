@@ -1,8 +1,8 @@
 diff --git a/lib/evmone/instructions_calls.cpp b/lib/evmone/instructions_calls.cpp
-index 6a243bac..dc8406e5 100644
+index 6a243bac..6a4d8b0e 100644
 --- a/lib/evmone/instructions_calls.cpp
 +++ b/lib/evmone/instructions_calls.cpp
-@@ -81,12 +81,49 @@ Result call_impl(StackTop stack, int64_t gas_left, ExecutionState& state) noexce
+@@ -81,24 +81,68 @@ Result call_impl(StackTop stack, int64_t gas_left, ExecutionState& state) noexce
      stack.push(0);  // Assume failure.
      state.return_data.clear();
  
@@ -32,6 +32,11 @@ index 6a243bac..dc8406e5 100644
              return {EVMC_OUT_OF_GAS, gas_left};
      }
  
+-    const auto target_addr_or_result = get_target_address(dst, gas_left, state);
+-    if (const auto* result = std::get_if<Result>(&target_addr_or_result))
+-        return *result;
+-
+-    const auto& code_addr = std::get<evmc::address>(target_addr_or_result);
 +    // (3) Account-creation cost — charged BEFORE the delegation probe, matching
 +    // revm's ordering in load_account_delegated (is_empty check precedes the
 +    // eip7702_address branch).
@@ -47,12 +52,31 @@ index 6a243bac..dc8406e5 100644
 +            }
 +        }
 +    }
+ 
++    // (4) Memory-expansion checks — pure arithmetic, no host access. Charged
++    // BEFORE the delegation probe so a CALL doomed to OOG on memory expansion
++    // never reads the callee's code (get_code_hash / copy_code). Mirrors revm:
++    // a stateless host (reth's debug_executionWitness, ZK provers) is never
++    // required to include bytecode the EVM didn't materially read. Without this
++    // the guest fatals on a valid block whose CALL OOGs on memory to a contract
++    // callee whose code the witness (correctly) omitted.
+     if (!check_memory(gas_left, state.memory, input_offset_u256, input_size_u256))
+         return {EVMC_OUT_OF_GAS, gas_left};
+ 
+     if (!check_memory(gas_left, state.memory, output_offset_u256, output_size_u256))
+         return {EVMC_OUT_OF_GAS, gas_left};
+ 
++    // (5) Delegation probe — only reached after ALL gas checks (incl. memory).
++    const auto target_addr_or_result = get_target_address(dst, gas_left, state);
++    if (const auto* result = std::get_if<Result>(&target_addr_or_result))
++        return *result;
 +
-+    // (4) Delegation probe — only reached after all prior gas checks pass.
-     const auto target_addr_or_result = get_target_address(dst, gas_left, state);
-     if (const auto* result = std::get_if<Result>(&target_addr_or_result))
-         return *result;
-@@ -124,23 +161,6 @@ Result call_impl(StackTop stack, int64_t gas_left, ExecutionState& state) noexce
++    const auto& code_addr = std::get<evmc::address>(target_addr_or_result);
++
+     const auto input_offset = static_cast<size_t>(input_offset_u256);
+     const auto input_size = static_cast<size_t>(input_size_u256);
+     const auto output_offset = static_cast<size_t>(output_offset_u256);
+@@ -124,23 +168,6 @@ Result call_impl(StackTop stack, int64_t gas_left, ExecutionState& state) noexce
          msg.input_size = input_size;
      }
  
