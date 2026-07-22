@@ -1220,7 +1220,9 @@ void ZiskStateDB::pre_warm_for_tx(const Transactions::View& tx) noexcept {
 
     // tx.origin (EIP-2929) + coinbase (EIP-3651, Shanghai+) + tx.to.
     warm_addr(tx.sender());
-    warm_addr(consensus_.beneficiary());
+    if (is_shanghai_or_later()) {
+        warm_addr(consensus_.beneficiary());
+    }
     if (tx.to() != nullptr) {
         warm_addr(*tx.to());
     }
