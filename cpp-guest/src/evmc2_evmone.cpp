@@ -8,8 +8,12 @@
 
 #include "evmc2_evmone.hpp"
 
+#include <cstdlib>  // std::getenv
+#include <iostream> // std::cerr
+
 #include <evmone/baseline.hpp>  // CodeAnalysis, analyze, execute(VM&, …, CodeAnalysis&)
 #include <evmone/evmone.h>      // evmc_create_evmone
+#include <evmone/tracing.hpp>   // create_instruction_tracer (ZEG_TRACE_OPCODES debug aid)
 #include <evmone/vm.hpp>        // evmone::VM (the type behind the underlying vm)
 
 namespace {
@@ -85,6 +89,15 @@ evmc_result w_execute2(evmc_vm* vm, const evmc_host_interface* host,
 
 extern "C" evmc2_vm* evmc2_create_evmone(void) {
     evmc_vm* impl = evmc_create_evmone();
+    // Debug aid: ZEG_TRACE_OPCODES=1 attaches evmone's built-in per-opcode
+    // instruction tracer (pc/op/gas/gasCost/stack/depth JSONL to stderr) for
+    // the whole run. Not scoped to a single tx — bracket the target tx's
+    // lines using the "TX %zu START"/"TX %zu gas_used=..." markers already
+    // emitted in zisk_state_db.cpp's process_transactions loop.
+    if (std::getenv("ZEG_TRACE_OPCODES") != nullptr) {
+        static_cast<evmone::VM*>(impl)->add_tracer(
+            evmone::create_instruction_tracer(std::cerr));
+    }
     // Aggregate-initialize: evmc_vm's abi_version/name/version are const, so they
     // must be set here rather than assigned afterwards.
     auto* w = new EvmoneWrapper{

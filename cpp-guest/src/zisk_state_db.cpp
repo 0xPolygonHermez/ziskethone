@@ -1182,6 +1182,7 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         // made inside the checkpoint (value transfer, EVM writes) are
         // undone if the frame fails.
         const auto cp     = checkpoint();
+        std::fprintf(stderr, "TX %zu START\n", i);
         auto       result = execute_top_level_frame(tx, sender_idx, intrinsic_gas);
         if (result.status_code != EVMC_SUCCESS) {
             rollback(cp);
