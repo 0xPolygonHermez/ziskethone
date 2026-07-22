@@ -875,6 +875,21 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
                        accounts_.last_tx_idx_at(sender_idx));
     accounts_.set_nonce_at(sender_idx, sender_nonce_pre + 1, tx_counter_);
 
+    // EIP-2929: the new contract address is added to accessed_addresses
+    // as part of looking it up for the collision check below — warmed
+    // unconditionally, regardless of whether the create then succeeds
+    // or fails (collision, init-code revert/OOG, EIP-2 deposit OOG).
+    // Journaled *before* `cp_after_bump` (see note below) so the
+    // warmth survives a local CREATE-internal failure, mirroring how
+    // the sender-nonce bump does. EIP-6780 same-tx-destruct
+    // eligibility is intentionally NOT granted here — that only
+    // applies to a successfully created account (see step 3 below).
+    const size_t na_idx = ensure_account(new_addr);
+    if (!accounts_.is_warm_at(na_idx, tx_counter_)) {
+        journal_.log_account_warm(na_idx, accounts_.last_tx_idx_at(na_idx));
+    }
+    accounts_.mark_touched_at(na_idx, tx_counter_);
+
     // 2'. Per EVM spec (post-EIP-161 / EIP-684), the sender's nonce
     //     bump above persists through every CREATE-internal failure
     //     mode below — collision, init-code revert/OOG, EIP-2 code-
@@ -884,7 +899,9 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     //     so an outer-frame revert (parent CALL/CREATE reverts, tx
     //     reverts) correctly unbumps. Miss-handled previously: block
     //     25199793 tx 337 — CREATE -> inner CREATE2 that failed left
-    //     the inner-CREATE2 sender's nonce at 1 instead of 2.
+    //     the inner-CREATE2 sender's nonce at 1 instead of 2. The
+    //     address-warming above is anchored the same way, for the
+    //     same reason (fixture CreateAddressWarmAfterFail.json).
     const auto cp_after_bump = checkpoint();
 
     // 3. EIP-684 collision check + initialize the new account (nonce
@@ -894,22 +911,11 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
         return evmc::Result{EVMC_FAILURE, 0, 0, nullptr, 0};
     }
 
-    // EIP-2929: the new contract address is added to accessed_addresses
-    // at creation time, so subsequent EXTCODE*/CALL on it within this
-    // tx is WARM (100 gas) rather than COLD (2600 gas). Journaled —
-    // if the surrounding frame reverts, the warming is undone.
     // EIP-6780: mark the new index as "created this tx" so a later
     // SELFDESTRUCT from this contract fully destroys it (instead of
-    // just transferring balance).
-    {
-        const size_t na_idx = accounts_.index_of(new_addr);
-        if (!accounts_.is_warm_at(na_idx, tx_counter_)) {
-            journal_.log_account_warm(na_idx,
-                                      accounts_.last_tx_idx_at(na_idx));
-        }
-        accounts_.mark_touched_at(na_idx, tx_counter_);
-        created_this_tx_idx_.insert(na_idx);
-    }
+    // just transferring balance). Success-only — unlike the warming
+    // above, this must NOT survive a failed create.
+    created_this_tx_idx_.insert(na_idx);
 
     // 4. Execute the init code with the new address as the recipient.
     evmc_message create_msg = msg;
@@ -972,14 +978,30 @@ evmc::address ZiskStateDB::derive_create_address(
                                    init_code, init_size);
 }
 
+bool ZiskStateDB::address_has_storage(const evmc::address& addr) const noexcept {
+    for (size_t i : storages_.slots_of(addr)) {
+        if (!is_zero_value(storages_.value_at(i))) return true;
+    }
+    const auto& outer = dynamic_storage_.entries();
+    const auto  it     = outer.find(addr);
+    if (it != outer.end()) {
+        for (const auto& [pos, slot] : it->second) {
+            if (!is_zero_value(slot.value)) return true;
+        }
+    }
+    return false;
+}
+
 bool ZiskStateDB::init_create_account(const evmc::address& new_addr,
                                       const evmc_message&  msg) noexcept {
-    // EIP-684 collision check. The address may have no witness row (a
-    // brand-new contract address) — `ensure_account` appends an empty row
-    // for it. It must look empty (nonce == 0 and code_hash == EMPTY).
+    // EIP-684 collision check (EIP-7610 clarifies storage also counts).
+    // The address may have no witness row (a brand-new contract address)
+    // — `ensure_account` appends an empty row for it. It must look empty
+    // (nonce == 0, code_hash == EMPTY, and no non-zero storage slots).
     const size_t new_idx = ensure_account(new_addr);
     if (accounts_.nonce_at(new_idx) != 0 ||
-        accounts_.code_hash_at(new_idx) != EMPTY_CODE_HASH) {
+        accounts_.code_hash_at(new_idx) != EMPTY_CODE_HASH ||
+        address_has_storage(new_addr)) {
         return false;
     }
 
@@ -1640,10 +1662,25 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
         const auto entry_code = tx.data();
 
         const size_t new_idx = ensure_account(new_addr);
-        // EIP-684 collision: if the target already has a nonce or
-        // code, the CREATE fails with all gas consumed.
+        // EIP-2929: newly-created contract is added to the access list
+        // as part of looking it up for the collision check below —
+        // warmed unconditionally, regardless of whether the create
+        // then succeeds or fails, mirroring the nested-CREATE path
+        // (call_create). Journaled for consistency, though at top
+        // level there's no enclosing checkpoint to roll back to, so
+        // the entry is unused either way.
+        if (!accounts_.is_warm_at(new_idx, tx_counter_)) {
+            journal_.log_account_warm(new_idx,
+                                      accounts_.last_tx_idx_at(new_idx));
+        }
+        accounts_.mark_touched_at(new_idx, tx_counter_);
+
+        // EIP-684 collision (EIP-7610 clarifies storage also counts):
+        // if the target already has a nonce, code, or non-zero storage,
+        // the CREATE fails with all gas consumed.
         if (accounts_.nonce_at(new_idx) != 0 ||
-            accounts_.code_hash_at(new_idx) != EMPTY_CODE_HASH) {
+            accounts_.code_hash_at(new_idx) != EMPTY_CODE_HASH ||
+            address_has_storage(new_addr)) {
             return evmc::Result{EVMC_FAILURE, 0, 0, nullptr, 0};
         }
 
@@ -1656,17 +1693,8 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
             transfer_value(msg.sender, new_addr, msg.value);
         }
 
-        // EIP-2929: newly-created contract is added to the access list.
-        // Journaled for consistency with the nested-CREATE path; at
-        // top level there's no enclosing checkpoint to roll back, so
-        // the entry is unused — but emitting it keeps the invariant
-        // "every warming inside a frame is journaled" uniform.
         // EIP-6780: mark for full-destroy on same-tx SELFDESTRUCT.
-        if (!accounts_.is_warm_at(new_idx, tx_counter_)) {
-            journal_.log_account_warm(new_idx,
-                                      accounts_.last_tx_idx_at(new_idx));
-        }
-        accounts_.mark_touched_at(new_idx, tx_counter_);
+        // Success-only — the create has now passed the collision check.
         created_this_tx_idx_.insert(new_idx);
 
         auto result = evmc::Result{vm2_->execute2(

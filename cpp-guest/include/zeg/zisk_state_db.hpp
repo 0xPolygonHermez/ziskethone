@@ -270,6 +270,12 @@ private:
     bool init_create_account(const evmc::address& new_addr,
                              const evmc_message&  msg) noexcept;
 
+    // EIP-7610: true iff `addr` has any non-zero storage slot (static
+    // witness table or the per-tx dynamic scratchpad). An address with
+    // nonce==0 and empty code but non-empty storage (a leftover
+    // "phantom" leaf) must still block CREATE/CREATE2.
+    bool address_has_storage(const evmc::address& addr) const noexcept;
+
     // EIP-6780 helper: zero nonce + code_hash and clear every storage
     // slot of `src_idx`. Caller (`selfdestruct`) has already moved the
     // balance to the beneficiary. All clears are journaled.
