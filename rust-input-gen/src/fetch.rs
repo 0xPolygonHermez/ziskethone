@@ -66,7 +66,8 @@ pub(crate) async fn fetch_offline_sources_online(
     // the mainnet constants below are authoritative. `is_osaka` and the blob
     // BASE_FEE_UPDATE_FRACTION are resolved from the block timestamp against
     // that schedule. NB: update `mainnet_fork_params` at each mainnet fork/BPO.
-    let (is_osaka, blob_base_fee_update_fraction) = mainnet_fork_params(current.header.timestamp);
+    let (is_osaka, blob_base_fee_update_fraction, target_blob_gas_per_block, max_blob_gas_per_block) =
+        mainnet_fork_params(current.header.timestamp);
     if is_osaka {
         info!(
             timestamp = current.header.timestamp,
@@ -137,34 +138,52 @@ pub(crate) async fn fetch_offline_sources_online(
         system_contract_slots,
         is_osaka,
         blob_base_fee_update_fraction,
+        target_blob_gas_per_block,
+        max_blob_gas_per_block,
     })
 }
 
 /// Compiled-in MAINNET fork schedule — returns `(is_osaka, blob
-/// BASE_FEE_UPDATE_FRACTION)` for a block at `timestamp`. Mirrors reth's baked
-/// chain config: the online replay path is mainnet-only, so we don't fetch
-/// `eth_config`. Entries are (fork activation unix time, base_fee_update_fraction),
-/// newest first; pick the newest whose activation <= timestamp.
+/// BASE_FEE_UPDATE_FRACTION, TARGET_BLOB_GAS_PER_BLOCK, MAX_BLOB_GAS_PER_BLOCK)`
+/// for a block at `timestamp`. Mirrors reth's baked chain config: the online
+/// replay path is mainnet-only, so we don't fetch `eth_config`. Entries are
+/// (fork activation unix time, base_fee_update_fraction, target_blob_count,
+/// max_blob_count), newest first; pick the newest whose activation <= timestamp.
 ///
 /// UPDATE THIS at each mainnet fork / blob-schedule (BPO) change.
-/// - Osaka  : 2026-01-06 (activationTime 1767747671), fraction 11684671, P256 → Osaka
-/// - Prague : 2025-05-07 (1746612311),                fraction 5007716
-/// - Cancun : 2024-03-13 (1710338135),                fraction 3338477
-fn mainnet_fork_params(timestamp: u64) -> (bool, u64) {
+/// - BPO2   : 2026-01-07 (activationTime 1767747671), fraction 11684671, target 14, max 21
+/// - BPO1   : 2025-12-09 (1765290071),                fraction 8346193,  target 10, max 15
+/// - Prague : 2025-05-07 (1746612311),                fraction 5007716,  target 6,  max 9
+/// - Cancun : 2024-03-13 (1710338135),                fraction 3338477,  target 3,  max 6
+///
+/// `is_osaka` (EVM-revision dispatch) is tracked separately from the blob
+/// schedule rows above — Osaka/Fusaka itself doesn't change the blob
+/// target/fraction (only the later BPO forks do); it's approximated here to
+/// BPO2's activation for simplicity, which is immaterial in practice since
+/// this path only ever replays blocks within the node's ~32-block recent
+/// window (see CLAUDE.md), long past both Osaka's and BPO1's activation.
+fn mainnet_fork_params(timestamp: u64) -> (bool, u64, u64, u64) {
     const OSAKA_ACTIVATION: u64 = 1767747671;
-    // (activation_time, base_fee_update_fraction), newest first.
-    const SCHEDULE: &[(u64, u64)] = &[
-        (1767747671, 11684671), // Osaka
-        (1746612311, 5007716),  // Prague
-        (1710338135, 3338477),  // Cancun
+    const GAS_PER_BLOB: u64 = 131_072;
+    // (activation_time, base_fee_update_fraction, target_blob_count, max_blob_count), newest first.
+    const SCHEDULE: &[(u64, u64, u64, u64)] = &[
+        (1767747671, 11684671, 14, 21), // BPO2
+        (1765290071, 8346193, 10, 15),  // BPO1
+        (1746612311, 5007716, 6, 9),    // Prague
+        (1710338135, 3338477, 3, 6),    // Cancun
     ];
     let is_osaka = timestamp >= OSAKA_ACTIVATION;
-    let fraction = SCHEDULE
+    let (fraction, target_blobs, max_blobs) = SCHEDULE
         .iter()
-        .find(|(act, _)| timestamp >= *act)
-        .map(|(_, f)| *f)
-        .unwrap_or(0); // pre-Cancun: no blob schedule → guest default
-    (is_osaka, fraction)
+        .find(|(act, _, _, _)| timestamp >= *act)
+        .map(|(_, f, t, m)| (*f, *t, *m))
+        .unwrap_or((0, 0, 0)); // pre-Cancun: no blob schedule → guest default
+    (
+        is_osaka,
+        fraction,
+        target_blobs * GAS_PER_BLOB,
+        max_blobs * GAS_PER_BLOB,
+    )
 }
 
 /// Recover the parent `Block` from `witness.headers` — the RLP header whose

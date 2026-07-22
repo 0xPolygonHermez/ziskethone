@@ -55,6 +55,21 @@ pub struct ManifestSources {
     /// name; `serde(default)` (0) keeps older manifests on the guest fallback.
     #[serde(default)]
     pub blob_base_fee_update_fraction: u64,
+    /// TARGET_BLOB_GAS_PER_BLOCK (target blob count × GAS_PER_BLOB) for this
+    /// block's blob schedule. Resolved from the fixture's chain spec, same
+    /// source as `blob_base_fee_update_fraction` above — the guest uses it
+    /// to independently re-derive `excess_blob_gas` from the parent block
+    /// and reject a header whose claimed value doesn't match. Deserializes
+    /// into `OfflineSources` of the same name; `serde(default)` (0) keeps
+    /// older manifests decoding (those blocks just skip the check).
+    #[serde(default)]
+    pub target_blob_gas_per_block: u64,
+    /// MAX_BLOB_GAS_PER_BLOCK — sibling of `target_blob_gas_per_block`
+    /// above, same source and reason. The guest needs both for the
+    /// EIP-7918 (Osaka+) reserve-price branch of the `excess_blob_gas`
+    /// formula.
+    #[serde(default)]
+    pub max_blob_gas_per_block: u64,
 }
 
 /// Mirror of `rust_input_gen::rpc::Prestate`.

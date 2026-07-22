@@ -38,7 +38,13 @@ constexpr uint32_t kMagic   = 0x3047455Au; // "ZEG0" little-endian
 //     guest derives read-only-ness dynamically (original == current).
 // v1: StateRoot `Op::Leaf` carries no index; keccak-sorted tables.
 // The guest rejects any version != kVersion.
-constexpr uint32_t kVersion = 7;  // v7 leaf: suffix nibbles + plaintext key + value
+constexpr uint32_t kVersion = 8;  // v8: ConsensusInfo prefix +8 B —
+                                  // adds target_blob_gas_per_block (u64-le
+                                  // at offset 352) so the guest can
+                                  // independently re-derive and validate
+                                  // excess_blob_gas (EIP-4844) instead of
+                                  // trusting the header's claimed value.
+                                  // v7 leaf: suffix nibbles + plaintext key + value
 
 enum class SectionKind : uint32_t {
     ParentHeader      = 1,

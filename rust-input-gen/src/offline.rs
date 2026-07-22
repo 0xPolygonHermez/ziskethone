@@ -78,6 +78,22 @@ pub struct OfflineSources {
     /// older manifests decoding to the guest's current-mainnet fallback.
     #[serde(default)]
     pub blob_base_fee_update_fraction: u64,
+    /// TARGET_BLOB_GAS_PER_BLOCK (target blob count × GAS_PER_BLOB) for this
+    /// block's blob schedule (EIP-4844/7691/7892) — sibling of
+    /// `blob_base_fee_update_fraction` above, carried per-block for the same
+    /// reason. The guest uses it to independently re-derive `excess_blob_gas`
+    /// from the parent block and reject a header whose claimed value doesn't
+    /// match. `serde(default)` (0) keeps older manifests decoding; those
+    /// blocks just skip the check (guest gates it on the field being
+    /// meaningful, i.e. Cancun-or-later — see `zisk_state_db.cpp`).
+    #[serde(default)]
+    pub target_blob_gas_per_block: u64,
+    /// MAX_BLOB_GAS_PER_BLOCK (max blob count × GAS_PER_BLOB) — sibling of
+    /// `target_blob_gas_per_block` above, same reason. The guest needs both
+    /// for the EIP-7918 (Osaka+) reserve-price branch of the
+    /// `excess_blob_gas` formula.
+    #[serde(default)]
+    pub max_blob_gas_per_block: u64,
 }
 
 /// Encode an `OfflineSources` bundle to the cpp-guest's binary
@@ -146,6 +162,8 @@ pub fn encode_binary(sources: &OfflineSources) -> Result<Vec<u8>> {
         &sources.parent,
         sources.is_osaka,
         sources.blob_base_fee_update_fraction,
+        sources.target_blob_gas_per_block,
+        sources.max_blob_gas_per_block,
     );
     sections::write_transactions(&mut w, &sources.current)?;
     sections::write_contracts(&mut w, &prestate, &sources.witness, &sources.current)?;

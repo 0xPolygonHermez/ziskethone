@@ -18,6 +18,12 @@ use crate::writer::Writer;
 
 /// On-wire format version, written in the 4 bytes after the magic.
 /// Must match the guest's `kVersion` in `cpp-guest/include/zeg/binary_format.hpp`.
+/// v8: ConsensusInfo prefix +16 B — adds target_blob_gas_per_block and
+/// max_blob_gas_per_block (u64-le at offsets 352 and 360) so the guest can
+/// independently re-derive excess_blob_gas (EIP-4844, plus the EIP-7918
+/// reserve-price branch at Osaka+) from the parent block instead of trusting
+/// the header's claimed value (siblings of blob_base_fee_update_fraction
+/// below, for the same per-block-schedule reason).
 /// v6: no more secp256k1 pubkey hints — the per-tx 64 B sender pubkey and the
 /// Type-4 per-authorization 64 B pubkeys are gone; the guest recovers every
 /// signer itself via ecrecover (fp_sqrt-fcall accelerated on ZisK).
@@ -35,7 +41,7 @@ use crate::writer::Writer;
 /// derives read-only-ness dynamically (original == current).
 /// v1: StateRoot `Op::Leaf` carries no index (keccak-sorted tables +
 /// counter-derived index in the guest).
-pub const FORMAT_VERSION: u32 = 7; // v7: leaf = suffix nibbles + plaintext key + value
+pub const FORMAT_VERSION: u32 = 8; // v8: +target/max_blob_gas_per_block (see above)
 
 /// File magic prefix (8 bytes): 4 B ASCII `"ZEG0"` + 4 B little-endian
 /// format version, which also keeps the cursor 8-byte aligned for the
@@ -72,13 +78,18 @@ const FORK_OSAKA: u64 = 7;
 ///
 /// `blob_base_fee_update_fraction` is this block's BLOB_BASE_FEE_UPDATE_FRACTION
 /// (per the active blob schedule); also resolved upstream because it varies per
-/// fork / BPO and can't be inferred from the header.
+/// fork / BPO and can't be inferred from the header. `target_blob_gas_per_block`
+/// / `max_blob_gas_per_block` are its siblings — TARGET/MAX_BLOB_GAS_PER_BLOCK
+/// for the same schedule — used by the guest to independently re-derive and
+/// validate excess_blob_gas (EIP-4844 / EIP-7918).
 pub fn write_consensus_info(
     w: &mut Writer,
     current: &Block,
     parent: &Block,
     is_osaka: bool,
     blob_base_fee_update_fraction: u64,
+    target_blob_gas_per_block: u64,
+    max_blob_gas_per_block: u64,
 ) {
     let h = &current.header;
 
@@ -148,8 +159,15 @@ pub fn write_consensus_info(
     };
     w.u64_le(fork_id);
     // 344..352 blob_base_fee_update_fraction (u64-le). 0 ⇒ guest falls back to
-    // the current-mainnet default. End of fixed prefix: 352.
+    // the current-mainnet default.
     w.u64_le(blob_base_fee_update_fraction);
+    // 352..360 target_blob_gas_per_block (u64-le). 0 pre-Cancun / for inputs
+    // that predate this field — the guest gates its use on Cancun-or-later,
+    // there's no mainnet-default fallback (see consensus_info.hpp).
+    w.u64_le(target_blob_gas_per_block);
+    // 360..368 max_blob_gas_per_block (u64-le). Same caveats as
+    // target_blob_gas_per_block above. End of fixed prefix: 368.
+    w.u64_le(max_blob_gas_per_block);
     w.assert_aligned();
 
     // Withdrawal records × 48 B each (EIP-4895).
