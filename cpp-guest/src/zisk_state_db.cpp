@@ -1530,7 +1530,18 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item& auth_item) no
     // y_parity, r, s.
     rlp::ListIter fit{auth_item.payload};
     if (!fit.has_next()) fatal("EIP-7702: auth missing chain_id");
-    const uint64_t a_chain_id = rlp::as_u64(fit.next());
+    // chain_id can be any RLP-scalar-width value (the EIP puts no upper
+    // bound on it), but every real chain id fits in kChainId's uint64_t.
+    // A canonical (leading-zero-trimmed) RLP integer wider than 8 bytes is
+    // therefore guaranteed to be neither 0 nor kChainId — treat it as a
+    // (large) mismatch instead of calling as_u64, which fatals the whole
+    // block on a >8-byte payload (test_valid_tx_invalid_chain_id's
+    // auth_chain_id=2**256-1 case).
+    const rlp::Item chain_id_item = fit.next();
+    const bool chain_id_oversized = chain_id_item.kind == rlp::ItemKind::String
+        && chain_id_item.payload.size() > 8;
+    const uint64_t a_chain_id = chain_id_oversized
+        ? UINT64_MAX : rlp::as_u64(chain_id_item);
     if (!fit.has_next()) fatal("EIP-7702: auth missing address");
     const auto a_addr_item = fit.next();
     if (a_addr_item.kind != rlp::ItemKind::String ||
