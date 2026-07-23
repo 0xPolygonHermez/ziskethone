@@ -287,24 +287,28 @@ size_t ZiskStateDB::copy_code(const evmc::address& addr,
 
 bool ZiskStateDB::selfdestruct(const evmc::address& addr,
                                const evmc::address& beneficiary) noexcept {
-    // EIP-6780 (Cancun) semantics:
-    //   * If the contract was CREATEd earlier in THIS transaction, the
-    //     account is fully destroyed: balance moves to the beneficiary,
-    //     then nonce / code_hash / every storage slot are cleared and
-    //     the leaf disappears from the state trie (`return true`).
-    //   * Otherwise, only the balance is transferred to the beneficiary
-    //     and the account is preserved (`return false`).
+    // Pre-Cancun: SELFDESTRUCT always fully destroys the account —
+    // balance moves to the beneficiary, then nonce / code_hash / every
+    // storage slot are cleared and the leaf disappears from the state
+    // trie (`return true`), unconditionally, regardless of whether the
+    // contract was created this tx.
+    //
+    // EIP-6780 (Cancun) narrows this: full destruction only happens if
+    // the contract was CREATEd earlier in THIS transaction. Otherwise
+    // only the balance is transferred and the account is preserved
+    // (`return false`).
     //
     // All field clears go through the journal so a revert of the
     // surrounding frame restores the contract intact.
     const size_t src_idx = ensure_account(addr);
     const bool same_tx_created = created_this_tx_idx_.count(src_idx) != 0;
+    const bool should_destroy  = is_cancun_or_later() ? same_tx_created : true;
 
     if (addr == beneficiary) {
         // Same-address transfer is a no-op on balance (the two
         // set_balance_at calls below would otherwise overwrite each
         // other and leave the account net-credited).
-        if (same_tx_created) {
+        if (should_destroy) {
             // Defer destruction to end-of-tx per Yellow Paper —
             // see comment on pending_destruct_ in the header.
             const auto [_, inserted] = pending_destruct_.insert(src_idx);
@@ -328,7 +332,7 @@ bool ZiskStateDB::selfdestruct(const evmc::address& addr,
                              tx_counter_);
     accounts_.set_balance_at(src_idx, evmc::uint256be{}, tx_counter_);
 
-    if (same_tx_created) {
+    if (should_destroy) {
         // Defer destruction to end-of-tx per Yellow Paper.
         const auto [_, inserted] = pending_destruct_.insert(src_idx);
         journal_.log_pending_destruct(src_idx, /*was_already_present=*/!inserted);
