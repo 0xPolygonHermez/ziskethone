@@ -409,11 +409,24 @@ void ZiskStateDB::commit_dynamic_storage() noexcept {
 }
 
 void ZiskStateDB::clear_account_for_selfdestruct(size_t src_idx) noexcept {
-    // EIP-6780 full-destroy helper. Caller has already transferred the
-    // balance to the beneficiary (or skipped the transfer for the
-    // self-as-beneficiary edge case). Zero the remaining account fields
-    // and every storage slot — journaled so a frame revert restores
-    // the contract exactly as it was before SELFDESTRUCT.
+    // EIP-6780 full-destroy helper, run once per tx (from
+    // apply_pending_destructs) after the whole top-level frame has
+    // finished — destruction is deferred to end-of-tx, so the account
+    // keeps functioning normally (including receiving further value) in
+    // between its own SELFDESTRUCT call and this point. The original
+    // SELFDESTRUCT call already swept whatever balance existed *at that
+    // moment* to the beneficiary (or skipped it for the self-as-
+    // beneficiary edge case) — but any value the account received
+    // *afterward* (e.g. a plain CALL with value, or another contract's
+    // SELFDESTRUCT naming it beneficiary) never went anywhere and is
+    // still sitting on the account here. A destroyed account can't
+    // survive in the new trie with a nonzero balance (EIP-161 emptiness
+    // requires balance == 0 too, not just nonce/code), so zero it now —
+    // per Yellow Paper / real-client behavior, that late-arriving value
+    // is simply burned, not returned or re-swept.
+    journal_.log_balance(src_idx, accounts_.balance_at(src_idx),
+                         accounts_.last_tx_idx_at(src_idx));
+    accounts_.set_balance_at(src_idx, evmc::uint256be{}, tx_counter_);
 
     // Account fields.
     journal_.log_nonce(src_idx, accounts_.nonce_at(src_idx),
