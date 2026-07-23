@@ -33,7 +33,7 @@ alloy-rpc-types-eth = { version = "=2.0.4", default-features = false, features =
 # inherited from reth's own revm pull (it enables c-kzg / blst /
 # secp256k1 etc.) — listing them redundantly here causes Cargo to
 # attempt to resolve two different links=ckzg crates.
-revm = { version = "=38.0.0", default-features = false, features = ["std"] }
+revm = { version = "=38.0.0", default-features = false, features = ["std", "tracer"] }
 
 # Reth crates needed for the in-memory executor + witness recording.
 # Pulled as git deps because reth isn't on crates.io. Pinning to a
