@@ -969,11 +969,15 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     }
     result.gas_left -= deposit;
 
-    // 5. Register the deployed code on the new account and stamp the
-    //    derived address on the result.
+    // 5. Register the deployed code on the new account. A *successful*
+    //    CREATE/CREATE2 must not propagate the init code's RETURN payload
+    //    as call return-data (only a REVERT's payload does) — build a
+    //    fresh Result with empty output so RETURNDATASIZE reads 0 to the
+    //    caller afterward, matching evmone's own reference Host::create()
+    //    (test/state/host.cpp), which does the same on its success path.
     register_deployed_code(new_addr, result);
-    result.create_address = new_addr;
-    return result;
+    return evmc::Result{result.status_code, result.gas_left, result.gas_refund,
+                        new_addr};
 }
 
 evmc::address ZiskStateDB::derive_create_address(
@@ -1764,7 +1768,10 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
                                    accounts_.code_hash_at(new_idx),
                                    accounts_.last_tx_idx_at(new_idx));
             accounts_.set_code_hash_at(new_idx, deployed_hash, tx_counter_);
-            result.create_address = new_addr;
+            // Don't propagate the init code's RETURN payload as the tx's
+            // output on success — see the matching fix in call_create().
+            return evmc::Result{result.status_code, result.gas_left,
+                                result.gas_refund, new_addr};
         }
         return result;
     }
