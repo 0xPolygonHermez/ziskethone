@@ -932,6 +932,16 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     // 4. Execute the init code with the new address as the recipient.
     evmc_message create_msg = msg;
     create_msg.recipient    = new_addr;
+    // `msg.input_data`/`msg.input_size` hold the init code itself (evmone's
+    // CREATE/CREATE2 message convention — see init_code/init_size above).
+    // The init code's own execution must see EMPTY calldata (CALLDATASIZE
+    // == 0): a CREATE-family message never carries separate constructor
+    // arguments the way a CALL carries calldata. Left uncleared, copying
+    // `msg` verbatim leaked the init-code length as bogus calldata,
+    // matching evmone's own reference Host::create() (test/state/host.cpp),
+    // which does the same `create_msg.input_data = nullptr` clear.
+    create_msg.input_data   = nullptr;
+    create_msg.input_size   = 0;
     // CREATE initcode runs once and its transient bytes aren't a stable cache
     // key, so no pre-analysis (pre == nullptr ⇒ plain execute).
     auto result = evmc::Result{vm2_->execute2(
