@@ -313,7 +313,13 @@ bool ZiskStateDB::selfdestruct(const evmc::address& addr,
             // see comment on pending_destruct_ in the header.
             const auto [_, inserted] = pending_destruct_.insert(src_idx);
             journal_.log_pending_destruct(src_idx, /*was_already_present=*/!inserted);
-            return true;
+            // Only the FIRST selfdestruct of a given address this tx is
+            // "newly destroyed" — evmone grants the (pre-London) 24000
+            // refund only when this returns true, and a repeat
+            // selfdestruct on an address already pending destruction
+            // must not grant it again (matches revm's
+            // `!previously_destroyed` gate).
+            return inserted;
         }
         return false;
     }
@@ -336,7 +342,9 @@ bool ZiskStateDB::selfdestruct(const evmc::address& addr,
         // Defer destruction to end-of-tx per Yellow Paper.
         const auto [_, inserted] = pending_destruct_.insert(src_idx);
         journal_.log_pending_destruct(src_idx, /*was_already_present=*/!inserted);
-        return true;
+        // Only the FIRST selfdestruct of a given address this tx is
+        // "newly destroyed" — see the same-beneficiary branch above.
+        return inserted;
     }
     return false;
 }
