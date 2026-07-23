@@ -307,3 +307,4 @@ There are some bitwise operations that don't depend on indianness (AND, OR, XOR,
 
 ---
 
+Lets try a new optimization strategy. The idea is to have two main loops, one is the current one, and the other is an optimized one where we don't check for nether the gas nor the stack overflow for most of the basic operations. The idea is to enter this loop if we have enought gas to run 1000 basic instructions withoout checking the gas and the stack overflow. When we run low gas or we are close to the stack limit we ether reduce this number or just return the normal loop.   Instructions like momory that can decrease the gas a lot we may chacke the gas there and recompute the number of instructions remaining.

@@ -32,3 +32,6 @@ build/
 # Claude Code (runtime / personal state)
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
+
+# hob (runtime / personal state)
+.hob/
