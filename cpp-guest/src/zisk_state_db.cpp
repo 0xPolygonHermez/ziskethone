@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 #include <intx/intx.hpp>    // 256-bit add for selfdestruct balance transfer
@@ -889,7 +890,20 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     //    create-time increment is the input to the CREATE hash.
     const size_t   sender_idx       = ensure_account(msg.sender);
     const uint64_t sender_nonce_pre = accounts_.nonce_at(sender_idx);
-    const auto     new_addr         =
+
+    // EIP-2681: a CREATE/CREATE2 whose sender's nonce is already at the
+    // u64 max can't bump it (would overflow) and must fail as a "light"
+    // failure — no state touched at all (no address warming, no nonce
+    // change), gas_left unchanged. Matches revm's frame.rs:
+    // `if !caller_info.bump_nonce() { return return_error(...) }`,
+    // checked before the new address is even computed/warmed. Without
+    // this, `sender_nonce_pre + 1` below silently wraps to 0 and the
+    // create proceeds as if nothing were wrong.
+    if (sender_nonce_pre == std::numeric_limits<uint64_t>::max()) {
+        return evmc::Result{EVMC_SUCCESS, msg.gas, 0, nullptr, 0};
+    }
+
+    const auto new_addr =
         derive_create_address(msg, sender_nonce_pre, init_code, init_size);
 
     // 2. Bump sender nonce (journaled).
