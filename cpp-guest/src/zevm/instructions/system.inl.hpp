@@ -130,6 +130,22 @@ bool call_impl(EvmState& s, Regs& R, evmc_call_kind kind, bool has_value, bool s
         R.gas -= ACCOUNT_CREATION;
     }
 
+    // ----- gas: memory expansion for the input and output windows -----
+    // Charged BEFORE the EIP-7702 delegation probe below so a CALL doomed to
+    // OOG on memory expansion never reads the callee's code (copy_code). This
+    // mirrors reth/revm's ordering: a stateless host (debug_executionWitness,
+    // ZK provers) is never required to include bytecode the EVM didn't
+    // materially read. Result-neutral — a CALL OOG is an exceptional halt that
+    // consumes all gas regardless of which check trips it, and a non-OOG call
+    // charges the same total either way. Matches the evmone-backend patch
+    // patches/01-evmone-revm-aligned-call-gas-order.patch.
+    if (mem_expand(R, static_cast<size_t>(in_off), static_cast<size_t>(in_size)) != MemError::Ok) {
+        s.status = EVMC_OUT_OF_GAS; return false;
+    }
+    if (mem_expand(R, static_cast<size_t>(out_off), static_cast<size_t>(out_size)) != MemError::Ok) {
+        s.status = EVMC_OUT_OF_GAS; return false;
+    }
+
     // ----- EIP-7702 (Prague+): resolve a delegated call target -----
     // If the callee's code is a delegation designator (0xef0100 || address), run
     // the delegate's code instead — charging the delegate's EIP-2929 account
@@ -148,14 +164,6 @@ bool call_impl(EvmState& s, Regs& R, evmc_call_kind kind, bool has_value, bool s
             if (R.gas < dcost) { s.status = EVMC_OUT_OF_GAS; return false; }
             R.gas -= dcost;
         }
-    }
-
-    // ----- gas: memory expansion for the input and output windows -----
-    if (mem_expand(R, static_cast<size_t>(in_off), static_cast<size_t>(in_size)) != MemError::Ok) {
-        s.status = EVMC_OUT_OF_GAS; return false;
-    }
-    if (mem_expand(R, static_cast<size_t>(out_off), static_cast<size_t>(out_size)) != MemError::Ok) {
-        s.status = EVMC_OUT_OF_GAS; return false;
     }
 
     // ----- EIP-150 "all but one 64th" cap on the gas passed to the child -----

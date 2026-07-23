@@ -7,9 +7,25 @@
 //   OUTPUT at 0xA0410000 : array of u32 public-output slots (= SYS_ADDR + SYS_SIZE)
 //   UART   at 0xA0400200 : write a byte to print it (debug)  (= SYS_ADDR + 0x200)
 //
-// OUTPUT/UART track the ZisK memory map in `zisk core/src/mem.rs`
-// (RAM_ADDR=0xa0000000, SYS_ADDR=RAM_ADDR+STACK_SIZE(4MB)=0xa0400000,
-//  OUTPUT_ADDR=SYS_ADDR+SYS_SIZE(0x10000)=0xa0410000, UART_ADDR=SYS_ADDR+0x200).
+// OUTPUT/UART track the ZisK memory map in `zisk core/src/mem.rs` as of the
+// pinned pre-develop-1.2.0-alpha toolchain: RAM_ADDR=0xa0000000, and as of
+// commit 004dcadfc ("Move stack to the bottom of the RAM") SYS_ADDR is now
+// genuinely RAM_ADDR+STACK_SIZE(0x400000)=0xa0400000 (matches zisk.ld's
+// `.stack_data` reservation at the bottom of RAM). SYS_SIZE=0x10000, so
+// OUTPUT_ADDR=SYS_ADDR+SYS_SIZE=0xa0410000, UART_ADDR=SYS_ADDR+0x200=
+// 0xa0400200.
+//
+// History, so this doesn't look like a silent flip-flop: on the PRIOR pin
+// (pre-develop-1.0.0-alfa), SYS_ADDR==RAM_ADDR (no stack offset existed
+// yet) — a premature "correction" to these same 0xA0410000/0xA0400200
+// values landed here anyway, silently writing the public output past where
+// ziskemu/hardware ever read it (proving completed, step/cost looked
+// normal, output was all-zero). That was reverted in commit c0f705c, back
+// to 0xA0010000/0xA0000200. The pre-develop-1.2.0-alpha upgrade is what
+// makes the offset real, so these addresses move forward again here —
+// this time verified by actually running the ZisK-target ELF (not just
+// the host build) through ziskemu against a live block and checking the
+// emitted hash, not just step counts.
 //
 // The host (rust-input-gen) writes the block container starting with the
 // `ZEG0` magic; to feed it to ziskemu it is framed as [u64 LE len][payload],

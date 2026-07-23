@@ -29,7 +29,7 @@ namespace zeg {
 
 class ConsensusInfo {
 public:
-    static constexpr uint64_t kFixedPrefixSize      = 352;
+    static constexpr uint64_t kFixedPrefixSize      = 368;
     static constexpr uint64_t kWithdrawalRecordSize = 48;
 
     // Fixed offsets within the 344-byte header prefix. All 8-byte
@@ -70,7 +70,22 @@ public:
     // schedules (mainnet evolves it at each BPO fork). 0 = pre-field input
     // ⇒ guest falls back to the current-mainnet default.
     static constexpr size_t kBlobBaseFeeUpdateFractionOffset = 344;  // u64-le
-    // End of fixed prefix: 352.
+    // EIP-4844/7691/7892 TARGET_BLOB_GAS_PER_BLOCK (target blob count ×
+    // GAS_PER_BLOB), per the block's blob schedule — sibling of
+    // kBlobBaseFeeUpdateFractionOffset above, carried per-block for the
+    // same reason (mainnet evolves it at each BPO fork; EEST forks use
+    // their own canonical schedule). Used to independently re-derive
+    // excess_blob_gas from the parent block and reject a header whose
+    // claimed value doesn't match (EIP-4844 validity — see run.cpp).
+    static constexpr size_t kTargetBlobGasPerBlockOffset = 352;  // u64-le
+    // EIP-4844/7691/7892 MAX_BLOB_GAS_PER_BLOCK (max blob count ×
+    // GAS_PER_BLOB) — sibling of kTargetBlobGasPerBlockOffset above, same
+    // per-block-schedule reason. Needed (alongside the target) for the
+    // EIP-7918 (Osaka+) reserve-price branch of the excess_blob_gas
+    // formula: parent.excess_blob_gas + parent.blob_gas_used *
+    // (max - target) / max — see run.cpp.
+    static constexpr size_t kMaxBlobGasPerBlockOffset    = 360;  // u64-le
+    // End of fixed prefix: 368.
 
     // Zero-copy view over one 48-byte withdrawal record (EIP-4895).
     //
@@ -112,6 +127,17 @@ public:
     // back to the current-mainnet value when the wire field is 0 (older
     // inputs that predate it).
     uint64_t                 blob_base_fee_update_fraction() const noexcept;
+    // TARGET_BLOB_GAS_PER_BLOCK for this block's blob schedule (0 for
+    // pre-Cancun inputs / inputs that predate this field — callers must
+    // gate any use of it on Cancun-or-later, there is no mainnet-default
+    // fallback here unlike blob_base_fee_update_fraction: silently
+    // substituting a guessed schedule would turn a consensus-critical
+    // accept/reject check into an unsound one).
+    uint64_t                 target_blob_gas_per_block() const noexcept;
+    // MAX_BLOB_GAS_PER_BLOCK for this block's blob schedule — see
+    // kMaxBlobGasPerBlockOffset. Same no-fallback caveat as
+    // target_blob_gas_per_block above.
+    uint64_t                 max_blob_gas_per_block  () const noexcept;
     const evmc::bytes32&     requests_hash           () const noexcept;
     const evmc::uint256be&   difficulty              () const noexcept;
     std::span<const uint8_t, 8> nonce                () const noexcept;

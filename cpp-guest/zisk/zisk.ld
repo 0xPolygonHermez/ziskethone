@@ -1,3 +1,8 @@
+/* Verbatim copy of zisk's own ziskbuild/zisk_linker_script.ld, taken from
+ * the pre-develop-1.2.0-alpha pin (commit 4b11d589c). Sourced directly from
+ * upstream instead of hand-maintained, so it can be re-diffed against the
+ * pinned zisk repo on any future toolchain bump. */
+
 OUTPUT_FORMAT("elf64-littleriscv")
 OUTPUT_ARCH("riscv")
 ENTRY(_start)
@@ -31,7 +36,7 @@ _float_ram_data_size         = 0x10000;   /* 64 KB reserved */
              │       (1GB)        │
 0x7FFF_FFFF  └────────────────────┘
 0x8000_0000  ┌────────────────────┐
-             │     ROM data       │             
+             │     ROM data       │
              │      (128MB)       │
 0x87FF_FFFF  └────────────────────┘
                        ↑
@@ -59,7 +64,7 @@ _float_ram_data_size         = 0x10000;   /* 64 KB reserved */
              │                    │
              │                    │
              │                    │
-0xBFFF_0000  ├────────────────────┤ ← _heap_top 
+0xBFFF_0000  ├────────────────────┤ ← _heap_top
              │ float ram          │
 0xC000_0000  └────────────────────┘
 
@@ -104,12 +109,12 @@ SECTIONS
   . = . + _stack_size;
   PROVIDE(_init_stack_top = .); # reserve 4M bytes for the initialisation stack
   } >ram AT>ram :stack_data
-  
+
   /* reserved space for general registers */
 
   .general_registers_data (NOLOAD) : {
     PROVIDE(_general_registers_data_start = .);
-    . = . + _general_registers_data_size; 
+    . = . + _general_registers_data_size;
     PROVIDE(_general_registers_data_end = .);
   } >ram AT>ram :general_registers_data
 
@@ -117,7 +122,7 @@ SECTIONS
 
   .float_registers_data (NOLOAD) : {
     PROVIDE(_float_registers_data_start = .);
-    . = . + _float_registers_data_size; 
+    . = . + _float_registers_data_size;
     PROVIDE(_float_registers_data_end = .);
   } >ram AT>ram :float_registers_data
 
@@ -125,7 +130,7 @@ SECTIONS
 
   .output_data (NOLOAD) : {
     PROVIDE(_output_data_start = .);
-    . = . + _output_data_size; 
+    . = . + _output_data_size;
     PROVIDE(_output_data_end = .);
   } >ram AT>ram :output_data
 

@@ -69,14 +69,18 @@ pub struct PrestateDiff {
 /// `debug_executionWitness`. The cpp-guest consumes `state` directly
 /// (via the StateRoot trie-hint stream); `keys` provides the
 /// keccak-preimage map needed to attribute divergent-sibling MPT
-/// leaves to their addresses/slots; `codes` is currently unused (we
-/// already have bytecodes via the prestate tracer) but kept so future
-/// callers don't need a second RPC.
+/// leaves to their addresses/slots; `codes` supplies the deployed
+/// bytecodes (the Contracts section is built from these); `headers`
+/// carries the RLP-encoded ancestor block headers reth's execution
+/// touched (parent + any deeper `BLOCKHASH` targets) — the source for
+/// the PreviousBlocks section, replacing a per-ancestor RPC walk.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecutionWitness {
     pub state: Vec<Bytes>,
     pub codes: Vec<Bytes>,
     pub keys: Vec<Bytes>,
+    #[serde(default)]
+    pub headers: Vec<Bytes>,
 }
 
 /// Helper: wrap a `B256` block hash as the `BlockId` needed by
@@ -139,17 +143,6 @@ impl Client {
             .await
             .with_context(|| format!("eth_getBlockByNumber({number}, full)"))?
             .ok_or_else(|| anyhow!("block {number} not found"))
-    }
-
-    /// `eth_getBlockByNumber(n, false)` — header + tx hash list. Used to
-    /// fetch the ancestor chain concurrently (see `fetch_ancestor_chain`).
-    /// `Ok(None)` for an unknown/pruned number.
-    pub async fn block_by_number(&self, number: u64) -> Result<Option<Block>> {
-        self.provider
-            .get_block_by_number(BlockNumberOrTag::Number(number))
-            .hashes()
-            .await
-            .with_context(|| format!("eth_getBlockByNumber({number})"))
     }
 
     /// `eth_getBlockByHash(hash, false)` — header + tx hash list.
@@ -416,86 +409,11 @@ impl Client {
             state: decode_hex_array(&v, "state")?,
             codes: decode_hex_array(&v, "codes")?,
             keys: decode_hex_array(&v, "keys")?,
+            // `headers` is reth-specific and optional — absent on nodes that
+            // don't populate it; empty then, and the caller falls back to a
+            // per-ancestor fetch.
+            headers: decode_hex_array_opt(&v, "headers")?,
         })
-    }
-
-    /// Fetch the raw EIP-7910 `eth_config` document. `None` on any RPC
-    /// error so callers degrade to pre-Osaka / default-blob-fee behaviour.
-    /// Fetch once per run and pass the value to `osaka_activation_time`
-    /// and `blob_base_fee_update_fraction_at`, which both read from it.
-    pub async fn eth_config(&self) -> Option<Value> {
-        match self.provider.raw_request("eth_config".into(), ()).await {
-            Ok(v) => Some(v),
-            Err(e) => {
-                warn!(err = %e, "eth_config unavailable");
-                None
-            }
-        }
-    }
-
-    /// Derive whether `config`'s current fork is Osaka-or-later, and if so
-    /// its activation time (a block is Osaka iff its timestamp is `>=` it).
-    ///
-    /// Fork-name-independent: `eth_config` exposes a fork-id *hash*, not a
-    /// name, so we key off the P256VERIFY precompile (EIP-7951, `0x..0100`)
-    /// that Osaka/Fusaka introduces. `None` config / missing precompile ⇒
-    /// pre-Osaka.
-    ///
-    /// Keyed off the *current* fork, so once a post-Osaka fork ships,
-    /// blocks in the Osaka..next window would be misclassified as
-    /// pre-Osaka. Revisit when evmone gains a later revision.
-    pub fn osaka_activation_time(config: Option<&Value>) -> Option<u64> {
-        let Some(v) = config else {
-            return None;
-        };
-        let Some(current) = v.get("current") else {
-            return None;
-        };
-        const P256VERIFY: &str = "0x0000000000000000000000000000000000000100";
-        let has_p256 = current
-            .get("precompiles")
-            .and_then(Value::as_object)
-            .map(|m| m.values().any(|a| a.as_str() == Some(P256VERIFY)))
-            .unwrap_or(false);
-        if !has_p256 {
-            return None;
-        }
-        parse_u64(current.get("activationTime"))
-    }
-
-    /// Resolve BLOB_BASE_FEE_UPDATE_FRACTION for a block at `timestamp` from
-    /// `config`'s blob schedule: pick the `last`/`current`/`next` fork entry
-    /// with the greatest `activationTime <= timestamp` (falling back to
-    /// `current`). `None` ⇒ the guest uses its current-mainnet default.
-    pub fn blob_base_fee_update_fraction_at(config: Option<&Value>, timestamp: u64) -> Option<u64> {
-        let Some(v) = config else {
-            return None;
-        };
-        let fraction_of = |entry: &Value| -> Option<u64> {
-            parse_u64(
-                entry
-                    .get("blobSchedule")
-                    .and_then(|b| b.get("baseFeeUpdateFraction")),
-            )
-        };
-        // Pick the entry with the largest activationTime <= timestamp.
-        let mut best: Option<(u64, u64)> = None; // (activationTime, fraction)
-        for key in ["last", "current", "next"] {
-            let Some(entry) = v.get(key) else { continue };
-            let (Some(act), Some(frac)) =
-                (parse_u64(entry.get("activationTime")), fraction_of(entry))
-            else {
-                continue;
-            };
-            if act <= timestamp && best.map(|(a, _)| act >= a).unwrap_or(true) {
-                best = Some((act, frac));
-            }
-        }
-        if let Some((_, frac)) = best {
-            return Some(frac);
-        }
-        // None active yet at this timestamp — fall back to `current`'s schedule.
-        v.get("current").and_then(fraction_of)
     }
 
     /// Fetch the node's chain id (`eth_chainId`).
@@ -532,6 +450,15 @@ impl Client {
                     },
                 )
             })
+    }
+}
+
+/// Like `decode_hex_array` but returns an empty Vec when the field is
+/// absent or null (rather than erroring). For optional witness fields.
+fn decode_hex_array_opt(v: &Value, field: &'static str) -> Result<Vec<Bytes>> {
+    match v.get(field) {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(_) => decode_hex_array(v, field),
     }
 }
 

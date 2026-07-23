@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 #include <intx/intx.hpp>    // 256-bit add for selfdestruct balance transfer
@@ -287,30 +288,50 @@ size_t ZiskStateDB::copy_code(const evmc::address& addr,
 
 bool ZiskStateDB::selfdestruct(const evmc::address& addr,
                                const evmc::address& beneficiary) noexcept {
-    // EIP-6780 (Cancun) semantics:
-    //   * If the contract was CREATEd earlier in THIS transaction, the
-    //     account is fully destroyed: balance moves to the beneficiary,
-    //     then nonce / code_hash / every storage slot are cleared and
-    //     the leaf disappears from the state trie (`return true`).
-    //   * Otherwise, only the balance is transferred to the beneficiary
-    //     and the account is preserved (`return false`).
+    // Pre-Cancun: SELFDESTRUCT always fully destroys the account —
+    // balance moves to the beneficiary, then nonce / code_hash / every
+    // storage slot are cleared and the leaf disappears from the state
+    // trie (`return true`), unconditionally, regardless of whether the
+    // contract was created this tx.
+    //
+    // EIP-6780 (Cancun) narrows this: full destruction only happens if
+    // the contract was CREATEd earlier in THIS transaction. Otherwise
+    // only the balance is transferred and the account is preserved
+    // (`return false`).
     //
     // All field clears go through the journal so a revert of the
     // surrounding frame restores the contract intact.
     const size_t src_idx = ensure_account(addr);
     const bool same_tx_created = created_this_tx_idx_.count(src_idx) != 0;
+    const bool should_destroy  = is_cancun_or_later() ? same_tx_created : true;
 
     if (addr == beneficiary) {
-        // Same-address transfer is a no-op on balance (the two
-        // set_balance_at calls below would otherwise overwrite each
-        // other and leave the account net-credited).
-        if (same_tx_created) {
+        if (should_destroy) {
+            // A same-tx-created contract that self-destructs to itself
+            // still burns its balance immediately (it never reaches the
+            // beneficiary since there isn't a distinct one) — matches
+            // revm's journal `selfdestruct()`: the source's balance is
+            // unconditionally zeroed whenever `should_destroy` is true,
+            // regardless of whether target == address; only the truly
+            // no-op case (should_destroy == false, self-beneficiary) skips
+            // the balance write entirely.
+            journal_.log_balance(src_idx, accounts_.balance_at(src_idx),
+                                 accounts_.last_tx_idx_at(src_idx));
+            accounts_.set_balance_at(src_idx, evmc::uint256be{}, tx_counter_);
             // Defer destruction to end-of-tx per Yellow Paper —
             // see comment on pending_destruct_ in the header.
             const auto [_, inserted] = pending_destruct_.insert(src_idx);
             journal_.log_pending_destruct(src_idx, /*was_already_present=*/!inserted);
-            return true;
+            // Only the FIRST selfdestruct of a given address this tx is
+            // "newly destroyed" — evmone grants the (pre-London) 24000
+            // refund only when this returns true, and a repeat
+            // selfdestruct on an address already pending destruction
+            // must not grant it again (matches revm's
+            // `!previously_destroyed` gate).
+            return inserted;
         }
+        // should_destroy == false, self-beneficiary: true no-op, balance
+        // stays exactly as-is (matches revm's `else { None }` branch).
         return false;
     }
 
@@ -328,11 +349,13 @@ bool ZiskStateDB::selfdestruct(const evmc::address& addr,
                              tx_counter_);
     accounts_.set_balance_at(src_idx, evmc::uint256be{}, tx_counter_);
 
-    if (same_tx_created) {
+    if (should_destroy) {
         // Defer destruction to end-of-tx per Yellow Paper.
         const auto [_, inserted] = pending_destruct_.insert(src_idx);
         journal_.log_pending_destruct(src_idx, /*was_already_present=*/!inserted);
-        return true;
+        // Only the FIRST selfdestruct of a given address this tx is
+        // "newly destroyed" — see the same-beneficiary branch above.
+        return inserted;
     }
     return false;
 }
@@ -386,11 +409,24 @@ void ZiskStateDB::commit_dynamic_storage() noexcept {
 }
 
 void ZiskStateDB::clear_account_for_selfdestruct(size_t src_idx) noexcept {
-    // EIP-6780 full-destroy helper. Caller has already transferred the
-    // balance to the beneficiary (or skipped the transfer for the
-    // self-as-beneficiary edge case). Zero the remaining account fields
-    // and every storage slot — journaled so a frame revert restores
-    // the contract exactly as it was before SELFDESTRUCT.
+    // EIP-6780 full-destroy helper, run once per tx (from
+    // apply_pending_destructs) after the whole top-level frame has
+    // finished — destruction is deferred to end-of-tx, so the account
+    // keeps functioning normally (including receiving further value) in
+    // between its own SELFDESTRUCT call and this point. The original
+    // SELFDESTRUCT call already swept whatever balance existed *at that
+    // moment* to the beneficiary (or skipped it for the self-as-
+    // beneficiary edge case) — but any value the account received
+    // *afterward* (e.g. a plain CALL with value, or another contract's
+    // SELFDESTRUCT naming it beneficiary) never went anywhere and is
+    // still sitting on the account here. A destroyed account can't
+    // survive in the new trie with a nonzero balance (EIP-161 emptiness
+    // requires balance == 0 too, not just nonce/code), so zero it now —
+    // per Yellow Paper / real-client behavior, that late-arriving value
+    // is simply burned, not returned or re-swept.
+    journal_.log_balance(src_idx, accounts_.balance_at(src_idx),
+                         accounts_.last_tx_idx_at(src_idx));
+    accounts_.set_balance_at(src_idx, evmc::uint256be{}, tx_counter_);
 
     // Account fields.
     journal_.log_nonce(src_idx, accounts_.nonce_at(src_idx),
@@ -557,20 +593,18 @@ evmc::bytes32 ZiskStateDB::get_block_hash(int64_t block_number) const noexcept {
     if (diff < 1 || diff > 256) {
         return {};
     }
-    // PreviousBlocks[0] is the parent; PreviousBlocks[i] is the (i+1)-th
-    // ancestor. The recomputed hash array carries each block's true
-    // execution-layer hash (RLP+keccak over the canonical header), so
-    // depth d directly maps to index d-1. Out-of-range (prover didn't
-    // ship that ancestor) = zero, matching the EVM convention.
+    // The ancestor set is SPARSE (only the blocks the witness referenced), so
+    // resolve by block number, not positionally. A missing ancestor yields
+    // zero — correct, since the witness ships every depth the block asks for.
     //
-    // NB: consensus.parent_hash() is the parent's STATE_ROOT in this
-    // guest's binary format (used as the pre-execution root anchor),
-    // NOT the parent's block hash — never use it for BLOCKHASH.
-    const size_t idx = static_cast<size_t>(diff - 1);
-    if (idx >= previous_blocks_.size()) {
-        return {};
+    // NB: consensus.parent_hash() is the parent's STATE_ROOT in this guest's
+    // binary format (the pre-execution root anchor), NOT the parent's block
+    // hash — never use it for BLOCKHASH.
+    const uint64_t target = static_cast<uint64_t>(block_number);
+    if (const evmc::bytes32* h = previous_blocks_.hash_of_number(target)) {
+        return *h;
     }
-    return previous_blocks_.hash(idx);
+    return {};
 }
 
 void ZiskStateDB::emit_log(const evmc::address& addr,
@@ -803,6 +837,25 @@ size_t ZiskStateDB::ensure_account(const evmc::address& addr) noexcept {
     // No journal entry is needed for the append itself: a frame revert
     // restores the fields to empty via their own journal logs, rendering the
     // row non-existent again (the now-empty row is harmless).
+    //
+    // EXCEPTION: a non-empty, preimage-less account (a CREATE2 target funded
+    // in a prior block, or simply a real contract the tracer never touched)
+    // exists only as an Op::PhantomLeaf — its fields are in the trie, not
+    // this table. StateRoot recorded keccak(addr) -> {nonce, balance,
+    // code_hash}; if this address matches, seed the row's ORIGINAL from it
+    // so any touch here (a CREATE preserving pre-existing funds, or merely an
+    // EIP-2929 access-warm probe that never mutates the account) reflects the
+    // REAL pre-state fields instead of silently reverting to an empty
+    // account. Seeding the ORIGINAL (not just current) is load-bearing: the
+    // new-root pass supersedes the phantom leaf only when original != empty,
+    // which requires the original to reflect the true pre-state fields —
+    // and a probe that never mutates the row leaves current == original, so
+    // the resurrected leaf rebuilds to the exact same RLP/hash as the
+    // phantom it replaces.
+    const evmc::bytes32 addr_hash = keccak256_bytes32(addr.bytes, sizeof(addr.bytes));
+    if (const Accounts::PhantomAccount* ph = accounts_.phantom_account(addr_hash)) {
+        return accounts_.append(addr, ph->nonce, ph->balance, ph->code_hash);
+    }
     return accounts_.append(addr, 0, evmc::uint256be{}, EMPTY_CODE_HASH);
 }
 
@@ -850,13 +903,41 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     //    create-time increment is the input to the CREATE hash.
     const size_t   sender_idx       = ensure_account(msg.sender);
     const uint64_t sender_nonce_pre = accounts_.nonce_at(sender_idx);
-    const auto     new_addr         =
+
+    // EIP-2681: a CREATE/CREATE2 whose sender's nonce is already at the
+    // u64 max can't bump it (would overflow) and must fail as a "light"
+    // failure — no state touched at all (no address warming, no nonce
+    // change), gas_left unchanged. Matches revm's frame.rs:
+    // `if !caller_info.bump_nonce() { return return_error(...) }`,
+    // checked before the new address is even computed/warmed. Without
+    // this, `sender_nonce_pre + 1` below silently wraps to 0 and the
+    // create proceeds as if nothing were wrong.
+    if (sender_nonce_pre == std::numeric_limits<uint64_t>::max()) {
+        return evmc::Result{EVMC_SUCCESS, msg.gas, 0, nullptr, 0};
+    }
+
+    const auto new_addr =
         derive_create_address(msg, sender_nonce_pre, init_code, init_size);
 
     // 2. Bump sender nonce (journaled).
     journal_.log_nonce(sender_idx, sender_nonce_pre,
                        accounts_.last_tx_idx_at(sender_idx));
     accounts_.set_nonce_at(sender_idx, sender_nonce_pre + 1, tx_counter_);
+
+    // EIP-2929: the new contract address is added to accessed_addresses
+    // as part of looking it up for the collision check below — warmed
+    // unconditionally, regardless of whether the create then succeeds
+    // or fails (collision, init-code revert/OOG, EIP-2 deposit OOG).
+    // Journaled *before* `cp_after_bump` (see note below) so the
+    // warmth survives a local CREATE-internal failure, mirroring how
+    // the sender-nonce bump does. EIP-6780 same-tx-destruct
+    // eligibility is intentionally NOT granted here — that only
+    // applies to a successfully created account (see step 3 below).
+    const size_t na_idx = ensure_account(new_addr);
+    if (!accounts_.is_warm_at(na_idx, tx_counter_)) {
+        journal_.log_account_warm(na_idx, accounts_.last_tx_idx_at(na_idx));
+    }
+    accounts_.mark_touched_at(na_idx, tx_counter_);
 
     // 2'. Per EVM spec (post-EIP-161 / EIP-684), the sender's nonce
     //     bump above persists through every CREATE-internal failure
@@ -867,7 +948,9 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     //     so an outer-frame revert (parent CALL/CREATE reverts, tx
     //     reverts) correctly unbumps. Miss-handled previously: block
     //     25199793 tx 337 — CREATE -> inner CREATE2 that failed left
-    //     the inner-CREATE2 sender's nonce at 1 instead of 2.
+    //     the inner-CREATE2 sender's nonce at 1 instead of 2. The
+    //     address-warming above is anchored the same way, for the
+    //     same reason (fixture CreateAddressWarmAfterFail.json).
     const auto cp_after_bump = checkpoint();
 
     // 3. EIP-684 collision check + initialize the new account (nonce
@@ -877,26 +960,25 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
         return evmc::Result{EVMC_FAILURE, 0, 0, nullptr, 0};
     }
 
-    // EIP-2929: the new contract address is added to accessed_addresses
-    // at creation time, so subsequent EXTCODE*/CALL on it within this
-    // tx is WARM (100 gas) rather than COLD (2600 gas). Journaled —
-    // if the surrounding frame reverts, the warming is undone.
     // EIP-6780: mark the new index as "created this tx" so a later
     // SELFDESTRUCT from this contract fully destroys it (instead of
-    // just transferring balance).
-    {
-        const size_t na_idx = accounts_.index_of(new_addr);
-        if (!accounts_.is_warm_at(na_idx, tx_counter_)) {
-            journal_.log_account_warm(na_idx,
-                                      accounts_.last_tx_idx_at(na_idx));
-        }
-        accounts_.mark_touched_at(na_idx, tx_counter_);
-        created_this_tx_idx_.insert(na_idx);
-    }
+    // just transferring balance). Success-only — unlike the warming
+    // above, this must NOT survive a failed create.
+    created_this_tx_idx_.insert(na_idx);
 
     // 4. Execute the init code with the new address as the recipient.
     evmc_message create_msg = msg;
     create_msg.recipient    = new_addr;
+    // `msg.input_data`/`msg.input_size` hold the init code itself (evmone's
+    // CREATE/CREATE2 message convention — see init_code/init_size above).
+    // The init code's own execution must see EMPTY calldata (CALLDATASIZE
+    // == 0): a CREATE-family message never carries separate constructor
+    // arguments the way a CALL carries calldata. Left uncleared, copying
+    // `msg` verbatim leaked the init-code length as bogus calldata,
+    // matching evmone's own reference Host::create() (test/state/host.cpp),
+    // which does the same `create_msg.input_data = nullptr` clear.
+    create_msg.input_data   = nullptr;
+    create_msg.input_size   = 0;
     // CREATE initcode runs once and its transient bytes aren't a stable cache
     // key, so no pre-analysis (pre == nullptr ⇒ plain execute).
     auto result = evmc::Result{vm2_->execute2(
@@ -905,6 +987,22 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     if (result.status_code != EVMC_SUCCESS) {
         rollback(cp_after_bump);
         return result;
+    }
+
+    // EIP-170 (Spurious Dragon): deployed code cannot exceed
+    // MAX_CODE_SIZE (24576 B). Checked BEFORE EIP-3541 below, matching
+    // reth/geth's ordering. Every fork this guest targets (Berlin+)
+    // postdates Spurious Dragon, so no fork gate is needed. On failure
+    // all gas allocated to this CREATE is burned (gas_left=0) rather
+    // than only refusing the per-byte deposit cost — the create-vs-OOG
+    // gap this closes: codesizeOOGInvalidSize, createCodeSizeLimit,
+    // create2CodeSizeLimit, CreateAddressWarmAfterFail's *_code_too_big
+    // cases, createLargeResult's *_RETURN_HUGE/TOOBIG cases, and
+    // CREATE_ContractRETURNBigOffset.
+    constexpr size_t kMaxCodeSize = 24576;
+    if (result.output_size > kMaxCodeSize) {
+        rollback(cp_after_bump);
+        return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0};
     }
 
     // EIP-3541 (London): contracts cannot have deployed code that
@@ -934,11 +1032,15 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     }
     result.gas_left -= deposit;
 
-    // 5. Register the deployed code on the new account and stamp the
-    //    derived address on the result.
+    // 5. Register the deployed code on the new account. A *successful*
+    //    CREATE/CREATE2 must not propagate the init code's RETURN payload
+    //    as call return-data (only a REVERT's payload does) — build a
+    //    fresh Result with empty output so RETURNDATASIZE reads 0 to the
+    //    caller afterward, matching evmone's own reference Host::create()
+    //    (test/state/host.cpp), which does the same on its success path.
     register_deployed_code(new_addr, result);
-    result.create_address = new_addr;
-    return result;
+    return evmc::Result{result.status_code, result.gas_left, result.gas_refund,
+                        new_addr};
 }
 
 evmc::address ZiskStateDB::derive_create_address(
@@ -955,14 +1057,30 @@ evmc::address ZiskStateDB::derive_create_address(
                                    init_code, init_size);
 }
 
+bool ZiskStateDB::address_has_storage(const evmc::address& addr) const noexcept {
+    for (size_t i : storages_.slots_of(addr)) {
+        if (!is_zero_value(storages_.value_at(i))) return true;
+    }
+    const auto& outer = dynamic_storage_.entries();
+    const auto  it     = outer.find(addr);
+    if (it != outer.end()) {
+        for (const auto& [pos, slot] : it->second) {
+            if (!is_zero_value(slot.value)) return true;
+        }
+    }
+    return false;
+}
+
 bool ZiskStateDB::init_create_account(const evmc::address& new_addr,
                                       const evmc_message&  msg) noexcept {
-    // EIP-684 collision check. The address may have no witness row (a
-    // brand-new contract address) — `ensure_account` appends an empty row
-    // for it. It must look empty (nonce == 0 and code_hash == EMPTY).
+    // EIP-684 collision check (EIP-7610 clarifies storage also counts).
+    // The address may have no witness row (a brand-new contract address)
+    // — `ensure_account` appends an empty row for it. It must look empty
+    // (nonce == 0, code_hash == EMPTY, and no non-zero storage slots).
     const size_t new_idx = ensure_account(new_addr);
     if (accounts_.nonce_at(new_idx) != 0 ||
-        accounts_.code_hash_at(new_idx) != EMPTY_CODE_HASH) {
+        accounts_.code_hash_at(new_idx) != EMPTY_CODE_HASH ||
+        address_has_storage(new_addr)) {
         return false;
     }
 
@@ -1025,7 +1143,15 @@ void ZiskStateDB::pre_execute_block() noexcept {
         ctx.block_number      = static_cast<int64_t>(consensus_.number());
         ctx.block_timestamp   = static_cast<int64_t>(consensus_.timestamp());
         ctx.block_gas_limit   = static_cast<int64_t>(consensus_.gas_limit());
-        ctx.block_prev_randao = consensus_.prev_randao();
+        // EIP-4399 (Paris): opcode 0x44 (DIFFICULTY pre-Paris, PREVRANDAO
+        // Paris+) reads this same tx_context field either way — the HOST
+        // decides which ConsensusInfo value it holds. Pre-Paris blocks
+        // must see the real PoW difficulty; using prev_randao() there
+        // returns an unrelated field's bytes (mixHash-shaped, not the
+        // difficulty), which corrupted any test scanning the DIFFICULTY
+        // opcode's raw output (test_scenarios' DIFFICULTY_debug cluster).
+        ctx.block_prev_randao = is_paris_or_later() ? consensus_.prev_randao()
+                                                     : consensus_.difficulty();
         ctx.chain_id          = intx::be::store<evmc::uint256be>(
                                     intx::uint256{kChainId});
         ctx.block_base_fee    = consensus_.base_fee_per_gas();
@@ -1143,6 +1269,7 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         // made inside the checkpoint (value transfer, EVM writes) are
         // undone if the frame fails.
         const auto cp     = checkpoint();
+        std::fprintf(stderr, "TX %zu START\n", i);
         auto       result = execute_top_level_frame(tx, sender_idx, intrinsic_gas);
         if (result.status_code != EVMC_SUCCESS) {
             rollback(cp);
@@ -1181,7 +1308,9 @@ void ZiskStateDB::pre_warm_for_tx(const Transactions::View& tx) noexcept {
 
     // tx.origin (EIP-2929) + coinbase (EIP-3651, Shanghai+) + tx.to.
     warm_addr(tx.sender());
-    warm_addr(consensus_.beneficiary());
+    if (is_shanghai_or_later()) {
+        warm_addr(consensus_.beneficiary());
+    }
     if (tx.to() != nullptr) {
         warm_addr(*tx.to());
     }
@@ -1417,7 +1546,18 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item& auth_item) no
     // y_parity, r, s.
     rlp::ListIter fit{auth_item.payload};
     if (!fit.has_next()) fatal("EIP-7702: auth missing chain_id");
-    const uint64_t a_chain_id = rlp::as_u64(fit.next());
+    // chain_id can be any RLP-scalar-width value (the EIP puts no upper
+    // bound on it), but every real chain id fits in kChainId's uint64_t.
+    // A canonical (leading-zero-trimmed) RLP integer wider than 8 bytes is
+    // therefore guaranteed to be neither 0 nor kChainId — treat it as a
+    // (large) mismatch instead of calling as_u64, which fatals the whole
+    // block on a >8-byte payload (test_valid_tx_invalid_chain_id's
+    // auth_chain_id=2**256-1 case).
+    const rlp::Item chain_id_item = fit.next();
+    const bool chain_id_oversized = chain_id_item.kind == rlp::ItemKind::String
+        && chain_id_item.payload.size() > 8;
+    const uint64_t a_chain_id = chain_id_oversized
+        ? UINT64_MAX : rlp::as_u64(chain_id_item);
     if (!fit.has_next()) fatal("EIP-7702: auth missing address");
     const auto a_addr_item = fit.next();
     if (a_addr_item.kind != rlp::ItemKind::String ||
@@ -1623,10 +1763,25 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
         const auto entry_code = tx.data();
 
         const size_t new_idx = ensure_account(new_addr);
-        // EIP-684 collision: if the target already has a nonce or
-        // code, the CREATE fails with all gas consumed.
+        // EIP-2929: newly-created contract is added to the access list
+        // as part of looking it up for the collision check below —
+        // warmed unconditionally, regardless of whether the create
+        // then succeeds or fails, mirroring the nested-CREATE path
+        // (call_create). Journaled for consistency, though at top
+        // level there's no enclosing checkpoint to roll back to, so
+        // the entry is unused either way.
+        if (!accounts_.is_warm_at(new_idx, tx_counter_)) {
+            journal_.log_account_warm(new_idx,
+                                      accounts_.last_tx_idx_at(new_idx));
+        }
+        accounts_.mark_touched_at(new_idx, tx_counter_);
+
+        // EIP-684 collision (EIP-7610 clarifies storage also counts):
+        // if the target already has a nonce, code, or non-zero storage,
+        // the CREATE fails with all gas consumed.
         if (accounts_.nonce_at(new_idx) != 0 ||
-            accounts_.code_hash_at(new_idx) != EMPTY_CODE_HASH) {
+            accounts_.code_hash_at(new_idx) != EMPTY_CODE_HASH ||
+            address_has_storage(new_addr)) {
             return evmc::Result{EVMC_FAILURE, 0, 0, nullptr, 0};
         }
 
@@ -1639,17 +1794,8 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
             transfer_value(msg.sender, new_addr, msg.value);
         }
 
-        // EIP-2929: newly-created contract is added to the access list.
-        // Journaled for consistency with the nested-CREATE path; at
-        // top level there's no enclosing checkpoint to roll back, so
-        // the entry is unused — but emitting it keeps the invariant
-        // "every warming inside a frame is journaled" uniform.
         // EIP-6780: mark for full-destroy on same-tx SELFDESTRUCT.
-        if (!accounts_.is_warm_at(new_idx, tx_counter_)) {
-            journal_.log_account_warm(new_idx,
-                                      accounts_.last_tx_idx_at(new_idx));
-        }
-        accounts_.mark_touched_at(new_idx, tx_counter_);
+        // Success-only — the create has now passed the collision check.
         created_this_tx_idx_.insert(new_idx);
 
         auto result = evmc::Result{vm2_->execute2(
@@ -1658,6 +1804,16 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
             nullptr)};
 
         if (result.status_code == EVMC_SUCCESS) {
+            // EIP-170 (Spurious Dragon): deployed code cannot exceed
+            // MAX_CODE_SIZE (24576 B) — top-level CREATE tx must also
+            // enforce this, mirroring the matching check in
+            // call_create(). All gas is burned on failure, not just
+            // the per-byte deposit refused.
+            constexpr size_t kMaxCodeSize = 24576;
+            if (result.output_size > kMaxCodeSize) {
+                return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0};
+            }
+
             // EIP-3541 (London): reject deployed code starting with
             // 0xef. EIP-7702 reinforces this for the delegation prefix
             // 0xef0100 specifically — top-level CREATE tx must also
@@ -1704,7 +1860,10 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
                                    accounts_.code_hash_at(new_idx),
                                    accounts_.last_tx_idx_at(new_idx));
             accounts_.set_code_hash_at(new_idx, deployed_hash, tx_counter_);
-            result.create_address = new_addr;
+            // Don't propagate the init code's RETURN payload as the tx's
+            // output on success — see the matching fix in call_create().
+            return evmc::Result{result.status_code, result.gas_left,
+                                result.gas_refund, new_addr};
         }
         return result;
     }
@@ -1774,11 +1933,13 @@ uint64_t ZiskStateDB::settle_tx_gas(const Transactions::View& tx,
                                     int64_t                   auth_refund) noexcept {
     // result.gas_left is what remains of `msg.gas` (already net of
     // intrinsic). Total tx gas used is gas_limit − gas_left. EIP-3529
-    // (London+): refund is capped at gas_used / 5.
+    // (London+) halved the refund cap from gas_used/2 to gas_used/5;
+    // pre-London forks (Frontier..Berlin) still use the original /2.
     const int64_t gas_left      = result.gas_left;
     const int64_t gas_used_pre  =
         static_cast<int64_t>(tx.gas_limit()) - gas_left;
-    const int64_t max_refund    = gas_used_pre / 5;
+    const int64_t max_refund    =
+        gas_used_pre / (is_london_or_later() ? 5 : 2);
     // EVM-level refund (storage clears, etc.) plus EIP-7702 auth-list
     // refund (12500 per pre-existing signer). Both are subject to the
     // same EIP-3529 cap.

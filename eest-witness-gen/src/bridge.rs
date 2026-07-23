@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use alloy_consensus::BlockHeader as _;
 use alloy_eips::eip2718::{Decodable2718, Encodable2718};
+use alloy_eips::eip4844::DATA_GAS_PER_BLOB;
 use alloy_primitives::{Address, B256, U256};
 use anyhow::Result;
 use reth_ethereum_primitives::Block as RethBlock;
@@ -268,6 +269,20 @@ pub fn manifests_for_fixture(
             blob_base_fee_update_fraction: chain_spec
                 .blob_params_at_timestamp(exec.block.header().timestamp())
                 .map(|p| p.update_fraction as u64)
+                .unwrap_or(0),
+            // TARGET_BLOB_GAS_PER_BLOCK from the same BlobParams lookup —
+            // target_blob_count × GAS_PER_BLOB. 0 if the fork has no blob
+            // schedule (pre-Cancun) → guest skips the excess_blob_gas check.
+            target_blob_gas_per_block: chain_spec
+                .blob_params_at_timestamp(exec.block.header().timestamp())
+                .map(|p| p.target_blob_count * DATA_GAS_PER_BLOB)
+                .unwrap_or(0),
+            // MAX_BLOB_GAS_PER_BLOCK from the same BlobParams lookup —
+            // max_blob_count × GAS_PER_BLOB. Needed alongside the target for
+            // the EIP-7918 (Osaka+) reserve-price branch.
+            max_blob_gas_per_block: chain_spec
+                .blob_params_at_timestamp(exec.block.header().timestamp())
+                .map(|p| p.max_blob_count * DATA_GAS_PER_BLOB)
                 .unwrap_or(0),
         });
 

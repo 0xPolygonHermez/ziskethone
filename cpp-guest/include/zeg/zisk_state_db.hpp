@@ -270,6 +270,12 @@ private:
     bool init_create_account(const evmc::address& new_addr,
                              const evmc_message&  msg) noexcept;
 
+    // EIP-7610: true iff `addr` has any non-zero storage slot (static
+    // witness table or the per-tx dynamic scratchpad). An address with
+    // nonce==0 and empty code but non-empty storage (a leftover
+    // "phantom" leaf) must still block CREATE/CREATE2.
+    bool address_has_storage(const evmc::address& addr) const noexcept;
+
     // EIP-6780 helper: zero nonce + code_hash and clear every storage
     // slot of `src_idx`. Caller (`selfdestruct`) has already moved the
     // balance to the beneficiary. All clears are journaled.
@@ -344,6 +350,24 @@ private:
     // test_contract_creation_transaction.
     bool is_shanghai_or_later() const noexcept {
         return active_revision() >= EVMC_SHANGHAI;
+    }
+
+    // EIP-3529 (London) halved the gas-refund cap from gas_used/2 to
+    // gas_used/5 (and dropped the SSTORE clear refund from 15000 to
+    // 4800, and the SELFDESTRUCT refund to 0 — both already handled by
+    // evmone itself, fork-gated on `state.rev`). Pre-London blocks
+    // (Frontier..Berlin) still use the original /2 cap in settle_tx_gas.
+    bool is_london_or_later() const noexcept {
+        return active_revision() >= EVMC_LONDON;
+    }
+
+    // EIP-4399 (Paris/the Merge) repurposes opcode 0x44 from DIFFICULTY
+    // to PREVRANDAO — same evmc_tx_context::block_prev_randao field, but
+    // pre-Paris it must hold the block's PoW difficulty, not its
+    // (nonexistent) randomness value. Gates pre_execute_block's choice
+    // of which ConsensusInfo field to stamp into the tx_context.
+    bool is_paris_or_later() const noexcept {
+        return active_revision() >= EVMC_PARIS;
     }
 
     // ----- Per-tx pipeline (called in this order by process_transactions) -----

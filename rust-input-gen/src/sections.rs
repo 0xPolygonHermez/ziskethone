@@ -13,11 +13,17 @@ use alloy::rpc::types::{Block, BlockTransactions};
 use anyhow::Result;
 use sha3::{Digest, Keccak256};
 
-use crate::rpc::{Prestate, PrestateDiff};
+use crate::rpc::{ExecutionWitness, Prestate, PrestateDiff};
 use crate::writer::Writer;
 
 /// On-wire format version, written in the 4 bytes after the magic.
 /// Must match the guest's `kVersion` in `cpp-guest/include/zeg/binary_format.hpp`.
+/// v8: ConsensusInfo prefix +16 B — adds target_blob_gas_per_block and
+/// max_blob_gas_per_block (u64-le at offsets 352 and 360) so the guest can
+/// independently re-derive excess_blob_gas (EIP-4844, plus the EIP-7918
+/// reserve-price branch at Osaka+) from the parent block instead of trusting
+/// the header's claimed value (siblings of blob_base_fee_update_fraction
+/// below, for the same per-block-schedule reason).
 /// v6: no more secp256k1 pubkey hints — the per-tx 64 B sender pubkey and the
 /// Type-4 per-authorization 64 B pubkeys are gone; the guest recovers every
 /// signer itself via ecrecover (fp_sqrt-fcall accelerated on ZisK).
@@ -35,7 +41,7 @@ use crate::writer::Writer;
 /// derives read-only-ness dynamically (original == current).
 /// v1: StateRoot `Op::Leaf` carries no index (keccak-sorted tables +
 /// counter-derived index in the guest).
-pub const FORMAT_VERSION: u32 = 6;
+pub const FORMAT_VERSION: u32 = 8; // v8: +target/max_blob_gas_per_block (see above)
 
 /// File magic prefix (8 bytes): 4 B ASCII `"ZEG0"` + 4 B little-endian
 /// format version, which also keeps the cursor 8-byte aligned for the
@@ -72,13 +78,18 @@ const FORK_OSAKA: u64 = 7;
 ///
 /// `blob_base_fee_update_fraction` is this block's BLOB_BASE_FEE_UPDATE_FRACTION
 /// (per the active blob schedule); also resolved upstream because it varies per
-/// fork / BPO and can't be inferred from the header.
+/// fork / BPO and can't be inferred from the header. `target_blob_gas_per_block`
+/// / `max_blob_gas_per_block` are its siblings — TARGET/MAX_BLOB_GAS_PER_BLOCK
+/// for the same schedule — used by the guest to independently re-derive and
+/// validate excess_blob_gas (EIP-4844 / EIP-7918).
 pub fn write_consensus_info(
     w: &mut Writer,
     current: &Block,
     parent: &Block,
     is_osaka: bool,
     blob_base_fee_update_fraction: u64,
+    target_blob_gas_per_block: u64,
+    max_blob_gas_per_block: u64,
 ) {
     let h = &current.header;
 
@@ -148,8 +159,15 @@ pub fn write_consensus_info(
     };
     w.u64_le(fork_id);
     // 344..352 blob_base_fee_update_fraction (u64-le). 0 ⇒ guest falls back to
-    // the current-mainnet default. End of fixed prefix: 352.
+    // the current-mainnet default.
     w.u64_le(blob_base_fee_update_fraction);
+    // 352..360 target_blob_gas_per_block (u64-le). 0 pre-Cancun / for inputs
+    // that predate this field — the guest gates its use on Cancun-or-later,
+    // there's no mainnet-default fallback (see consensus_info.hpp).
+    w.u64_le(target_blob_gas_per_block);
+    // 360..368 max_blob_gas_per_block (u64-le). Same caveats as
+    // target_blob_gas_per_block above. End of fixed prefix: 368.
+    w.u64_le(max_blob_gas_per_block);
     w.assert_aligned();
 
     // Withdrawal records × 48 B each (EIP-4895).
@@ -263,23 +281,30 @@ pub fn account_original_fields(
 
 /// Section 4 — `Contracts`.
 ///
-/// One record per unique deployed bytecode the block touches. Sources:
-///   * `prestate.code` — block-start code for every contract whose
-///     code the tx prestate captured.
-///   * `diff.post[addr].code` — newly-deployed contracts (so calls
-///     into the new address later in the block can find their code).
-///   * EIP-7702 delegation stubs (`0xef0100 || delegate`, 23 B) —
-///     for every authorization in every Type-4 tx, regardless of
-///     whether the auth's validity checks pass. The cpp-guest
-///     computes the hash of this stub when it processes the auth and
-///     then looks it up later via `Contracts::by_hash` when something
-///     CALLs the delegated EOA.
+/// One record per unique deployed bytecode the block may touch. Sources:
+///   * `witness.codes` — every bytecode reth put in the execution witness.
+///     Sourcing contracts from here lets us drop the diff-mode
+///     `prestateTracer` call (whose only output role was supplying
+///     newly-deployed contract code). It's a *superset* of what the tracer
+///     set carried (a few extra pre-existing codes the guest never looks
+///     up), so output is no longer byte-identical to the old path — but
+///     every code the guest resolves by hash is present, and
+///     CREATE'd-in-block contracts are self-registered by the guest at
+///     runtime anyway. (Correctness is validated by the guest producing the
+///     correct block hash across a wide block range + both EVM backends.)
+///   * `prestate.code` — from the full `prestateTracer` prestate (still
+///     fetched — it's load-bearing for account/storage state). Redundant
+///     with `witness.codes` for contracts but harmless (dedup by hash).
+///   * EIP-7702 delegation stubs (`0xef0100 || delegate`, 23 B) — for every
+///     authorization in every Type-4 tx (valid or not). The cpp-guest hashes
+///     this stub when it processes the auth and later resolves it via
+///     `Contracts::by_hash` when something CALLs the delegated EOA.
 ///
 /// Deduplicated by `keccak256(code)`.
 pub fn write_contracts(
     w: &mut Writer,
     prestate: &Prestate,
-    diff: &PrestateDiff,
+    witness: &ExecutionWitness,
     current: &Block,
 ) -> Result<()> {
     use alloy::primitives::Bytes;
@@ -296,12 +321,10 @@ pub fn write_contracts(
         dst.entry(h).or_insert(code);
     };
 
-    for ps in prestate.values() {
-        if let Some(c) = &ps.code {
-            insert(&mut by_hash, c.clone());
-        }
+    for code in &witness.codes {
+        insert(&mut by_hash, code.clone());
     }
-    for ps in diff.post.values() {
+    for ps in prestate.values() {
         if let Some(c) = &ps.code {
             insert(&mut by_hash, c.clone());
         }

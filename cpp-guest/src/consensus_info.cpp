@@ -80,6 +80,12 @@ uint64_t ConsensusInfo::blob_base_fee_update_fraction() const noexcept {
     // (Fusaka BPO2) so existing mainnet inputs keep decoding correctly.
     return v != 0 ? v : kBlobBaseFeeUpdateFraction;
 }
+uint64_t ConsensusInfo::target_blob_gas_per_block() const noexcept {
+    return u64_at(header_ + kTargetBlobGasPerBlockOffset);
+}
+uint64_t ConsensusInfo::max_blob_gas_per_block() const noexcept {
+    return u64_at(header_ + kMaxBlobGasPerBlockOffset);
+}
 const evmc::bytes32& ConsensusInfo::requests_hash() const noexcept {
     return *reinterpret_cast<const evmc::bytes32*>(header_ + kRequestsHashOffset);
 }
@@ -94,7 +100,7 @@ const evmc::bytes32& ConsensusInfo::ommers_hash() const noexcept {
 }
 
 // ============================================================================
-// Constructor — fixed 344 B prefix + N × 48 B withdrawal records.
+// Constructor — fixed 368 B prefix + N × 48 B withdrawal records.
 // ============================================================================
 
 ConsensusInfo::ConsensusInfo(const uint8_t*& cursor) {

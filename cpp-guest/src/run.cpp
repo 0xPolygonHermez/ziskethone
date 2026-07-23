@@ -17,6 +17,7 @@
 #include <cstring>
 
 #include <evmc/evmc.hpp>
+#include <intx/intx.hpp>
 
 #include "zeg/accounts.hpp"
 #include "zeg/binary_format.hpp"     // kMagic, kVersion
@@ -24,10 +25,12 @@
 #include "zeg/keccak.hpp"
 #include "zeg/consensus_info.hpp"
 #include "zeg/contracts.hpp"
+#include "zeg/fake_exponential.hpp"
 #include "zeg/fatal.hpp"
 #include "zeg/previous_blocks.hpp"
 #include "zeg/state_root.hpp"
 #include "zeg/storages.hpp"
+#include "zeg/system_addresses.hpp"
 #include "zeg/transactions.hpp"
 #include "zeg/zisk_state_db.hpp"
 
@@ -79,6 +82,111 @@ int run(const uint8_t* input, size_t len, uint8_t out[32]) {
     }
     if (previous_blocks.at(0).state_root() != consensus.parent_hash()) {
         zeg::fatal("PreviousBlocks: block[0].state_root != consensus.parent_state_root");
+    }
+
+    // 3.5 excess_blob_gas validity (EIP-4844, reserve-price branch added by
+    //     EIP-7918 at Osaka+). The header's excess_blob_gas is otherwise
+    //     only ever RLP-re-encoded and re-hashed (never independently
+    //     re-derived), so a forged value that's merely internally
+    //     consistent with the rest of the header would sail through
+    //     undetected — the block hash the guest computes would just be
+    //     "the hash of that forged header". Cross-check it against the
+    //     value the formula derives from the parent, using this block's
+    //     own TARGET/MAX_BLOB_GAS_PER_BLOCK (its blob schedule may differ
+    //     from the parent's across a BPO-fork boundary, but the formula is
+    //     always evaluated with the CURRENT block's schedule). Gated on
+    //     Cancun-or-later: pre-Cancun blocks have no blob schedule and all
+    //     these fields decode to 0.
+    if (consensus.fork_id() >= zeg::ForkId::Cancun) {
+        const auto&    parent      = previous_blocks.at(0);
+        const uint64_t parent_used = parent.blob_gas_used();
+        const uint64_t parent_sum  = parent.excess_blob_gas() + parent_used;
+        const uint64_t target      = consensus.target_blob_gas_per_block();
+        uint64_t expected_excess;
+        if (parent_sum < target) {
+            expected_excess = 0;
+        } else if (consensus.fork_id() >= zeg::ForkId::Osaka) {
+            // EIP-7918 reserve-price branch: when the blob base fee has
+            // fallen so low that execution-gas cost would dominate what a
+            // blob "should" cost, skip the usual target subtraction (so
+            // excess — and therefore the blob base fee — stops being
+            // pushed down) and instead scale this block's usage by
+            // (max - target) / max. `get_base_fee_per_blob_gas(parent)`
+            // uses the CURRENT block's blob_base_fee_update_fraction as a
+            // stand-in for the parent's own (they differ only across the
+            // single block that straddles a BPO-fork boundary).
+            const intx::uint256 parent_base_fee =
+                intx::be::load<intx::uint256>(parent.base_fee_per_gas());
+            const intx::uint256 parent_blob_base_fee = zeg::fake_exponential(
+                zeg::kMinBaseFeePerBlobGas, parent.excess_blob_gas(),
+                consensus.blob_base_fee_update_fraction());
+            constexpr uint64_t kBlobBaseCost = 8192;  // EIP-7918: 2**13
+            if (intx::uint256{kBlobBaseCost} * parent_base_fee >
+                intx::uint256{zeg::kGasPerBlob} * parent_blob_base_fee) {
+                const uint64_t max = consensus.max_blob_gas_per_block();
+                const intx::uint256 scaled =
+                    (intx::uint256{parent_used} * (max - target)) / max;
+                expected_excess = parent.excess_blob_gas() +
+                    static_cast<uint64_t>(scaled);
+            } else {
+                expected_excess = parent_sum - target;
+            }
+        } else {
+            expected_excess = parent_sum - target;
+        }
+        if (consensus.excess_blob_gas() != expected_excess) {
+            zeg::fatal("excess_blob_gas mismatch: header's claimed value doesn't "
+                      "match the EIP-4844/7918 formula applied to the parent block");
+        }
+    }
+
+    // 3.6 EIP-1559 base_fee_per_gas validity — same rationale as 3.5 above
+    //     (otherwise only ever RLP-re-encoded/re-hashed, never
+    //     independently re-derived). Gated on London-or-later: pre-London
+    //     blocks have no base_fee field (decodes to 0).
+    if (consensus.fork_id() >= zeg::ForkId::London) {
+        const auto&          parent           = previous_blocks.at(0);
+        const intx::uint256  parent_base_fee  =
+            intx::be::load<intx::uint256>(parent.base_fee_per_gas());
+        intx::uint256 expected_base_fee;
+        if (parent_base_fee == 0) {
+            // This is London's own activation block: the parent predates
+            // EIP-1559 (no base_fee field), so the formula below doesn't
+            // apply — the spec fixes the first London block's base_fee at
+            // INITIAL_BASE_FEE regardless of the parent's gas usage.
+            expected_base_fee = intx::uint256{1'000'000'000};
+        } else {
+            constexpr uint64_t kElasticityMultiplier        = 2;
+            constexpr uint64_t kBaseFeeMaxChangeDenominator  = 8;
+            const uint64_t parent_gas_target = parent.gas_limit() / kElasticityMultiplier;
+            const uint64_t parent_gas_used   = parent.gas_used();
+            if (parent_gas_used == parent_gas_target) {
+                expected_base_fee = parent_base_fee;
+            } else if (parent_gas_used > parent_gas_target) {
+                const intx::uint256 gas_used_delta = parent_gas_used - parent_gas_target;
+                const intx::uint256 delta = (parent_base_fee * gas_used_delta) /
+                                            parent_gas_target / kBaseFeeMaxChangeDenominator;
+                expected_base_fee = parent_base_fee + (delta > 0 ? delta : intx::uint256{1});
+            } else {
+                const intx::uint256 gas_used_delta = parent_gas_target - parent_gas_used;
+                const intx::uint256 delta = (parent_base_fee * gas_used_delta) /
+                                            parent_gas_target / kBaseFeeMaxChangeDenominator;
+                expected_base_fee = delta < parent_base_fee ? parent_base_fee - delta
+                                                             : intx::uint256{0};
+            }
+        }
+        if (intx::be::load<intx::uint256>(consensus.base_fee_per_gas()) != expected_base_fee) {
+            zeg::fatal("base_fee_per_gas mismatch: header's claimed value doesn't "
+                      "match the EIP-1559 formula applied to the parent block");
+        }
+    }
+
+    // 3.7 Minimum gas limit — a long-standing consensus rule in effect
+    //     since genesis (not fork-gated, not BPO-adjustable, unlike the
+    //     two checks above).
+    constexpr uint64_t kMinGasLimit = 5000;
+    if (consensus.gas_limit() < kMinGasLimit) {
+        zeg::fatal("gas_limit below the minimum (5000)");
     }
 
     // 4. Build the Accounts/Storages tables and verify the pre-execution

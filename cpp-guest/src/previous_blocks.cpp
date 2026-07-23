@@ -149,16 +149,38 @@ PreviousBlocks::PreviousBlocks(const uint8_t*& cursor) {
     }
     cursor += count * kRecordSize;
 
-    // Chain check: each block's parent_hash must equal its parent's
-    // recomputed hash. The deepest ancestor's parent_hash is not
-    // verified (we have no block beyond it). The link from
-    // hash(block[0]) to the current block's parent_hash is checked
-    // outside this class, against `ConsensusInfo::parent_hash()`.
+    // Linkage check — SPARSE-tolerant. The ancestor set carries only the
+    // blocks the witness referenced for BLOCKHASH, so it may have gaps
+    // (e.g. {parent, N-100}). We therefore verify parent_hash linkage ONLY
+    // between records that are consecutive BY NUMBER (child.number ==
+    // next.number + 1); a gap is legitimate and is not an error. Records
+    // are ordered descending by number (index 0 = parent), so a genuine
+    // adjacency shows up as a 1-step decrement between neighbours.
+    //
+    // The link from hash(block[0]) to the current block's parent_hash is
+    // checked outside this class, against `ConsensusInfo::parent_hash()`.
     for (size_t i = 0; i + 1 < views_.size(); ++i) {
-        if (views_[i].parent_hash() != hashes_[i + 1]) {
+        const uint64_t child_num = views_[i].number();
+        const uint64_t next_num  = views_[i + 1].number();
+        if (child_num == next_num + 1 &&
+            views_[i].parent_hash() != hashes_[i + 1]) {
             fatal("PreviousBlocks: parent_hash chain mismatch");
         }
     }
+}
+
+const evmc::bytes32* PreviousBlocks::hash_of_number(uint64_t number) const noexcept {
+    // Linear scan by block number. The ancestor set is tiny (≤256, and in
+    // practice 1 — just the parent), and the BLOCKHASH depth guard already
+    // bounds callers to [1,256], so a scan is cheaper than an unordered_map
+    // (which on the bare-metal ZisK target drags in the soft-float load-factor
+    // runtime — no FP support here). First match wins; index 0 = parent.
+    for (size_t i = 0; i < views_.size(); ++i) {
+        if (views_[i].number() == number) {
+            return &hashes_[i];
+        }
+    }
+    return nullptr;
 }
 
 } // namespace zeg
