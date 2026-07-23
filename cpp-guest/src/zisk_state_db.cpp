@@ -305,10 +305,18 @@ bool ZiskStateDB::selfdestruct(const evmc::address& addr,
     const bool should_destroy  = is_cancun_or_later() ? same_tx_created : true;
 
     if (addr == beneficiary) {
-        // Same-address transfer is a no-op on balance (the two
-        // set_balance_at calls below would otherwise overwrite each
-        // other and leave the account net-credited).
         if (should_destroy) {
+            // A same-tx-created contract that self-destructs to itself
+            // still burns its balance immediately (it never reaches the
+            // beneficiary since there isn't a distinct one) — matches
+            // revm's journal `selfdestruct()`: the source's balance is
+            // unconditionally zeroed whenever `should_destroy` is true,
+            // regardless of whether target == address; only the truly
+            // no-op case (should_destroy == false, self-beneficiary) skips
+            // the balance write entirely.
+            journal_.log_balance(src_idx, accounts_.balance_at(src_idx),
+                                 accounts_.last_tx_idx_at(src_idx));
+            accounts_.set_balance_at(src_idx, evmc::uint256be{}, tx_counter_);
             // Defer destruction to end-of-tx per Yellow Paper —
             // see comment on pending_destruct_ in the header.
             const auto [_, inserted] = pending_destruct_.insert(src_idx);
@@ -321,6 +329,8 @@ bool ZiskStateDB::selfdestruct(const evmc::address& addr,
             // `!previously_destroyed` gate).
             return inserted;
         }
+        // should_destroy == false, self-beneficiary: true no-op, balance
+        // stays exactly as-is (matches revm's `else { None }` branch).
         return false;
     }
 
