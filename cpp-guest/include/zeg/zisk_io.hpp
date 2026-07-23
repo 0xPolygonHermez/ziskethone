@@ -4,20 +4,28 @@
 // the ziskemu emulator and ZisK hardware expose (see ../../hello-zisk-c/src/zisk.h):
 //
 //   INPUT  at 0x40000000 : [0..8) reserved, [8..16) u64 LE length, [16..) payload
-//   OUTPUT at 0xA0010000 : array of u32 public-output slots (= SYS_ADDR + SYS_SIZE)
-//   UART   at 0xA0000200 : write a byte to print it (debug)  (= SYS_ADDR + 0x200)
+//   OUTPUT at 0xA0410000 : array of u32 public-output slots (= SYS_ADDR + SYS_SIZE)
+//   UART   at 0xA0400200 : write a byte to print it (debug)  (= SYS_ADDR + 0x200)
 //
-// OUTPUT/UART track the ZisK memory map in `zisk core/src/mem.rs`
-// (RAM_ADDR=0xa0000000, SYS_ADDR=RAM_ADDR (no stack offset — mem.rs has no
-//  STACK_SIZE constant), SYS_SIZE=0x10000, OUTPUT_ADDR=SYS_ADDR+SYS_SIZE=
-//  0xa0010000, UART_ADDR=SYS_ADDR+0x200=0xa0000200). A prior "correction"
-// here assumed a 4MB stack offset between RAM_ADDR and SYS_ADDR that doesn't
-// exist in the pinned zisk toolchain (pre-develop-1.0.0-alfa) — it silently
-// wrote the public output past where ziskemu/hardware ever reads it, so a
-// real proof from this guest would report an all-zero output. Caught by
-// running the actual ZisK-target ELF (not just the host build) against a
-// live block through ziskemu and checking the emitted hash, not just step
-// counts — no prior session had done that on this branch.
+// OUTPUT/UART track the ZisK memory map in `zisk core/src/mem.rs` as of the
+// pinned pre-develop-1.2.0-alpha toolchain: RAM_ADDR=0xa0000000, and as of
+// commit 004dcadfc ("Move stack to the bottom of the RAM") SYS_ADDR is now
+// genuinely RAM_ADDR+STACK_SIZE(0x400000)=0xa0400000 (matches zisk.ld's
+// `.stack_data` reservation at the bottom of RAM). SYS_SIZE=0x10000, so
+// OUTPUT_ADDR=SYS_ADDR+SYS_SIZE=0xa0410000, UART_ADDR=SYS_ADDR+0x200=
+// 0xa0400200.
+//
+// History, so this doesn't look like a silent flip-flop: on the PRIOR pin
+// (pre-develop-1.0.0-alfa), SYS_ADDR==RAM_ADDR (no stack offset existed
+// yet) — a premature "correction" to these same 0xA0410000/0xA0400200
+// values landed here anyway, silently writing the public output past where
+// ziskemu/hardware ever read it (proving completed, step/cost looked
+// normal, output was all-zero). That was reverted in commit c0f705c, back
+// to 0xA0010000/0xA0000200. The pre-develop-1.2.0-alpha upgrade is what
+// makes the offset real, so these addresses move forward again here —
+// this time verified by actually running the ZisK-target ELF (not just
+// the host build) through ziskemu against a live block and checking the
+// emitted hash, not just step counts.
 //
 // The host (rust-input-gen) writes the block container starting with the
 // `ZEG0` magic; to feed it to ziskemu it is framed as [u64 LE len][payload],
@@ -50,7 +58,7 @@ inline Input read_input() {
 
 // Write a u32 public-output slot (proof-visible).
 inline void set_output_u32(unsigned slot, uint32_t value) {
-    reinterpret_cast<volatile uint32_t *>(0xA0010000ULL)[slot] = value;
+    reinterpret_cast<volatile uint32_t *>(0xA0410000ULL)[slot] = value;
 }
 
 // Emit a 32-byte value (e.g. the block hash) as 8 u32 slots. Each word is
@@ -70,7 +78,7 @@ inline void set_output_bytes32(const uint8_t bytes[32]) {
 
 // UART debug: write one byte to the console.
 inline void uart_putc(char c) {
-    *reinterpret_cast<volatile unsigned char *>(0xA0000200) =
+    *reinterpret_cast<volatile unsigned char *>(0xA0400200) =
         static_cast<unsigned char>(c);
 }
 
