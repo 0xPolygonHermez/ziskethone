@@ -989,6 +989,22 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
         return result;
     }
 
+    // EIP-170 (Spurious Dragon): deployed code cannot exceed
+    // MAX_CODE_SIZE (24576 B). Checked BEFORE EIP-3541 below, matching
+    // reth/geth's ordering. Every fork this guest targets (Berlin+)
+    // postdates Spurious Dragon, so no fork gate is needed. On failure
+    // all gas allocated to this CREATE is burned (gas_left=0) rather
+    // than only refusing the per-byte deposit cost — the create-vs-OOG
+    // gap this closes: codesizeOOGInvalidSize, createCodeSizeLimit,
+    // create2CodeSizeLimit, CreateAddressWarmAfterFail's *_code_too_big
+    // cases, createLargeResult's *_RETURN_HUGE/TOOBIG cases, and
+    // CREATE_ContractRETURNBigOffset.
+    constexpr size_t kMaxCodeSize = 24576;
+    if (result.output_size > kMaxCodeSize) {
+        rollback(cp_after_bump);
+        return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0};
+    }
+
     // EIP-3541 (London): contracts cannot have deployed code that
     // starts with the 0xef byte. EIP-7702 extends this for the
     // delegation-designation prefix 0xef0100 specifically — CREATE/
@@ -1788,6 +1804,16 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
             nullptr)};
 
         if (result.status_code == EVMC_SUCCESS) {
+            // EIP-170 (Spurious Dragon): deployed code cannot exceed
+            // MAX_CODE_SIZE (24576 B) — top-level CREATE tx must also
+            // enforce this, mirroring the matching check in
+            // call_create(). All gas is burned on failure, not just
+            // the per-byte deposit refused.
+            constexpr size_t kMaxCodeSize = 24576;
+            if (result.output_size > kMaxCodeSize) {
+                return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0};
+            }
+
             // EIP-3541 (London): reject deployed code starting with
             // 0xef. EIP-7702 reinforces this for the delegation prefix
             // 0xef0100 specifically — top-level CREATE tx must also
