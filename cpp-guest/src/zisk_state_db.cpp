@@ -1090,7 +1090,15 @@ void ZiskStateDB::pre_execute_block() noexcept {
         ctx.block_number      = static_cast<int64_t>(consensus_.number());
         ctx.block_timestamp   = static_cast<int64_t>(consensus_.timestamp());
         ctx.block_gas_limit   = static_cast<int64_t>(consensus_.gas_limit());
-        ctx.block_prev_randao = consensus_.prev_randao();
+        // EIP-4399 (Paris): opcode 0x44 (DIFFICULTY pre-Paris, PREVRANDAO
+        // Paris+) reads this same tx_context field either way — the HOST
+        // decides which ConsensusInfo value it holds. Pre-Paris blocks
+        // must see the real PoW difficulty; using prev_randao() there
+        // returns an unrelated field's bytes (mixHash-shaped, not the
+        // difficulty), which corrupted any test scanning the DIFFICULTY
+        // opcode's raw output (test_scenarios' DIFFICULTY_debug cluster).
+        ctx.block_prev_randao = is_paris_or_later() ? consensus_.prev_randao()
+                                                     : consensus_.difficulty();
         ctx.chain_id          = intx::be::store<evmc::uint256be>(
                                     intx::uint256{kChainId});
         ctx.block_base_fee    = consensus_.base_fee_per_gas();

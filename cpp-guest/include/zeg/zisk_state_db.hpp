@@ -361,6 +361,15 @@ private:
         return active_revision() >= EVMC_LONDON;
     }
 
+    // EIP-4399 (Paris/the Merge) repurposes opcode 0x44 from DIFFICULTY
+    // to PREVRANDAO — same evmc_tx_context::block_prev_randao field, but
+    // pre-Paris it must hold the block's PoW difficulty, not its
+    // (nonexistent) randomness value. Gates pre_execute_block's choice
+    // of which ConsensusInfo field to stamp into the tx_context.
+    bool is_paris_or_later() const noexcept {
+        return active_revision() >= EVMC_PARIS;
+    }
+
     // ----- Per-tx pipeline (called in this order by process_transactions) -----
     //
     // Each helper takes the next tx (plus any cross-phase scalar it
