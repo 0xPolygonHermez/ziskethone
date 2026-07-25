@@ -163,8 +163,11 @@ list(APPEND GUEST_SOURCES zisk/secp256k1.cpp)
 # execute2), so the interpreter is swappable. `evmone` (default) uses the
 # upstream interpreter via evmc2_create_evmone; `zevm` uses our hand-written
 # interpreter (cpp-guest/src/zevm) via evmc2_create_zevm. evmone's baseline is
-# currently cheaper on ZisK for contract-heavy blocks (~30% fewer steps on a
-# real 52M-gas block), so it's the default. Both paths still link
+# currently cheaper on ZisK, so it's the default — the gap is block-dependent:
+# ~30% fewer steps measured on a real 52M-gas (contract-heavy) block, but only
+# +4.9%/+9.9% on two lighter mainnet blocks (515 and 224 txs respectively; see
+# the fuller step-count breakdown, incl. the Zbb/Zbs march's effect on both
+# backends, in cpp-guest/zisk/CMakeLists.txt). Both paths still link
 # evmone::precompiles + evmone::state because precompile dispatch lives in the
 # host/state layer.
 set(EVM_BACKEND "evmone" CACHE STRING "EVM implementation: evmone | zevm")

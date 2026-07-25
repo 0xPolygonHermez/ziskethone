@@ -83,8 +83,17 @@ file(GLOB GUEST_SRC ${GUEST_ROOT}/src/*.cpp)
 # host dispatches ECRECOVER/MODEXP/… through them); just the interpreter changes.
 # zevm's 256-bit math compiles against the ZisK zeg::bi backend (ZEG_ZISK), and
 # its KECCAK256 resolves to the same accelerated ethash_keccak256 (keccak_zisk).
-# evmone is the default: its baseline interpreter is currently ~30% cheaper on
-# ZisK for contract-heavy blocks (zevm pays per-op byteswaps + gas/stack checks).
+# evmone is the default: its baseline interpreter is cheaper on ZisK (zevm pays
+# per-op byteswaps + gas/stack checks). Measured on two live mainnet blocks
+# (step counts via ziskemu, both backends verified against the RPC block hash):
+#   block 25605549 (515 txs): evmone 190,110,154 steps vs zevm 199,344,080 (+4.9%)
+#   block 25606586 (224 txs): evmone 237,860,530 steps vs zevm 261,389,688 (+9.9%)
+# The gap narrows with the guest march's Zbb/Zbs bit-manipulation extensions
+# (see toolchain.cmake): zevm gains slightly more from them (7.7-9.0% fewer
+# steps) than evmone does (6.1-6.5%), since zevm's hand-rolled byteswaps give
+# the compiler more to fold into rev8/minu/maxu — narrowing evmone's edge to
+# +3.5%/+6.5% on the same two blocks. Gap size looks block-dependent (denser
+# contract-call activity should widen it further, per the above).
 set(EVM_BACKEND "evmone" CACHE STRING "EVM implementation: evmone | zevm")
 if(EVM_BACKEND STREQUAL "zevm")
   list(FILTER GUEST_SRC EXCLUDE REGEX "/evmc2_evmone\\.cpp$")
@@ -171,10 +180,19 @@ add_executable(zisk_eth_guest.elf
 # secp256k1 backend: precompiles+fcalls by default; software baseline when ON.
 option(ZEG_SECP256K1_SW "Use the software secp256k1 baseline (no accelerators)" OFF)
 
+# zeg::bswap64 defaults to a zero-shortcut swap that uses inline-asm `rev8`
+# (now that the guest march includes Zbb) for the nonzero path, keeping the
+# branch GCC would otherwise silently fold away (see include/zeg/bswap.hpp for
+# why plain __builtin_bswap64 loses that shortcut). ZEG_BSWAP_BUILTIN swaps in
+# the plain builtin instead, purely for A/B step-count comparison against the
+# shortcut-preserving default — expect it to lose on zero-heavy blocks.
+option(ZEG_BSWAP_BUILTIN "Use plain __builtin_bswap64 (no zero-shortcut) instead of the default shortcut-preserving rev8" OFF)
+
 target_compile_definitions(zisk_eth_guest.elf PRIVATE
   ZEG_ZISK
   $<$<STREQUAL:${EVM_BACKEND},zevm>:USE_ZEVM>
   $<$<BOOL:${ZEG_SECP256K1_SW}>:ZEG_SECP256K1_SW>
+  $<$<BOOL:${ZEG_BSWAP_BUILTIN}>:ZEG_BSWAP_BUILTIN>
   PROJECT_VERSION="0.21.0")          # normally injected by evmone's CMake
 target_compile_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
 target_link_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
