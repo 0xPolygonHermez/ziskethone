@@ -1960,10 +1960,9 @@ uint64_t ZiskStateDB::settle_tx_gas(const Transactions::View& tx,
     // EIP-2565 minimum 200 gas; the floor would inflate the tx to
     // 25350 gas vs the canonical 22940).
     if (is_prague_or_later()) {
-        int64_t tokens = 0;
-        for (uint8_t b : tx.data()) {
-            tokens += (b == 0) ? 1 : 4;
-        }
+        const auto data = tx.data();
+        const int64_t tokens = static_cast<int64_t>(data.size()) +
+                               static_cast<int64_t>(count_nonzero_bytes(data)) * 3;
         const int64_t floor_gas = 21000 + tokens * 10;
         if (gas_used < floor_gas) {
             gas_used = floor_gas;
