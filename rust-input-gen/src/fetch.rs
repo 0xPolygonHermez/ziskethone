@@ -66,8 +66,12 @@ pub(crate) async fn fetch_offline_sources_online(
     // the mainnet constants below are authoritative. `is_osaka` and the blob
     // BASE_FEE_UPDATE_FRACTION are resolved from the block timestamp against
     // that schedule. NB: update `mainnet_fork_params` at each mainnet fork/BPO.
-    let (is_osaka, blob_base_fee_update_fraction, target_blob_gas_per_block, max_blob_gas_per_block) =
-        mainnet_fork_params(current.header.timestamp);
+    let (
+        is_osaka,
+        blob_base_fee_update_fraction,
+        target_blob_gas_per_block,
+        max_blob_gas_per_block,
+    ) = mainnet_fork_params(current.header.timestamp);
     if is_osaka {
         info!(
             timestamp = current.header.timestamp,

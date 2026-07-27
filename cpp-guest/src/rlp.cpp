@@ -52,20 +52,31 @@ Bytes encode(BytesView data) {
     return out;
 }
 
+// RLP integers are minimal-width big-endian, so both encoders need a count of
+// leading zero *bytes*: Zbb's rev8 builds the big-endian image in one op and
+// clz >> 3 is that count. __builtin_bswap64, not zeg::bswap64 — the latter's
+// zero-shortcut branch is a pessimization here, since v == 0 never loads bytes.
+
 Bytes encode_u64(uint64_t v) {
     uint8_t be[8];
-    for (int i = 7; i >= 0; --i) {
-        be[i] = static_cast<uint8_t>(v & 0xff);
-        v >>= 8;
-    }
-    size_t start = 0;
-    while (start < 8 && be[start] == 0) ++start;
+    const uint64_t swapped = __builtin_bswap64(v);
+    __builtin_memcpy(be, &swapped, sizeof(be));
+    const size_t start = v ? (__builtin_clzll(v) >> 3) : 8;  // 8 -> empty -> 0x80
     return encode(BytesView{be + start, 8 - start});
 }
 
 Bytes encode_u256(const evmc::uint256be& v) {
+    // A zero limb skips 8 bytes; clz locates the first nonzero byte within the
+    // rest. Most EVM words are small, so this usually exits on the last limb.
     size_t start = 0;
-    while (start < 32 && v.bytes[start] == 0) ++start;
+    for (; start < 32; start += 8) {
+        uint64_t w;
+        __builtin_memcpy(&w, v.bytes + start, sizeof(w));
+        if (w) {
+            start += __builtin_clzll(__builtin_bswap64(w)) >> 3;
+            break;
+        }
+    }
     return encode(BytesView{v.bytes + start, 32 - start});
 }
 

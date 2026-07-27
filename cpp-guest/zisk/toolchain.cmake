@@ -65,7 +65,7 @@ set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 # Overridable (e.g. -DZISK_MARCH=rv64ima_zicsr for an A/B baseline without the
 # B extension, or to add zba/zbkb/zbkc/zbkx/zbc for further experiments —
 # ziskemu needs rebuilding with the matching --features for the latter three).
-set(ZISK_MARCH "rv64ima_zicsr_zbb_zbs" CACHE STRING "Guest -march string (without the rv64/-march= prefix)")
+set(ZISK_MARCH "rv64ima_zicsr_zbb_zbs_zbkb" CACHE STRING "Guest -march string (without the rv64/-march= prefix)")
 set(_ZISK_ARCH "-march=${ZISK_MARCH} -mabi=lp64 -mcmodel=medany")
 set(_ZISK_FREE "-fno-exceptions -fno-rtti -ffunction-sections -fdata-sections")
 
