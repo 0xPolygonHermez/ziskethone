@@ -1,0 +1,147 @@
+diff --git a/lib/evmone/instructions.hpp b/lib/evmone/instructions.hpp
+index ceff693b..5f9eaf67 100644
+--- a/lib/evmone/instructions.hpp
++++ b/lib/evmone/instructions.hpp
+@@ -9,6 +9,10 @@
+ #include "instructions_xmacro.hpp"
+ #include <evmone_precompiles/keccak.hpp>
+ 
++#if defined(ZEG_ZISK)
++#include <bigint/backend.hpp>  // zeg::bi::{arith256,arith256_mod}
++#endif
++
+ namespace evmone
+ {
+ using code_iterator = const uint8_t*;
+@@ -136,6 +140,46 @@ inline bool check_memory(
+     return check_memory(gas_left, memory, offset, static_cast<uint64_t>(size));
+ }
+ 
++#if defined(ZEG_ZISK)
++/// ZisK 256-bit multiply offload for MUL, EXP, ADDMOD and MULMOD, replacing
++/// intx's software bigint (~10^3 instructions per opcode) with one arith256 /
++/// arith256_mod precompile call. Mirrors src/zevm/instructions/arith.inl.hpp.
++/// intx::uint<256> is `uint64_t words_[4]` LE, so `&x[0]` needs no marshalling.
++///
++/// DIV/MOD/SDIV/SMOD stay on intx: the only 256-bit divider here is the
++/// bigint_div fcall, an unverified prover hint with no a == b*q + r check.
++namespace zeg_arith
++{
++constexpr uint64_t ZERO4[4]{};
++constexpr uint64_t ONE4[4]{1, 0, 0, 0};
++
++inline void copy4(uint64_t dst[4], const uint64_t src[4]) noexcept
++{
++    dst[0] = src[0];
++    dst[1] = src[1];
++    dst[2] = src[2];
++    dst[3] = src[3];
++}
++
++inline void store(uint256& dst, const uint64_t src[4]) noexcept
++{
++    dst[0] = src[0];
++    dst[1] = src[1];
++    dst[2] = src[2];
++    dst[3] = src[3];
++}
++
++/// Low 256 bits of a * b. The precompile must not alias output with input, so
++/// the 512-bit result lands in locals and only the low half is kept.
++inline void mul_low(const uint64_t a[4], const uint64_t b[4], uint64_t out[4]) noexcept
++{
++    uint64_t dl[4], dh[4];
++    zeg::bi::arith256(a, b, ZERO4, dl, dh);
++    copy4(out, dl);
++}
++}  // namespace zeg_arith
++#endif
++
+ namespace instr::core
+ {
+ 
+@@ -167,7 +211,15 @@ inline void add(StackTop stack) noexcept
+ 
+ inline void mul(StackTop stack) noexcept
+ {
++#if defined(ZEG_ZISK)
++    const auto& x = stack.pop();  // old top; slot stays readable
++    auto& y = stack.top();        // second item = result slot, distinct from x
++    uint64_t r[4];
++    zeg_arith::mul_low(&x[0], &y[0], r);
++    zeg_arith::store(y, r);
++#else
+     stack.top() *= stack.pop();
++#endif
+ }
+ 
+ inline void sub(StackTop stack) noexcept
+@@ -204,7 +256,18 @@ inline void addmod(StackTop stack) noexcept
+     const auto& x = stack.pop();
+     const auto& y = stack.pop();
+     auto& m = stack.top();
++#if defined(ZEG_ZISK)
++    // (x*1 + y) mod m — the 512-bit intermediate absorbs the x + y carry out of
++    // bit 255. m == 0: result is 0, which the slot already holds.
++    if (m != 0)
++    {
++        uint64_t d[4];
++        zeg::bi::arith256_mod(&x[0], zeg_arith::ONE4, &y[0], &m[0], d);
++        zeg_arith::store(m, d);
++    }
++#else
+     m = m != 0 ? intx::addmod(x, y, m) : 0;
++#endif
+ }
+ 
+ inline void mulmod(StackTop stack) noexcept
+@@ -212,7 +275,17 @@ inline void mulmod(StackTop stack) noexcept
+     const auto& x = stack[0];
+     const auto& y = stack[1];
+     auto& m = stack[2];
++#if defined(ZEG_ZISK)
++    // m == 0: result is 0, which the slot already holds.
++    if (m != 0)
++    {
++        uint64_t d[4];
++        zeg::bi::arith256_mod(&x[0], &y[0], zeg_arith::ZERO4, &m[0], d);
++        zeg_arith::store(m, d);
++    }
++#else
+     m = m != 0 ? intx::mulmod(x, y, m) : 0;
++#endif
+ }
+ 
+ inline Result exp(StackTop stack, int64_t gas_left, ExecutionState& state) noexcept
+@@ -227,7 +300,31 @@ inline Result exp(StackTop stack, int64_t gas_left, ExecutionState& state) noexc
+     if ((gas_left -= additional_cost) < 0)
+         return {EVMC_OUT_OF_GAS, gas_left};
+ 
++#if defined(ZEG_ZISK)
++    // Square-and-multiply over arith256, MSB -> LSB. `exponent` is also the
++    // result slot, so copy it out first; `base` is one slot above, never written.
++    const uint64_t e[4]{exponent[0], exponent[1], exponent[2], exponent[3]};
++    int msb = -1;  // highest set bit: first non-zero limb (MS first) + a clz
++    for (int k = 3; k >= 0; --k)
++        if (e[k] != 0)
++        {
++            msb = k * 64 + (63 - __builtin_clzll(e[k]));
++            break;
++        }
++    uint64_t r[4]{1, 0, 0, 0};
++    for (int i = msb; i >= 0; --i)  // exponent 0 runs no iterations -> 1
++    {
++        uint64_t t[4];
++        zeg_arith::mul_low(r, r, t);  // square
++        if ((e[i >> 6] >> (i & 63)) & 1)
++            zeg_arith::mul_low(t, &base[0], r);  // ... and multiply
++        else
++            zeg_arith::copy4(r, t);
++    }
++    zeg_arith::store(exponent, r);
++#else
+     exponent = intx::exp(base, exponent);
++#endif
+     return {EVMC_SUCCESS, gas_left};
+ }
+ 
