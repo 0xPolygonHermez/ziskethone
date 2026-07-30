@@ -31,7 +31,7 @@ if(NOT evmone_POPULATED)
     FetchContent_Populate(evmone)
 endif()
 
-# Apply our local evmone patches. Both align evmone's CALL gas accounting
+# Apply our local evmone patches. 01 and 02 align evmone's CALL gas accounting
 # with revm's behavior so a stateless witness recorded by reth/revm is
 # sufficient for evmone — no extra host calls outside the witness:
 #   01: Reorder CALL gas checks to charge CALL_VALUE_COST first, then cold
@@ -42,12 +42,17 @@ endif()
 #       calling host.copy_code — an EOA (or any account with empty code)
 #       can never carry an EIP-7702 designator. Mirrors revm's
 #       `Bytecode::eip7702_address(account.code)` short-circuit.
+#   03: Route MUL/EXP/ADDMOD/MULMOD through the ZisK arith256/arith256_mod
+#       precompiles instead of intx's software bigint (the analogue of reth's
+#       ruint patch). Gated on ZEG_ZISK, so the host build keeps intx and
+#       stays the independent reference for the host-vs-guest comparison.
 # Each patch is checked with `git apply --reverse --check` first; if it
 # is already applied we skip — that keeps the configure step idempotent
 # across rebuilds.
 set(_evmone_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/01-evmone-revm-aligned-call-gas-order.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/02-evmone-delegation-eoa-fastpath.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/03-evmone-zisk-arith256-mulmod.patch"
 )
 find_program(GIT_EXECUTABLE git REQUIRED)
 foreach(_patch IN LISTS _evmone_patches)
