@@ -66,17 +66,7 @@ Bytes encode_u64(uint64_t v) {
 }
 
 Bytes encode_u256(const evmc::uint256be& v) {
-    // A zero limb skips 8 bytes; clz locates the first nonzero byte within the
-    // rest. Most EVM words are small, so this usually exits on the last limb.
-    size_t start = 0;
-    for (; start < 32; start += 8) {
-        uint64_t w;
-        __builtin_memcpy(&w, v.bytes + start, sizeof(w));
-        if (w) {
-            start += __builtin_clzll(__builtin_bswap64(w)) >> 3;
-            break;
-        }
-    }
+    const size_t start = detail::u256_significant_start(v.bytes);
     return encode(BytesView{v.bytes + start, 32 - start});
 }
 

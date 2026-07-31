@@ -1,0 +1,36 @@
+diff --git a/lib/evmone/baseline_analysis.cpp b/lib/evmone/baseline_analysis.cpp
+index 6083fcea..13d0dbc1 100644
+--- a/lib/evmone/baseline_analysis.cpp
++++ b/lib/evmone/baseline_analysis.cpp
+@@ -22,13 +22,26 @@ void analyze_jumpdests(BitsetSpan map, bytes_view code) noexcept
+     // static_cast<int8_t>(op) <= OP_PUSH32 is always true and can be skipped.
+     static_assert(OP_PUSH32 == std::numeric_limits<int8_t>::max());
+ 
+-    for (size_t i = 0; i < code.size(); ++i)
++    // ZisK: walk a pointer rather than an index. The index form makes the
++    // compiler rematerialize `code.data() + i` and run a separate `++i` on every
++    // iteration, in a loop that runs once per opcode of every contract executed
++    // in the block (~4.5M iterations for a mainnet block); only the rare
++    // JUMPDEST branch actually needs the index.
++    const auto* const begin = code.data();
++    const auto* const end = begin + code.size();
++    for (const auto* p = begin; p < end;)
+     {
+-        const auto op = code[i];
++        const auto op = *p;
+         if (static_cast<int8_t>(op) >= OP_PUSH1)  // If any PUSH opcode (see explanation above).
+-            i += op - size_t{OP_PUSH1 - 1};       // Skip PUSH data.
+-        else if (INTX_UNLIKELY(op == OP_JUMPDEST))
+-            map.set(i);
++        {
++            p += op - size_t{OP_PUSH1 - 2};  // Skip PUSH data (and the opcode itself).
++        }
++        else
++        {
++            if (INTX_UNLIKELY(op == OP_JUMPDEST))
++                map.set(static_cast<size_t>(p - begin));
++            ++p;
++        }
+     }
+ }
+ 

@@ -21,6 +21,7 @@
 #include <cstring>
 #include <memory>           // std::assume_aligned
 #include <unordered_map>
+#include <span>
 #include <vector>
 
 #include <evmc/evmc.hpp>
@@ -97,10 +98,10 @@ public:
     // `nib`; `update_value` (new-root pass) recomputes it ONLY if the slot
     // value changed. Both return a pointer to the row's cached union.
     const NodeR* build_value(size_t idx,
-                             const std::vector<uint8_t>& nib,
+                             std::span<const uint8_t> nib,
                              const evmc::bytes32& pos_hash);
     const NodeR* update_value(size_t idx,
-                              const std::vector<uint8_t>& nib);
+                              std::span<const uint8_t> nib);
 
     const NodeR* cached_at(size_t idx) const noexcept { return &leaf_[idx].cached; }
     const evmc::bytes32& pos_hash_at(size_t idx) const noexcept { return leaf_[idx].pos_hash; }
@@ -210,13 +211,21 @@ private:
         evmc::bytes32 tx_original{};
     };
 
-    // Composite map key: 20-byte address + 32-byte slot key. Trivially
-    // copyable, no internal padding (both members are uint8_t arrays).
-    struct Key {
+    // Composite map key: 20-byte address + 32-byte slot key. `pad` keeps
+    // `position` 8-byte aligned and is covered by KeyEq's memcmp, so it has to
+    // stay zero-initialized — see the asserts below.
+    struct alignas(8) Key {
         evmc::address address;
+        uint32_t      pad = 0;
         evmc::bytes32 position;
+
+        Key(const evmc::address& a, const evmc::bytes32& p) noexcept
+            : address(a), position(p) {}
     };
-    static_assert(sizeof(Key) == 20 + 32, "Key must be tightly packed");
+    static_assert(alignof(Key) % 8 == 0,            "Key must be 8-byte aligned");
+    static_assert(offsetof(Key, position) % 8 == 0, "Key::position must be aligned");
+    // No trailing padding, so KeyEq's memcmp only ever sees initialized bytes.
+    static_assert(sizeof(Key) == 24 + 32,           "Key must have no tail padding");
 
     // Hash: XOR the lowest 8 bytes of address and position. Both halves
     // are high-entropy big-endian quantities, so XOR-ing their LSB ends

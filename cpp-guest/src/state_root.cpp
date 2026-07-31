@@ -41,9 +41,27 @@ enum class Op : uint64_t {
 
 // ===== helpers ==============================================================
 
+// The nibbles walked from the root down to the current node. Bounded by the
+// 64-nibble key length and pushed/popped once per branch child, so an inline
+// stack rather than a `std::vector`.
+struct WalkPath {
+    static constexpr std::size_t kMax = 64;
+
+    uint8_t buf[kMax];
+    uint8_t len = 0;
+
+    // Callers must leave room; `build_branch_node` is the only pusher and
+    // checks the depth on entry.
+    void push(uint8_t nibble) noexcept { buf[len++] = nibble; }
+    void pop() noexcept { --len; }
+
+    const uint8_t* data() const noexcept { return buf; }
+    std::size_t    size() const noexcept { return len; }
+};
+
 // Reconstruct keccak(address)/keccak(slot) from the trie path (walked prefix
 // + leaf suffix), which must total 64 nibbles = 32 bytes. No preimage needed.
-evmc::bytes32 pack_key_hash(const std::vector<uint8_t>& walked,
+evmc::bytes32 pack_key_hash(const WalkPath& walked,
                             const std::vector<uint8_t>& suffix) {
     if (walked.size() + suffix.size() != 64) {
         fatal("state_root: leaf key path is not 64 nibbles");
@@ -62,75 +80,122 @@ evmc::bytes32 pack_key_hash(const std::vector<uint8_t>& walked,
 //
 // Each node type has a `build_*_rlp` helper that produces the node's full
 // RLP encoding (no hashing) and a thin `pack_*` wrapper that returns its
-// keccak256. The split lets `pack_to_child_ref` apply the Yellow-Paper
+// keccak256. The split lets the branch assembler apply the Yellow-Paper
 // cap function: if the node's RLP is < 32 bytes embed it inline into the
 // parent slot, otherwise reference it by its 32-byte hash.
 
-rlp::Bytes build_account_leaf_rlp(
+// ===== node encoding ========================================================
+//
+// Every node's RLP is bounded, so it is built in a stack buffer with the
+// enclosing headers written backwards into a reserved gap: no allocation, and no
+// byte ever moves. The encoding rules live in zeg/rlp.hpp.
+
+// Space reserved ahead of the payload for the prepended headers and hp item.
+constexpr std::size_t kRlpGap = 48;
+
+// Largest inner value a trie leaf can carry. An account is
+// [nonce, balance, storageRoot, codeHash] = 9 + 33 + 33 + 33 payload plus a
+// 2-byte header = 110; a storage leaf's value is at most 33. 128 leaves
+// headroom, and bounds what the witness can ask us to copy — a fork changing
+// the account shape needs edits here anyway, since the phantom-account decode
+// below reads exactly those four fields.
+constexpr std::size_t kMaxLeafValue = 128;
+constexpr std::size_t kRlpBuf = kRlpGap + 2 + kMaxLeafValue + 32;
+
+// Worst case for the gap is an account leaf: list header (2) + string header (2)
+// + hp item (1 + 33) + the node's own list header (2).
+static_assert(kRlpGap >= 2 + 2 + 1 + HpBytes::kMaxNibbles / 2 + 1 + 2,
+              "kRlpGap must cover every prepended header");
+static_assert(kRlpBuf >= kRlpGap + 2 + kMaxLeafValue,
+              "kRlpBuf must cover the widest leaf value");
+
+// Prepend an already-encoded item's bytes (the hex-prefix path) before `start`.
+std::size_t prepend_bytes(uint8_t* buf, std::size_t start, const uint8_t* src,
+                          std::size_t len) {
+    std::memcpy(buf + start - len, src, len);
+    return start - len;
+}
+
+// [hp, string([nonce, balance, storageRoot, codeHash])] in `buf`.
+rlp::BytesView build_account_leaf_rlp_s(
+    uint8_t* buf,
     const std::vector<uint8_t>& path_nibbles,
     const Accounts& accounts,
     size_t account_idx,
     const evmc::bytes32& storage_root,
     ValueSet which)
 {
-    using rlp::BytesView;
-
-    const uint64_t        nonce =
+    const uint64_t nonce =
         (which == ValueSet::Original) ? accounts.nonce_orig_at(account_idx)
                                       : accounts.nonce_at     (account_idx);
     const evmc::uint256be balance =
         (which == ValueSet::Original) ? accounts.balance_orig_at(account_idx)
                                       : accounts.balance_at     (account_idx);
-    const evmc::bytes32   code_hash =
+    const evmc::bytes32 code_hash =
         (which == ValueSet::Original) ? accounts.code_hash_orig_at(account_idx)
                                       : accounts.code_hash_at     (account_idx);
 
-    const auto nonce_rlp   = rlp::encode_u64(nonce);
-    const auto balance_rlp = rlp::encode_u256(balance);
-    const auto sroot_rlp   = rlp::encode(BytesView{storage_root.bytes,
-                                                    sizeof(storage_root.bytes)});
-    const auto chash_rlp   = rlp::encode(BytesView{code_hash.bytes,
-                                                    sizeof(code_hash.bytes)});
-    const auto account_rlp = rlp::encode_list({nonce_rlp, balance_rlp, sroot_rlp, chash_rlp});
+    std::size_t end = kRlpGap;
+    end += rlp::write_u64  (buf + end, nonce);
+    end += rlp::write_u256 (buf + end, balance);
+    end += rlp::write_string(buf + end, storage_root.bytes, sizeof(storage_root.bytes));
+    end += rlp::write_string(buf + end, code_hash.bytes, sizeof(code_hash.bytes));
 
-    const auto hp_bytes = hex_prefix(path_nibbles, /*leaf=*/true);
-    const auto hp_rlp   = rlp::encode(BytesView{hp_bytes});
-    const auto val_rlp  = rlp::encode(BytesView{account_rlp});
-    return rlp::encode_list({hp_rlp, val_rlp});
+    std::size_t start = rlp::prepend_list  (buf, kRlpGap, end);  // the account
+    start = rlp::prepend_string(buf, start, end);                // ... as a byte string
+
+    uint8_t hp_item[36];
+    const auto hp = hex_prefix(path_nibbles, /*leaf=*/true);
+    const std::size_t hp_len = rlp::write_string(hp_item, hp.data(), hp.size());
+    start = prepend_bytes(buf, start, hp_item, hp_len);
+
+    start = rlp::prepend_list(buf, start, end);                  // the leaf node
+    return rlp::BytesView{buf + start, end - start};
 }
 
-rlp::Bytes build_storage_leaf_rlp(
+// [hp, string(value)] in `buf`.
+rlp::BytesView build_storage_leaf_rlp_s(
+    uint8_t* buf,
     const std::vector<uint8_t>& path_nibbles,
     const Storages& storages,
     size_t storage_idx,
     ValueSet which)
 {
-    using rlp::BytesView;
-
     const evmc::bytes32 raw =
         (which == ValueSet::Original) ? storages.value_orig_at(storage_idx)
                                       : storages.value_at     (storage_idx);
     evmc::uint256be as_u256;
     std::memcpy(as_u256.bytes, raw.bytes, sizeof(raw.bytes));
-    const auto value_rlp = rlp::encode_u256(as_u256);
 
-    const auto hp_bytes = hex_prefix(path_nibbles, /*leaf=*/true);
-    const auto hp_rlp   = rlp::encode(BytesView{hp_bytes});
-    const auto val_rlp  = rlp::encode(BytesView{value_rlp});
-    return rlp::encode_list({hp_rlp, val_rlp});
+    std::size_t end = kRlpGap;
+    end += rlp::write_u256(buf + end, as_u256);
+    std::size_t start = rlp::prepend_string(buf, kRlpGap, end);
+
+    uint8_t hp_item[36];
+    const auto hp = hex_prefix(path_nibbles, /*leaf=*/true);
+    const std::size_t hp_len = rlp::write_string(hp_item, hp.data(), hp.size());
+    start = prepend_bytes(buf, start, hp_item, hp_len);
+
+    start = rlp::prepend_list(buf, start, end);
+    return rlp::BytesView{buf + start, end - start};
 }
 
-rlp::Bytes build_extension_rlp(
+// [hp, childHash] in `buf`.
+rlp::BytesView build_extension_rlp_s(
+    uint8_t* buf,
     const std::vector<uint8_t>& ext_nibbles,
     const evmc::bytes32& child_hash)
 {
-    using rlp::BytesView;
+    std::size_t end = kRlpGap;
+    end += rlp::write_string(buf + end, child_hash.bytes, sizeof(child_hash.bytes));
 
-    const auto hp_bytes = hex_prefix(ext_nibbles, /*leaf=*/false);
-    const auto hp_rlp    = rlp::encode(BytesView{hp_bytes});
-    const auto child_rlp = rlp::encode(BytesView{child_hash.bytes,
-                                                  sizeof(child_hash.bytes)});
-    return rlp::encode_list({hp_rlp, child_rlp});
+    uint8_t hp_item[36];
+    const auto hp = hex_prefix(ext_nibbles, /*leaf=*/false);
+    const std::size_t hp_len = rlp::write_string(hp_item, hp.data(), hp.size());
+    std::size_t start = prepend_bytes(buf, kRlpGap, hp_item, hp_len);
+
+    start = rlp::prepend_list(buf, start, end);
+    return rlp::BytesView{buf + start, end - start};
 }
 
 evmc::bytes32 pack_account_leaf(
@@ -140,9 +205,10 @@ evmc::bytes32 pack_account_leaf(
     const evmc::bytes32& storage_root,
     ValueSet which)
 {
-    const auto rlp = build_account_leaf_rlp(path_nibbles, accounts, account_idx,
-                                            storage_root, which);
-    return keccak256_bytes32(rlp.data(), rlp.size());
+    alignas(8) uint8_t buf[kRlpBuf];
+    const auto rlp_bytes = build_account_leaf_rlp_s(buf, path_nibbles, accounts,
+                                                    account_idx, storage_root, which);
+    return keccak256_bytes32(rlp_bytes.data(), rlp_bytes.size());
 }
 
 evmc::bytes32 pack_storage_leaf(
@@ -151,97 +217,152 @@ evmc::bytes32 pack_storage_leaf(
     size_t storage_idx,
     ValueSet which)
 {
-    const auto rlp = build_storage_leaf_rlp(path_nibbles, storages, storage_idx, which);
-    return keccak256_bytes32(rlp.data(), rlp.size());
+    alignas(8) uint8_t buf[kRlpBuf];
+    const auto rlp_bytes = build_storage_leaf_rlp_s(buf, path_nibbles, storages,
+                                                    storage_idx, which);
+    return keccak256_bytes32(rlp_bytes.data(), rlp_bytes.size());
 }
 
 evmc::bytes32 pack_extension(
     const std::vector<uint8_t>& ext_nibbles,
     const evmc::bytes32& child_hash)
 {
-    const auto rlp = build_extension_rlp(ext_nibbles, child_hash);
-    return keccak256_bytes32(rlp.data(), rlp.size());
+    alignas(8) uint8_t buf[kRlpBuf];
+    const auto rlp_bytes = build_extension_rlp_s(buf, ext_nibbles, child_hash);
+    return keccak256_bytes32(rlp_bytes.data(), rlp_bytes.size());
 }
 
-rlp::Bytes build_phantom_leaf_rlp(
+// [hp, value] in `buf`. `value_rlp` came from the witness, so its length is
+// checked against kMaxLeafValue where it is parsed.
+rlp::BytesView build_phantom_leaf_rlp_s(
+    uint8_t* buf,
     const std::vector<uint8_t>& path_nibbles,
     const std::vector<uint8_t>& value_rlp)
 {
-    using rlp::BytesView;
-    const auto hp_bytes = hex_prefix(path_nibbles, /*leaf=*/true);
-    const auto hp_rlp   = rlp::encode(BytesView{hp_bytes});
-    const auto val_rlp  = rlp::encode(BytesView{value_rlp});
-    return rlp::encode_list({hp_rlp, val_rlp});
+    std::size_t end = kRlpGap;
+    end += rlp::write_string(buf + end, value_rlp.data(), value_rlp.size());
+
+    uint8_t hp_item[36];
+    const auto hp = hex_prefix(path_nibbles, /*leaf=*/true);
+    const std::size_t hp_len = rlp::write_string(hp_item, hp.data(), hp.size());
+    std::size_t start = prepend_bytes(buf, kRlpGap, hp_item, hp_len);
+
+    start = rlp::prepend_list(buf, start, end);
+    return rlp::BytesView{buf + start, end - start};
 }
 
 evmc::bytes32 pack_phantom_leaf(
     const std::vector<uint8_t>& path_nibbles,
     const std::vector<uint8_t>& value_rlp)
 {
-    const auto rlp = build_phantom_leaf_rlp(path_nibbles, value_rlp);
-    return keccak256_bytes32(rlp.data(), rlp.size());
+    alignas(8) uint8_t buf[kRlpBuf];
+    const auto rlp_bytes = build_phantom_leaf_rlp_s(buf, path_nibbles, value_rlp);
+    return keccak256_bytes32(rlp_bytes.data(), rlp_bytes.size());
 }
 
-// Return the bytes that should occupy this child's slot inside a parent
-// branch node (MPT cap function — Yellow Paper App. D).
-rlp::Bytes pack_to_child_ref(const NodeR& r,
-                             const Accounts& accounts,
-                             const Storages& storages,
-                             ValueSet which)
-{
-    using rlp::BytesView;
+// A branch stores each child in one slot: by the MPT cap function either the
+// child's own RLP inlined (< 32 B) or the RLP string of its hash (33 B). Slot
+// bytes go straight into the parent's buffer; staging them per-slot first would
+// copy every hash twice, and at RLP's odd offsets both copies are unaligned.
+constexpr std::size_t kSlotMax = 33;
 
-    return std::visit([&](const auto& x) -> rlp::Bytes {
+// RLP string header for a 32-byte value (0x80 + 32).
+constexpr uint8_t kRlpHash32Header = 0xa0;
+
+std::size_t emit_hash_slot(uint8_t* dst, const evmc::bytes32& h) {
+    dst[0] = kRlpHash32Header;
+    std::memcpy(dst + 1, h.bytes, sizeof(h.bytes));
+    return kSlotMax;
+}
+
+// Cap function: inline the node's RLP when short, else reference its hash.
+std::size_t emit_capped_slot(uint8_t* dst, rlp::BytesView node_rlp) {
+    if (node_rlp.size() >= 32) {
+        return emit_hash_slot(dst, keccak256_bytes32(node_rlp.data(), node_rlp.size()));
+    }
+    std::memcpy(dst, node_rlp.data(), node_rlp.size());
+    return node_rlp.size();
+}
+
+// Write this child's slot bytes at `dst`; returns how many bytes were written.
+std::size_t emit_child_slot(uint8_t* dst,
+                            const NodeR& r,
+                            const Accounts& accounts,
+                            const Storages& storages,
+                            ValueSet which)
+{
+    // Empty and Hash need no encoding at all and are the vast majority, so
+    // answer them before the visit's table dispatch.
+    if (std::holds_alternative<EmptyR>(r)) {
+        dst[0] = 0x80;
+        return 1;
+    }
+    if (const auto* h = std::get_if<HashR>(&r)) {
+        return emit_hash_slot(dst, h->hash);
+    }
+
+    return std::visit([&](const auto& x) -> std::size_t {
         using T = std::decay_t<decltype(x)>;
-        if constexpr (std::is_same_v<T, EmptyR>) {
-            return rlp::Bytes{0x80};
-        } else if constexpr (std::is_same_v<T, HashR>) {
-            return rlp::encode(BytesView{x.hash.bytes, sizeof(x.hash.bytes)});
-        } else if constexpr (std::is_same_v<T, ExtR>) {
-            const auto node_rlp = build_extension_rlp(x.ext_nibbles, x.hash);
-            if (node_rlp.size() < 32) return node_rlp;
-            const auto h = keccak256_bytes32(node_rlp.data(), node_rlp.size());
-            return rlp::encode(BytesView{h.bytes, sizeof(h.bytes)});
-        } else if constexpr (std::is_same_v<T, AccountLeafR>) {
-            const auto node_rlp = build_account_leaf_rlp(
-                x.path_nibbles, accounts, x.account_idx, x.storage_root, which);
-            if (node_rlp.size() < 32) return node_rlp;
-            const auto h = keccak256_bytes32(node_rlp.data(), node_rlp.size());
-            return rlp::encode(BytesView{h.bytes, sizeof(h.bytes)});
-        } else if constexpr (std::is_same_v<T, StorageLeafR>) {
-            const auto node_rlp = build_storage_leaf_rlp(
-                x.path_nibbles, storages, x.storage_idx, which);
-            if (node_rlp.size() < 32) return node_rlp;
-            const auto h = keccak256_bytes32(node_rlp.data(), node_rlp.size());
-            return rlp::encode(BytesView{h.bytes, sizeof(h.bytes)});
-        } else if constexpr (std::is_same_v<T, PhantomLeafR>) {
-            const auto node_rlp = build_phantom_leaf_rlp(x.path_nibbles, x.value_rlp);
-            if (node_rlp.size() < 32) return node_rlp;
-            const auto h = keccak256_bytes32(node_rlp.data(), node_rlp.size());
-            return rlp::encode(BytesView{h.bytes, sizeof(h.bytes)});
+        if constexpr (std::is_same_v<T, EmptyR> || std::is_same_v<T, HashR>) {
+            return 0;  // handled above
+        } else {
+            alignas(8) uint8_t buf[kRlpBuf];
+            rlp::BytesView node_rlp;
+            if constexpr (std::is_same_v<T, PhantomLeafR>) {
+                node_rlp = build_phantom_leaf_rlp_s(buf, x.path_nibbles, x.value_rlp);
+            } else if constexpr (std::is_same_v<T, ExtR>) {
+                node_rlp = build_extension_rlp_s(buf, x.ext_nibbles, x.hash);
+            } else if constexpr (std::is_same_v<T, AccountLeafR>) {
+                node_rlp = build_account_leaf_rlp_s(buf, x.path_nibbles, accounts,
+                                                    x.account_idx, x.storage_root, which);
+            } else {
+                node_rlp = build_storage_leaf_rlp_s(buf, x.path_nibbles, storages,
+                                                    x.storage_idx, which);
+            }
+            return emit_capped_slot(dst, node_rlp);
         }
     }, r);
 }
 
-// Assemble a branch node from 16 pre-computed child slot byte-blobs.
-evmc::bytes32 pack_branch(const std::array<rlp::Bytes, 16>& child_refs) {
-    using rlp::BytesView;
+// Assemble a branch node from its 16 children, in a stack buffer bounded by 17
+// slots plus a header. The payload length is only known at the end, so the
+// header is written backwards into a reserved gap and the hash starts wherever
+// it landed.
+evmc::bytes32 pack_branch(const std::array<const NodeR*, 16>& children,
+                          const Accounts& accounts,
+                          const Storages& storages,
+                          ValueSet which)
+{
+    constexpr std::size_t kHdrGap = 3;                         // 0xf9 + 2 length bytes
+    constexpr std::size_t kBufSize = kHdrGap + 16 * kSlotMax + 1;
+    // kHdrGap is only enough while the payload's length fits in two bytes.
+    static_assert(16 * kSlotMax + 1 <= 0xffff, "branch payload needs a longer header");
 
-    static const rlp::Bytes kEmptyValueSlot{0x80};
+    alignas(8) uint8_t buf[kBufSize];
 
-    const auto branch_rlp = rlp::encode_list({
-        BytesView{child_refs[0]},  BytesView{child_refs[1]},
-        BytesView{child_refs[2]},  BytesView{child_refs[3]},
-        BytesView{child_refs[4]},  BytesView{child_refs[5]},
-        BytesView{child_refs[6]},  BytesView{child_refs[7]},
-        BytesView{child_refs[8]},  BytesView{child_refs[9]},
-        BytesView{child_refs[10]}, BytesView{child_refs[11]},
-        BytesView{child_refs[12]}, BytesView{child_refs[13]},
-        BytesView{child_refs[14]}, BytesView{child_refs[15]},
-        BytesView{kEmptyValueSlot},
-    });
+    std::size_t n = kHdrGap;
+    for (const auto* child : children) {
+        n += emit_child_slot(buf + n, *child, accounts, storages, which);
+    }
+    buf[n++] = 0x80;  // the branch's own value slot — always empty
 
-    return keccak256_bytes32(branch_rlp.data(), branch_rlp.size());
+    const std::size_t payload = n - kHdrGap;
+    std::size_t start;
+    if (payload <= 55) {
+        start = kHdrGap - 1;
+        buf[start] = static_cast<uint8_t>(0xc0 + payload);
+    } else if (payload <= 0xff) {
+        start = kHdrGap - 2;
+        buf[start]     = 0xf8;
+        buf[start + 1] = static_cast<uint8_t>(payload);
+    } else {
+        start = kHdrGap - 3;
+        buf[start]     = 0xf9;
+        buf[start + 1] = static_cast<uint8_t>(payload >> 8);
+        buf[start + 2] = static_cast<uint8_t>(payload);
+    }
+
+    return keccak256_bytes32(buf + start, n - start);
 }
 
 evmc::bytes32 finalize(const NodeR& r,
@@ -317,11 +438,7 @@ NodeR reduce_branch(const std::array<const NodeR*, 16>& children,
         }
     }
 
-    std::array<rlp::Bytes, 16> child_refs;
-    for (int k = 0; k < 16; ++k) {
-        child_refs[k] = pack_to_child_ref(*children[k], accounts, storages, which);
-    }
-    return mk_node<HashR>(pack_branch(child_refs));
+    return mk_node<HashR>(pack_branch(children, accounts, storages, which));
 }
 
 // ===== build pass (stream -> node array) ====================================
@@ -349,7 +466,10 @@ const NodeR& empty_result() {
 // so these pointers stay stable; `branch_nodes`/`aux` only grow during build,
 // and callers gather these pointers AFTER all siblings are built (so no
 // intervening reallocation invalidates them before they are consumed).
-const NodeR* result_ptr(const Child& c,
+// always_inline, not a hint: a branch calls this 16 times, and GCC otherwise
+// leaves a five-case switch out of line, where the call costs more than it.
+__attribute__((always_inline))
+inline const NodeR* result_ptr(const Child& c,
                         const std::vector<BranchNode>& branch_nodes,
                         const std::vector<NodeR>& aux,
                         const Accounts& accounts,
@@ -366,20 +486,44 @@ const NodeR* result_ptr(const Child& c,
     fatal("state_root: invalid node type");
 }
 
-uint32_t aux_push(BuildCtx& ctx, NodeR n) {
+// Construct an aux node in place. Passing a `NodeR` by value would move the
+// whole variant twice — into the parameter, then into the vector — and it is as
+// large as its widest alternative.
+template <class T, class... Args>
+uint32_t aux_emplace(BuildCtx& ctx, Args&&... args) {
     if (ctx.branch_nodes.size() + ctx.aux.size() >= ctx.node_limit) {
         fatal("state_root: more nodes than declared (numberOfNodes overflow)");
     }
-    ctx.aux.push_back(std::move(n));
+    ctx.aux.emplace_back(std::in_place_type<T>, std::forward<Args>(args)...);
     return static_cast<uint32_t>(ctx.aux.size() - 1);
 }
+
+// Leaf and PhantomLeaf are the heavyweight cases (account decode, an RLP walk, a
+// nested storage subtree). Out of line, so the common Hash/ExtensionHash calls
+// don't pay a frame sized for them. `noinline` is what survives -O2.
+__attribute__((noinline)) Child build_phantom_leaf_node(const uint8_t*& cursor,
+                                                        BuildCtx& ctx,
+                                                        TreeKind kind,
+                                                        WalkPath& walked);
+__attribute__((noinline)) Child build_leaf_node(const uint8_t*& cursor,
+                                                BuildCtx& ctx,
+                                                TreeKind kind,
+                                                WalkPath& walked,
+                                                const evmc::address* owning_address);
+// Branch is outlined for the same reason plus one of its own: its `BranchNode`
+// local (16 Childs + a cached NodeR) is what sizes the frame.
+__attribute__((noinline)) Child build_branch_node(const uint8_t*& cursor,
+                                                  BuildCtx& ctx,
+                                                  TreeKind kind,
+                                                  WalkPath& walked,
+                                                  const evmc::address* owning_address);
 
 // Walk one node from the stream, materialize it (and its subtree) into the
 // node array / tables using ORIGINAL values, and return its Child link.
 Child build_node(const uint8_t*& cursor,
                  BuildCtx& ctx,
                  TreeKind kind,
-                 std::vector<uint8_t>& walked,
+                 WalkPath& walked,
                  const evmc::address* owning_address)
 {
     const Op op = static_cast<Op>(read_u64_le(cursor));
@@ -392,7 +536,7 @@ Child build_node(const uint8_t*& cursor,
             evmc::bytes32 h;
             std::memcpy(h.bytes, cursor, sizeof(h.bytes));
             cursor += sizeof(h.bytes);  // 32 B — already 8-aligned
-            return Child{NodeType::Hash, aux_push(ctx, mk_node<HashR>(h))};
+            return Child{NodeType::Hash, aux_emplace<HashR>(ctx, h)};
         }
 
         case Op::ExtensionHash: {
@@ -406,10 +550,74 @@ Child build_node(const uint8_t*& cursor,
             std::memcpy(h.bytes, cursor, sizeof(h.bytes));
             cursor += sizeof(h.bytes);
             return Child{NodeType::ExtensionHash,
-                         aux_push(ctx, mk_node<ExtR>(std::move(ext), h))};
+                         aux_emplace<ExtR>(ctx, std::move(ext), h)};
         }
 
-        case Op::PhantomLeaf: {
+        case Op::PhantomLeaf:
+            return build_phantom_leaf_node(cursor, ctx, kind, walked);
+
+        case Op::Leaf:
+            return build_leaf_node(cursor, ctx, kind, walked, owning_address);
+
+        case Op::Branch:
+            return build_branch_node(cursor, ctx, kind, walked, owning_address);
+    }
+
+    fatal("state_root: invalid opcode in stream");
+}
+
+Child build_branch_node(const uint8_t*& cursor,
+                        BuildCtx& ctx,
+                        TreeKind kind,
+                        WalkPath& walked,
+                        const evmc::address* owning_address)
+{
+    // Depth is witness-controlled — nothing else limits how deeply the stream
+    // nests Branch ops — and past 64 nibbles the walk runs off WalkPath's
+    // buffer. One check covers all 16 pushes below: each is popped before the
+    // next, and the recursive call re-checks for its own level.
+    if (walked.size() >= WalkPath::kMax) {
+        fatal("state_root: trie path deeper than 64 nibbles");
+    }
+
+    BranchNode bn;
+    for (uint8_t k = 0; k < 16; ++k) {
+        // Empty dominates a sparse 16-ary trie and needs nothing but its
+        // opcode word consumed, so peek instead of recursing.
+        const uint8_t* peek = cursor;
+        if (static_cast<Op>(read_u64_le(peek)) == Op::Empty) {
+            cursor = peek;
+            bn.children[k] = Child{NodeType::Empty, 0};
+            continue;
+        }
+        walked.push(k);
+        bn.children[k] = build_node(cursor, ctx, kind, walked, owning_address);
+        walked.pop();
+    }
+    // Gather child results AFTER every child is built (no further
+    // pushes happen before reduce_branch consumes them).
+    std::array<const NodeR*, 16> child_results;
+    for (int k = 0; k < 16; ++k) {
+        child_results[k] = result_ptr(bn.children[k], ctx.branch_nodes,
+                                      ctx.aux, ctx.accounts, ctx.storages);
+    }
+    bn.cached = reduce_branch(child_results, ctx.accounts, ctx.storages,
+                              ValueSet::Original);
+
+    if (ctx.branch_nodes.size() + ctx.aux.size() >= ctx.node_limit) {
+        fatal("state_root: more nodes than declared (numberOfNodes overflow)");
+    }
+    ctx.branch_nodes.push_back(std::move(bn));
+    return Child{NodeType::Branch,
+                 static_cast<uint32_t>(ctx.branch_nodes.size() - 1)};
+}
+
+Child build_phantom_leaf_node(const uint8_t*& cursor,
+                              BuildCtx& ctx,
+                              TreeKind kind,
+                              WalkPath& walked)
+{
+    {
             const uint64_t n = read_u64_le(cursor);
             std::vector<uint8_t> path;
             path.reserve(n);
@@ -417,6 +625,9 @@ Child build_node(const uint8_t*& cursor,
                 path.push_back(static_cast<uint8_t>(read_u64_le(cursor) & 0x0f));
             }
             const uint64_t value_len = read_u64_le(cursor);
+            if (value_len > kMaxLeafValue) {
+                fatal("state_root: phantom leaf value exceeds the trie-leaf bound");
+            }
             std::vector<uint8_t> value(cursor, cursor + value_len);
             cursor += value_len;
             align_to_u64(cursor, value_len);
@@ -458,11 +669,18 @@ Child build_node(const uint8_t*& cursor,
                 }
             }
             return Child{NodeType::PhantomLeaf,
-                         aux_push(ctx, mk_node<PhantomLeafR>(std::move(path),
-                                                             std::move(value)))};
-        }
+                         aux_emplace<PhantomLeafR>(ctx, std::move(path),
+                                                   std::move(value))};
+    }
+}
 
-        case Op::Leaf: {
+Child build_leaf_node(const uint8_t*& cursor,
+                      BuildCtx& ctx,
+                      TreeKind kind,
+                      WalkPath& walked,
+                      const evmc::address* owning_address)
+{
+    {
             // Payload: suffix nibbles (count u64 + one u64/nibble), then the
             // plaintext key + value. The trie key hash is pack(walked ++
             // suffix); the runtime tables are keyed by the plaintext, bound to
@@ -498,7 +716,7 @@ Child build_node(const uint8_t*& cursor,
 
                 // Build the per-account storage subtree (`addr` is a stable
                 // local for the duration of the nested walk).
-                std::vector<uint8_t> storage_walked;
+                WalkPath storage_walked;
                 const Child storage_child = build_node(
                     cursor, ctx, TreeKind::Storage, storage_walked, &addr);
                 const evmc::bytes32 storage_root = finalize(
@@ -534,35 +752,7 @@ Child build_node(const uint8_t*& cursor,
                 ctx.storages.build_value(idx, nib, pos_hash);
                 return Child{NodeType::Storage, static_cast<uint32_t>(idx)};
             }
-        }
-
-        case Op::Branch: {
-            BranchNode bn;
-            for (uint8_t k = 0; k < 16; ++k) {
-                walked.push_back(k);
-                bn.children[k] = build_node(cursor, ctx, kind, walked, owning_address);
-                walked.pop_back();
-            }
-            // Gather child results AFTER every child is built (no further
-            // pushes happen before reduce_branch consumes them).
-            std::array<const NodeR*, 16> child_results;
-            for (int k = 0; k < 16; ++k) {
-                child_results[k] = result_ptr(bn.children[k], ctx.branch_nodes,
-                                              ctx.aux, ctx.accounts, ctx.storages);
-            }
-            bn.cached = reduce_branch(child_results, ctx.accounts, ctx.storages,
-                                      ValueSet::Original);
-
-            if (ctx.branch_nodes.size() + ctx.aux.size() >= ctx.node_limit) {
-                fatal("state_root: more nodes than declared (numberOfNodes overflow)");
-            }
-            ctx.branch_nodes.push_back(std::move(bn));
-            return Child{NodeType::Branch,
-                         static_cast<uint32_t>(ctx.branch_nodes.size() - 1)};
-        }
     }
-
-    fatal("state_root: invalid opcode in stream");
 }
 
 // ===== eval pass (node array -> new root) ===================================
@@ -613,7 +803,23 @@ std::pair<const NodeR*, bool> eval_node(const Child& c, EvalCtx& ctx, std::size_
             std::array<const NodeR*, 16> child_results;
             bool all_ro = true;
             for (uint8_t k = 0; k < 16; ++k) {
-                const auto [cr, cro] = eval_node(bn.children[k], ctx, depth + 1);
+                // Most slots are empty or an untouched subtree — the cases this
+                // function answers from a table — so resolve them here instead
+                // of paying a call. All are read-only, so `all_ro` is unaffected.
+                const Child& child = bn.children[k];
+                switch (child.type) {
+                    case NodeType::Empty:
+                        child_results[k] = &empty_result();
+                        continue;
+                    case NodeType::Hash:
+                    case NodeType::ExtensionHash:
+                    case NodeType::PhantomLeaf:
+                        child_results[k] = &ctx.aux[child.idx];
+                        continue;
+                    default:
+                        break;
+                }
+                const auto [cr, cro] = eval_node(child, ctx, depth + 1);
                 child_results[k] = cr;
                 all_ro = all_ro && cro;
             }
@@ -671,8 +877,7 @@ StateRoot::StateRoot(const uint8_t*& cursor,
     BuildCtx ctx{accounts_, storages_, branch_nodes_, aux_,
                  /*next_state_idx=*/0, /*next_storage_idx=*/0,
                  static_cast<std::size_t>(num_nodes)};
-    std::vector<uint8_t> walked;
-    walked.reserve(64);  // max trie depth
+    WalkPath walked;
     root_ = build_node(cursor, ctx, TreeKind::State, walked, /*owning=*/nullptr);
 
     old_root_ = finalize(
