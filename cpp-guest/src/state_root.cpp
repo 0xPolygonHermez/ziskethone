@@ -59,6 +59,30 @@ struct WalkPath {
     std::size_t    size() const noexcept { return len; }
 };
 
+// Two bits per child in the word after Op::Branch. A tagged Empty or Hash child
+// carries no opcode word of its own; kTagNode means a whole node follows.
+constexpr uint64_t kTagEmpty = 0;
+constexpr uint64_t kTagHash  = 1;
+constexpr uint64_t kTagNode  = 2;
+
+// `u64 count` then two nibbles per byte, padded to 8 to keep the cursor aligned.
+std::vector<uint8_t> read_nibbles(const uint8_t*& cursor) {
+    const uint64_t n = read_u64_le(cursor);
+    if (n > NibblePath::kMax) {
+        fatal("state_root: nibble run longer than a 64-nibble key");
+    }
+    std::vector<uint8_t> nibs(n);
+    for (uint64_t i = 0; i < n; i += 2) {
+        const uint8_t b = cursor[i / 2];
+        nibs[i] = static_cast<uint8_t>(b >> 4);
+        if (i + 1 < n) {
+            nibs[i + 1] = static_cast<uint8_t>(b & 0x0f);
+        }
+    }
+    cursor += ((n + 1) / 2 + 7) / 8 * 8;
+    return nibs;
+}
+
 // Reconstruct keccak(address)/keccak(slot) from the trie path (walked prefix
 // + leaf suffix), which must total 64 nibbles = 32 bytes. No preimage needed.
 evmc::bytes32 pack_key_hash(const WalkPath& walked,
@@ -67,8 +91,14 @@ evmc::bytes32 pack_key_hash(const WalkPath& walked,
         fatal("state_root: leaf key path is not 64 nibbles");
     }
     uint8_t nibs[64];
-    std::memcpy(nibs, walked.data(), walked.size());
-    std::memcpy(nibs + walked.size(), suffix.data(), suffix.size());
+    // Both spans can be empty, and an empty vector's data() may be null —
+    // memcpy forbids a null argument even for a zero count (UBSan flags it).
+    if (walked.size() != 0) {
+        std::memcpy(nibs, walked.data(), walked.size());
+    }
+    if (!suffix.empty()) {
+        std::memcpy(nibs + walked.size(), suffix.data(), suffix.size());
+    }
     evmc::bytes32 out{};
     for (size_t j = 0; j < 32; ++j) {
         out.bytes[j] = static_cast<uint8_t>((nibs[2 * j] << 4) | (nibs[2 * j + 1] & 0x0f));
@@ -452,6 +482,13 @@ struct BuildCtx {
     std::size_t              next_state_idx;
     std::size_t              next_storage_idx;
     std::size_t              node_limit;
+    // Running lengths of `branch_nodes` and `aux`. std::vector::size() is a
+    // pointer difference divided by the element stride, and neither element is
+    // power-of-two sized, so GCC lowers each call to a multiply by a reciprocal.
+    // Appending one node asked for three of them — the node-limit check reads
+    // both, and the returned index reads one again — on the walk's hottest path.
+    uint32_t                 aux_n = 0;
+    uint32_t                 branch_n = 0;
 };
 
 // The result-node of a static EmptyR child (shared, read-only).
@@ -491,11 +528,11 @@ inline const NodeR* result_ptr(const Child& c,
 // large as its widest alternative.
 template <class T, class... Args>
 uint32_t aux_emplace(BuildCtx& ctx, Args&&... args) {
-    if (ctx.branch_nodes.size() + ctx.aux.size() >= ctx.node_limit) {
+    if (std::size_t{ctx.branch_n} + ctx.aux_n >= ctx.node_limit) {
         fatal("state_root: more nodes than declared (numberOfNodes overflow)");
     }
     ctx.aux.emplace_back(std::in_place_type<T>, std::forward<Args>(args)...);
-    return static_cast<uint32_t>(ctx.aux.size() - 1);
+    return ctx.aux_n++;
 }
 
 // Leaf and PhantomLeaf are the heavyweight cases (account decode, an RLP walk, a
@@ -540,12 +577,7 @@ Child build_node(const uint8_t*& cursor,
         }
 
         case Op::ExtensionHash: {
-            const uint64_t n = read_u64_le(cursor);
-            std::vector<uint8_t> ext;
-            ext.reserve(n);
-            for (uint64_t i = 0; i < n; ++i) {
-                ext.push_back(static_cast<uint8_t>(read_u64_le(cursor) & 0x0f));
-            }
+            std::vector<uint8_t> ext = read_nibbles(cursor);
             evmc::bytes32 h;
             std::memcpy(h.bytes, cursor, sizeof(h.bytes));
             cursor += sizeof(h.bytes);
@@ -580,15 +612,28 @@ Child build_branch_node(const uint8_t*& cursor,
         fatal("state_root: trie path deeper than 64 nibbles");
     }
 
+    // Children are declared up front, two bits each: an Empty child costs no
+    // stream bytes and a Hash child only its 32. Together ~92% of the slots, and
+    // neither needs the walked path or a recursive frame.
+    const uint64_t tags = read_u64_le(cursor);
+
     BranchNode bn;
     for (uint8_t k = 0; k < 16; ++k) {
-        // Empty dominates a sparse 16-ary trie and needs nothing but its
-        // opcode word consumed, so peek instead of recursing.
-        const uint8_t* peek = cursor;
-        if (static_cast<Op>(read_u64_le(peek)) == Op::Empty) {
-            cursor = peek;
-            bn.children[k] = Child{NodeType::Empty, 0};
-            continue;
+        switch ((tags >> (2 * k)) & 0x3u) {
+            case kTagEmpty:
+                bn.children[k] = Child{NodeType::Empty, 0};
+                continue;
+            case kTagHash: {
+                evmc::bytes32 h;
+                std::memcpy(h.bytes, cursor, sizeof(h.bytes));
+                cursor += sizeof(h.bytes);  // 32 B — already 8-aligned
+                bn.children[k] = Child{NodeType::Hash, aux_emplace<HashR>(ctx, h)};
+                continue;
+            }
+            case kTagNode:
+                break;
+            default:
+                fatal("state_root: invalid branch child tag");
         }
         walked.push(k);
         bn.children[k] = build_node(cursor, ctx, kind, walked, owning_address);
@@ -604,12 +649,11 @@ Child build_branch_node(const uint8_t*& cursor,
     bn.cached = reduce_branch(child_results, ctx.accounts, ctx.storages,
                               ValueSet::Original);
 
-    if (ctx.branch_nodes.size() + ctx.aux.size() >= ctx.node_limit) {
+    if (std::size_t{ctx.branch_n} + ctx.aux_n >= ctx.node_limit) {
         fatal("state_root: more nodes than declared (numberOfNodes overflow)");
     }
     ctx.branch_nodes.push_back(std::move(bn));
-    return Child{NodeType::Branch,
-                 static_cast<uint32_t>(ctx.branch_nodes.size() - 1)};
+    return Child{NodeType::Branch, ctx.branch_n++};
 }
 
 Child build_phantom_leaf_node(const uint8_t*& cursor,
@@ -618,12 +662,7 @@ Child build_phantom_leaf_node(const uint8_t*& cursor,
                               WalkPath& walked)
 {
     {
-            const uint64_t n = read_u64_le(cursor);
-            std::vector<uint8_t> path;
-            path.reserve(n);
-            for (uint64_t i = 0; i < n; ++i) {
-                path.push_back(static_cast<uint8_t>(read_u64_le(cursor) & 0x0f));
-            }
+            std::vector<uint8_t> path = read_nibbles(cursor);
             const uint64_t value_len = read_u64_le(cursor);
             if (value_len > kMaxLeafValue) {
                 fatal("state_root: phantom leaf value exceeds the trie-leaf bound");
@@ -685,12 +724,7 @@ Child build_leaf_node(const uint8_t*& cursor,
             // plaintext key + value. The trie key hash is pack(walked ++
             // suffix); the runtime tables are keyed by the plaintext, bound to
             // the path by keccak(plaintext) == that hash.
-            const uint64_t suffix_n = read_u64_le(cursor);
-            std::vector<uint8_t> suffix;
-            suffix.reserve(suffix_n);
-            for (uint64_t i = 0; i < suffix_n; ++i) {
-                suffix.push_back(static_cast<uint8_t>(read_u64_le(cursor) & 0x0f));
-            }
+            std::vector<uint8_t> suffix = read_nibbles(cursor);
 
             if (kind == TreeKind::State) {
                 // address(20) pad(4) balance(u256be,32) nonce(u64) code_hash(32)
