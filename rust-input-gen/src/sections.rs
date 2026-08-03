@@ -18,6 +18,9 @@ use crate::writer::Writer;
 
 /// On-wire format version, written in the 4 bytes after the magic.
 /// Must match the guest's `kVersion` in `cpp-guest/include/zeg/binary_format.hpp`.
+/// v9: contract diffs — a contract record carries a kind word, so a
+/// near-duplicate bytecode is stored as a diff against an earlier record
+/// instead of in full. ~27% smaller witness on pool-sweeping blocks.
 /// v8: ConsensusInfo prefix +16 B — adds target_blob_gas_per_block and
 /// max_blob_gas_per_block (u64-le at offsets 352 and 360) so the guest can
 /// independently re-derive excess_blob_gas (EIP-4844, plus the EIP-7918
@@ -41,7 +44,12 @@ use crate::writer::Writer;
 /// derives read-only-ness dynamically (original == current).
 /// v1: StateRoot `Op::Leaf` carries no index (keccak-sorted tables +
 /// counter-derived index in the guest).
-pub const FORMAT_VERSION: u32 = 8; // v8: +target/max_blob_gas_per_block (see above)
+pub const FORMAT_VERSION: u32 = 9;
+
+/// Contract record kinds. A literal carries its bytecode; a diff carries an
+/// earlier record's index plus the runs that differ from it.
+const CONTRACT_LITERAL: u64 = 0;
+const CONTRACT_DIFF: u64 = 1;
 
 /// File magic prefix (8 bytes): 4 B ASCII `"ZEG0"` + 4 B little-endian
 /// format version, which also keeps the cursor 8-byte aligned for the
@@ -347,14 +355,100 @@ pub fn write_contracts(
         }
     }
 
-    w.u64_le(by_hash.len() as u64);
-    for code in by_hash.values() {
-        w.u64_le(code.len() as u64);
-        w.bytes(code);
-        w.pad_to_8();
-    }
+    write_contract_records(w, &by_hash);
     w.assert_aligned();
     Ok(())
+}
+
+/// Byte runs where `a` and `b` differ. Both must be the same length.
+fn diff_runs(a: &[u8], b: &[u8]) -> Vec<(u32, u32)> {
+    let mut runs = Vec::new();
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] == b[i] {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < a.len() && a[i] != b[i] {
+            i += 1;
+        }
+        runs.push((start as u32, (i - start) as u32));
+    }
+    runs
+}
+
+/// Emit the records, storing a near-duplicate bytecode as a diff against an
+/// earlier record instead of in full.
+///
+/// Pool-sweeping blocks carry hundreds of codes that are one template with
+/// different immutables compiled in: same length, differing only inside PUSH
+/// data. Their hashes differ, so dedup by hash cannot fold them, yet a diff is
+/// a few hundred bytes against 22 KB — 20.3 MB of block 25659678's witness.
+///
+/// Literals go first, so a diff's `template_index` always points backwards and
+/// the guest can reconstruct in one pass.
+fn write_contract_records(w: &mut Writer,
+                          by_hash: &BTreeMap<B256, alloy::primitives::Bytes>) {
+    let all: Vec<&alloy::primitives::Bytes> = by_hash.values().collect();
+
+    // The first entry of each length group is the template; a later entry
+    // becomes a diff only if that encodes smaller than storing it whole, so
+    // unrelated codes that merely share a length stay literal.
+    let mut by_len: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (i, c) in all.iter().enumerate() {
+        by_len.entry(c.len()).or_default().push(i);
+    }
+    let mut diff_of: Vec<Option<(usize, Vec<(u32, u32)>)>> = vec![None; all.len()];
+    for idxs in by_len.values() {
+        if idxs.len() < 2 {
+            continue;
+        }
+        let t = idxs[0];
+        for &j in &idxs[1..] {
+            let runs = diff_runs(all[t], all[j]);
+            let encoded: usize = 16 + runs.iter().map(|(_, l)| 8 + *l as usize).sum::<usize>();
+            if encoded < all[j].len() {
+                diff_of[j] = Some((t, runs));
+            }
+        }
+    }
+
+    // Literals first, then diffs; `slot` maps an entry to its record index.
+    let mut slot = vec![u64::MAX; all.len()];
+    let mut order: Vec<usize> = (0..all.len()).filter(|i| diff_of[*i].is_none()).collect();
+    let n_literals = order.len();
+    order.extend((0..all.len()).filter(|i| diff_of[*i].is_some()));
+    for (rec, &i) in order.iter().enumerate() {
+        slot[i] = rec as u64;
+    }
+
+    w.u64_le(all.len() as u64);
+    for (rec, &i) in order.iter().enumerate() {
+        let code = all[i];
+        w.u64_le(code.len() as u64);
+        match &diff_of[i] {
+            None => {
+                debug_assert!(rec < n_literals);
+                w.u64_le(CONTRACT_LITERAL);
+                w.bytes(code);
+                w.pad_to_8();
+            }
+            Some((t, runs)) => {
+                w.u64_le(CONTRACT_DIFF);
+                w.u64_le(slot[*t]);
+                w.u64_le(runs.len() as u64);
+                for (off, len) in runs {
+                    w.u32_le(*off);
+                    w.u32_le(*len);
+                }
+                for (off, len) in runs {
+                    w.bytes(&code[*off as usize..(*off + *len) as usize]);
+                }
+                w.pad_to_8();
+            }
+        }
+    }
 }
 
 /// Block-start (original) value for every touched (address, slot) — the

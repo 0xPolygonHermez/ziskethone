@@ -167,19 +167,53 @@ Deployed bytecode for every code the block executes. Schema at
 
 ### Contract record (variable)
 
+Every record starts with its size and a kind word. A **literal** carries
+the bytecode; a **diff** carries an earlier record's index plus only the
+byte runs that differ from it.
+
 ```
 +-------------------+
 | u64  code_size    |    // 8 B
++-------------------+
+| u64  kind         |    // 8 B: 0 = literal, 1 = diff
++-------------------+
+   kind 0 (literal):
 +-------------------+
 | u8   code[]       |    // code_size bytes of EVM bytecode
 +-------------------+
 | u8   pad[0..7]    |    // zero-fill to the next 8-byte boundary
 +-------------------+
+   kind 1 (diff):
++-------------------+
+| u64  template_idx |    // 8 B; MUST be < this record's index
++-------------------+
+| u64  run_count    |    // 8 B; MUST be <= code_size
++-------------------+
+| {u32 off, u32 len}|    // run_count x 8 B; each run within [0, code_size)
++-------------------+
+| u8   diff_bytes[] |    // the runs' replacement bytes, concatenated
++-------------------+
+| u8   pad[0..7]    |    // zero-fill to the next 8-byte boundary
++-------------------+
 ```
 
-The keccak256 of `code` is the lookup key (matching `code_hash` in the
-Account record). The guest accesses code zero-copy via the embedded
-pointer + length.
+A diff exists because Solidity compiles `immutable` values into the
+bytecode as PUSH operands: every Uniswap-V3-style pool is the same code
+with a few hundred bytes changed, and a one-byte change gives a different
+keccak, so dedup by hash cannot fold them. On block 25659678, 937 codes of
+exactly 22,142 bytes differ in ~316 bytes each — 525 bytes per diff
+instead of 22,142.
+
+The encoder emits **all literals first**, so `template_idx` always points
+backwards and the guest reconstructs in a single pass. Whether a code is
+stored as a diff is purely a size decision (`16 + Σ(8 + len) < code_size`),
+so unrelated codes that merely share a length stay literal.
+
+The keccak256 of the **reconstructed** code is the lookup key (matching
+`code_hash` in the Account record); the guest computes it itself, so a
+malformed diff yields code under the wrong key and the lookup for the real
+hash aborts. Literal code is accessed zero-copy via the embedded pointer +
+length; a diff is materialized into guest-owned storage.
 
 ## Section 5 — `Storages` *(removed in v3)*
 

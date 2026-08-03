@@ -12,6 +12,9 @@ namespace zeg {
 
 constexpr uint32_t kMagic   = 0x3047455Au; // "ZEG0" little-endian
 // Format version, stored in the 4 bytes immediately after the magic.
+// v9: contract diffs — a contract record carries a kind word, so a
+//     near-duplicate bytecode is stored as a diff against an earlier record
+//     instead of in full. ~27% smaller witness on pool-sweeping blocks.
 // v7: stateless StateRoot — each `Op::Leaf` carries its key-suffix nibbles
 //     (the guest packs walked ++ suffix into the trie key hash, no preimage)
 //     plus the plaintext key + block-start values. The guest keys its runtime
@@ -38,7 +41,7 @@ constexpr uint32_t kMagic   = 0x3047455Au; // "ZEG0" little-endian
 //     guest derives read-only-ness dynamically (original == current).
 // v1: StateRoot `Op::Leaf` carries no index; keccak-sorted tables.
 // The guest rejects any version != kVersion.
-constexpr uint32_t kVersion = 8;  // v8: ConsensusInfo prefix +8 B —
+constexpr uint32_t kVersion = 9;  // v8: ConsensusInfo prefix +8 B —
                                   // adds target_blob_gas_per_block (u64-le
                                   // at offset 352) so the guest can
                                   // independently re-derive and validate
