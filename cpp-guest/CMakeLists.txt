@@ -46,6 +46,10 @@ endif()
 #       precompiles instead of intx's software bigint (the analogue of reth's
 #       ruint patch). Gated on ZEG_ZISK, so the host build keeps intx and
 #       stays the independent reference for the host-vs-guest comparison.
+#   05: Expose CodeAnalysis's JUMPDEST bitset, so evmc2_evmone.cpp can hand one
+#       map to several bytecodes it has proved parse identically — the
+#       immutable-variant clones a pool-sweeping block is full of. Applies on
+#       top of 04's pointer walk: different file, no interaction.
 # Each patch is checked with `git apply --reverse --check` first; if it
 # is already applied we skip — that keeps the configure step idempotent
 # across rebuilds.
@@ -54,6 +58,7 @@ set(_evmone_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/02-evmone-delegation-eoa-fastpath.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/03-evmone-zisk-arith256-mulmod.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/04-evmone-zisk-jumpdest-pointer-walk.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/05-evmone-expose-jumpdest-bitset.patch"
 )
 find_program(GIT_EXECUTABLE git REQUIRED)
 foreach(_patch IN LISTS _evmone_patches)
@@ -259,3 +264,21 @@ else()
     message(FATAL_ERROR "EVM_BACKEND must be evmone | zevm (got ${EVM_BACKEND})")
 endif()
 
+# ----- tools -----
+# src/evmc2_evmone.cpp duplicates evmone's JUMPDEST advance rule in
+# build_boundary, and nothing in the type system keeps the two in step (see the
+# COUPLING note there). tools/jd_share_test.cpp is what does: it accepts a pair
+# of bytecodes only if evmone's own analysis of both agrees at every position.
+# Off by default because it compiles that TU a second time, with the test hook
+# exposed; turn it on to run the guard:
+#   cmake -S cpp-guest -B build -DZEG_BUILD_TOOLS=ON && build/jd_share_test
+option(ZEG_BUILD_TOOLS "Build cpp-guest/tools test binaries" OFF)
+if(ZEG_BUILD_TOOLS AND EVM_BACKEND STREQUAL "evmone")
+    add_executable(jd_share_test tools/jd_share_test.cpp src/evmc2_evmone.cpp)
+    target_compile_definitions(jd_share_test PRIVATE ZEG_JUMPDEST_SHARING_TEST)
+    target_include_directories(jd_share_test PRIVATE
+        include
+        ${evmone_SOURCE_DIR}/lib
+        ${evmone_SOURCE_DIR}/include)
+    target_link_libraries(jd_share_test PRIVATE evmone evmone::precompiles intx::intx)
+endif()

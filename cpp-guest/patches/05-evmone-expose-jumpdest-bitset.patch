@@ -1,0 +1,15 @@
+diff --git a/lib/evmone/baseline.hpp b/lib/evmone/baseline.hpp
+index 7f78e3e3..c5ec82dd 100644
+--- a/lib/evmone/baseline.hpp
++++ b/lib/evmone/baseline.hpp
+@@ -81,6 +81,10 @@ public:
+     /// The pre-processed executable code. This is where interpreter should start execution.
+     [[nodiscard]] bytes_view executable_code() const noexcept { return m_executable_code; }
+ 
++    /// ZisK: the JUMPDEST bitset, so a caller that has proved two bytecodes
++    /// parse identically can hand the same map to both (see evmc2_evmone.cpp).
++    [[nodiscard]] BitsetSpan jumpdest_bitset() const noexcept { return m_jumpdest_bitset; }
++
+     /// Check if given position is valid jump destination. Use only for legacy code.
+     [[nodiscard]] bool check_jumpdest(uint64_t position) const noexcept
+     {
