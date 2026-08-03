@@ -41,7 +41,7 @@ size_t Accounts::append(const evmc::address&   address,
 }
 
 const NodeR* Accounts::build_value(size_t idx,
-                                   const std::vector<uint8_t>& nib,
+                                   std::span<const uint8_t> nib,
                                    const evmc::bytes32& addr_hash,
                                    Child storage_root_child,
                                    const evmc::bytes32& storage_root) {
@@ -52,13 +52,14 @@ const NodeR* Accounts::build_value(size_t idx,
     if (is_empty_account(nonce_orig_at(idx), balance_orig_at(idx), code_hash_orig_at(idx))) {
         lc.cached.emplace<EmptyR>();
     } else {
-        lc.cached.emplace<AccountLeafR>(nib, idx, storage_root);
+        lc.cached.emplace<AccountLeafR>(std::vector<uint8_t>(nib.begin(), nib.end()), idx,
+                                            storage_root);
     }
     return &lc.cached;
 }
 
 const NodeR* Accounts::update_value(size_t idx,
-                                    const std::vector<uint8_t>& nib,
+                                    std::span<const uint8_t> nib,
                                     const evmc::bytes32& storage_root) {
     LeafCache& lc = leaf_[idx];
     // Always rebuild from the CURRENT fields + storage root at path `nib`.
@@ -69,7 +70,8 @@ const NodeR* Accounts::update_value(size_t idx,
     if (is_empty_account(nonce_at(idx), balance_at(idx), code_hash_at(idx))) {
         lc.cached.emplace<EmptyR>();
     } else {
-        lc.cached.emplace<AccountLeafR>(nib, idx, storage_root);
+        lc.cached.emplace<AccountLeafR>(std::vector<uint8_t>(nib.begin(), nib.end()), idx,
+                                            storage_root);
     }
     return &lc.cached;
 }

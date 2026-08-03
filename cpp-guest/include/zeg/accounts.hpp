@@ -24,6 +24,7 @@
 #include <cstring>
 #include <memory>           // std::assume_aligned
 #include <unordered_map>
+#include <span>
 #include <vector>
 
 #include <evmc/evmc.hpp>
@@ -97,12 +98,12 @@ public:
     // remaining path nibbles; `storage_root` is the hash of the account's
     // storage subtree at the relevant value set.
     const NodeR* build_value(size_t idx,
-                             const std::vector<uint8_t>& nib,
+                             std::span<const uint8_t> nib,
                              const evmc::bytes32& addr_hash,
                              Child storage_root_child,
                              const evmc::bytes32& storage_root);
     const NodeR* update_value(size_t idx,
-                              const std::vector<uint8_t>& nib,
+                              std::span<const uint8_t> nib,
                               const evmc::bytes32& storage_root);
 
     const NodeR* cached_at(size_t idx) const noexcept { return &leaf_[idx].cached; }

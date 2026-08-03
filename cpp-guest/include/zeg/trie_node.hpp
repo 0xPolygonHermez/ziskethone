@@ -29,6 +29,8 @@
 
 #include <evmc/evmc.hpp>
 
+#include "zeg/fatal.hpp"
+
 namespace zeg {
 
 // ----- node-result variant --------------------------------------------------
@@ -131,13 +133,43 @@ inline uint8_t nibble_at(const evmc::bytes32& key_hash, std::size_t i) {
 }
 
 // Build the leaf path: the remaining nibbles of `key_hash` from `depth`.
-inline std::vector<uint8_t> nibbles_from(const evmc::bytes32& key_hash,
-                                         std::size_t depth) {
-    std::vector<uint8_t> out;
-    out.reserve(64 - depth);
-    for (std::size_t i = depth; i < 64; ++i) {
-        const uint8_t b = key_hash.bytes[i / 2];
-        out.push_back(static_cast<uint8_t>((i % 2 == 0) ? (b >> 4) : (b & 0x0f)));
+// A trie path is at most 64 nibbles, so it is expanded into an inline buffer
+// (same reasoning as HpBytes) rather than a heap vector: this runs once per leaf
+// in both trie passes, and the result is copied into the node's own storage
+// immediately afterwards.
+struct NibblePath {
+    static constexpr std::size_t kMax = 64;
+
+    uint8_t buf[kMax];
+    uint8_t len = 0;
+
+    const uint8_t* data()  const noexcept { return buf; }
+    std::size_t    size()  const noexcept { return len; }
+    const uint8_t* begin() const noexcept { return buf; }
+    const uint8_t* end()   const noexcept { return buf + len; }
+};
+
+inline NibblePath nibbles_from(const evmc::bytes32& key_hash, std::size_t depth) {
+    // Not a caller precondition: `64 - depth` would wrap and leave `len` past
+    // the buffer, and the walk that bounds `depth` is in another file.
+    if (depth > NibblePath::kMax) {
+        fatal("nibbles_from: trie depth beyond the 64-nibble key");
+    }
+
+    NibblePath out;
+    out.len = static_cast<uint8_t>(NibblePath::kMax - depth);
+
+    uint8_t* p = out.buf;
+    std::size_t i = depth;
+    if (i & 1) {  // an odd depth starts mid-byte
+        *p++ = static_cast<uint8_t>(key_hash.bytes[i >> 1] & 0x0f);
+        ++i;
+    }
+    for (; i < NibblePath::kMax; i += 2) {  // then two nibbles per byte
+        const uint8_t b = key_hash.bytes[i >> 1];
+        p[0] = static_cast<uint8_t>(b >> 4);
+        p[1] = static_cast<uint8_t>(b & 0x0f);
+        p += 2;
     }
     return out;
 }

@@ -53,6 +53,7 @@ set(_evmone_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/01-evmone-revm-aligned-call-gas-order.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/02-evmone-delegation-eoa-fastpath.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/03-evmone-zisk-arith256-mulmod.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/04-evmone-zisk-jumpdest-pointer-walk.patch"
 )
 find_program(GIT_EXECUTABLE git REQUIRED)
 foreach(_patch IN LISTS _evmone_patches)
