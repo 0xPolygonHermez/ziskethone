@@ -69,6 +69,12 @@ struct Encoder<'a> {
     out: Vec<u8>,
     n_accounts: u64,
     n_storages: u64,
+    /// Node count for the header, which the guest uses as a ceiling. It was
+    /// `stream_len / 8` while every node cost an opcode word; a tagged Empty
+    /// child costs zero bytes, so that would undercount. Counts an extension
+    /// root twice (as node, and as its chain's first branch) — over-reserving
+    /// is harmless.
+    n_nodes: u64,
 }
 
 pub fn write(
@@ -95,13 +101,12 @@ pub fn write(
         out: Vec::new(),
         n_accounts: 0,
         n_storages: 0,
+        n_nodes: 0,
     };
     enc.emit_child(&[], ChildRef::Hash(parent_state_root.0), TreeKind::State)?;
 
-    // Header (before the opcode stream): three u64 counts. numberOfNodes is
-    // a conservative upper bound (every node is >= one 8-byte opcode word);
-    // numberOfAccounts/numberOfStorages are the witness leaf counts.
-    w.u64_le((enc.out.len() / 8) as u64);
+    // Header (before the opcode stream): three u64 counts.
+    w.u64_le(enc.n_nodes);
     w.u64_le(enc.n_accounts);
     w.u64_le(enc.n_storages);
     for byte in &enc.out {
@@ -119,6 +124,25 @@ fn put_u64(out: &mut Vec<u8>, v: u64) {
 
 fn put_op(out: &mut Vec<u8>, op: Op) {
     put_u64(out, op as u64);
+}
+
+/// Two bits per child in the word after `Op::Branch`; a tagged Empty child
+/// costs no bytes and a tagged Hash child only its 32.
+const TAG_EMPTY: u64 = 0;
+const TAG_HASH: u64 = 1;
+const TAG_NODE: u64 = 2;
+
+/// Count, then two nibbles per byte, padded to 8 to keep the guest's cursor
+/// aligned.
+fn put_nibbles(out: &mut Vec<u8>, nibs: &[u8]) {
+    put_u64(out, nibs.len() as u64);
+    let start = out.len();
+    for pair in nibs.chunks(2) {
+        let hi = pair[0] << 4;
+        out.push(if pair.len() == 2 { hi | (pair[1] & 0x0f) } else { hi });
+    }
+    let pad = (8 - (out.len() - start) % 8) % 8;
+    out.extend(std::iter::repeat(0u8).take(pad));
 }
 
 /// State `Op::Leaf` payload (after the suffix-nibble prefix): the PLAINTEXT
@@ -174,11 +198,15 @@ impl<'a> Encoder<'a> {
     /// Emit the subtree at `child`, with `walked` nibbles consumed so far.
     fn emit_child(&mut self, walked: &[u8], child: ChildRef, kind: TreeKind) -> Result<()> {
         match child {
-            ChildRef::Empty => put_op(&mut self.out, Op::Empty),
+            ChildRef::Empty => {
+                self.n_nodes += 1;
+                put_op(&mut self.out, Op::Empty)
+            }
             ChildRef::Inline(bytes) => self.emit_node(walked, &bytes, kind)?,
             ChildRef::Hash(h) if h == EMPTY_TRIE_ROOT => {
                 // Empty subtree (no node) — emit as Empty so the guest can
                 // insert created keys into it.
+                self.n_nodes += 1;
                 put_op(&mut self.out, Op::Empty);
             }
             ChildRef::Hash(h) => match self.nodes.get(&h) {
@@ -188,7 +216,42 @@ impl<'a> Encoder<'a> {
                 }
                 None => {
                     // Subtree the witness only references by hash → opaque.
+                    self.n_nodes += 1;
                     put_op(&mut self.out, Op::Hash);
+                    self.out.extend_from_slice(&h);
+                }
+            },
+        }
+        Ok(())
+    }
+
+    /// The tag `child` will be emitted under. Must agree with
+    /// `emit_tagged_child` — they run as separate passes over the same slots.
+    fn tag_of(&self, child: &ChildRef) -> u64 {
+        match child {
+            ChildRef::Empty => TAG_EMPTY,
+            ChildRef::Inline(_) => TAG_NODE,
+            ChildRef::Hash(h) if *h == EMPTY_TRIE_ROOT => TAG_EMPTY,
+            ChildRef::Hash(h) => {
+                if self.nodes.contains_key(h) { TAG_NODE } else { TAG_HASH }
+            }
+        }
+    }
+
+    /// `emit_child` for a slot the branch already tagged: Empty writes nothing,
+    /// Hash only its 32 bytes.
+    fn emit_tagged_child(&mut self, walked: &[u8], child: ChildRef, kind: TreeKind) -> Result<()> {
+        match child {
+            ChildRef::Empty => self.n_nodes += 1,
+            ChildRef::Inline(bytes) => self.emit_node(walked, &bytes, kind)?,
+            ChildRef::Hash(h) if h == EMPTY_TRIE_ROOT => self.n_nodes += 1,
+            ChildRef::Hash(h) => match self.nodes.get(&h) {
+                Some(raw) => {
+                    let raw = raw.clone();
+                    self.emit_node(walked, &raw, kind)?;
+                }
+                None => {
+                    self.n_nodes += 1;
                     self.out.extend_from_slice(&h);
                 }
             },
@@ -198,16 +261,25 @@ impl<'a> Encoder<'a> {
 
     /// Emit a fully-revealed node given its RLP.
     fn emit_node(&mut self, walked: &[u8], node_rlp: &[u8], kind: TreeKind) -> Result<()> {
+        self.n_nodes += 1;
         let (item, _) = Rlp::decode(node_rlp)?;
         let items = item.as_list()?;
         match items.len() {
             17 => {
                 put_op(&mut self.out, Op::Branch);
+                // Classify all 16 first so the tags precede the payloads.
+                let mut refs = Vec::with_capacity(16);
+                let mut tags: u64 = 0;
                 for (k, item) in items.iter().enumerate().take(16) {
                     let cr = child_ref(item)?;
+                    tags |= self.tag_of(&cr) << (2 * k);
+                    refs.push(cr);
+                }
+                put_u64(&mut self.out, tags);
+                for (k, cr) in refs.into_iter().enumerate() {
                     let mut w = walked.to_vec();
                     w.push(k as u8);
-                    self.emit_child(&w, cr, kind)?;
+                    self.emit_tagged_child(&w, cr, kind)?;
                 }
                 // items[16] (the branch value) is always empty for the
                 // state / storage tries — ignored.
@@ -269,22 +341,23 @@ impl<'a> Encoder<'a> {
         kind: TreeKind,
     ) -> Result<()> {
         if nibs.is_empty() {
-            return self.emit_child(walked, child, kind);
+            bail!("MPT: extension with an empty nibble path");
         }
-        // One single-child branch level: empties before `head`, the
-        // continuation at `head`, empties after.
+        // One single-child branch level: the 15 empty slots cost only tag bits,
+        // so just the continuation at `head` carries a payload.
         put_op(&mut self.out, Op::Branch);
+        self.n_nodes += 1 + 15; // this branch + its 15 Empty children
         let head = nibs[0];
-        for _ in 0..head {
-            put_op(&mut self.out, Op::Empty);
-        }
+        let deeper = nibs.len() > 1;
+        let tag = if deeper { TAG_NODE } else { self.tag_of(&child) };
+        put_u64(&mut self.out, tag << (2 * head));
         let mut w = walked.to_vec();
         w.push(head);
-        self.emit_ext_chain(&w, &nibs[1..], child, kind)?;
-        for _ in (head + 1)..16 {
-            put_op(&mut self.out, Op::Empty);
+        if deeper {
+            self.emit_ext_chain(&w, &nibs[1..], child, kind)
+        } else {
+            self.emit_tagged_child(&w, child, kind)
         }
-        Ok(())
     }
 
     /// Emit a leaf at position `walked` whose hex-prefix tail is `leaf_nibs`
@@ -309,11 +382,7 @@ impl<'a> Encoder<'a> {
         match preimage {
             Some(pre) => {
                 put_op(&mut self.out, Op::Leaf);
-                // suffix nibbles: count + one u64 per nibble.
-                put_u64(&mut self.out, leaf_nibs.len() as u64);
-                for &n in leaf_nibs {
-                    put_u64(&mut self.out, n as u64);
-                }
+                put_nibbles(&mut self.out, leaf_nibs);
                 match kind {
                     TreeKind::State => {
                         self.n_accounts += 1;
@@ -342,10 +411,7 @@ impl<'a> Encoder<'a> {
                 // Keyless sibling (no preimage in witness.keys) → carry it
                 // inline with its remaining path + raw value field.
                 put_op(&mut self.out, Op::PhantomLeaf);
-                put_u64(&mut self.out, leaf_nibs.len() as u64);
-                for &n in leaf_nibs {
-                    put_u64(&mut self.out, n as u64);
-                }
+                put_nibbles(&mut self.out, leaf_nibs);
                 put_u64(&mut self.out, value.len() as u64);
                 self.out.extend_from_slice(value);
                 let pad = (8 - (value.len() % 8)) % 8;

@@ -18,6 +18,9 @@ use crate::writer::Writer;
 
 /// On-wire format version, written in the 4 bytes after the magic.
 /// Must match the guest's `kVersion` in `cpp-guest/include/zeg/binary_format.hpp`.
+/// v9: compact StateRoot — a branch tags its 16 children in one word, so a
+/// tagged Empty child costs no bytes and a Hash child 32; nibble runs pack two
+/// per byte. ~22% smaller witness.
 /// v8: ConsensusInfo prefix +16 B — adds target_blob_gas_per_block and
 /// max_blob_gas_per_block (u64-le at offsets 352 and 360) so the guest can
 /// independently re-derive excess_blob_gas (EIP-4844, plus the EIP-7918
@@ -41,7 +44,7 @@ use crate::writer::Writer;
 /// derives read-only-ness dynamically (original == current).
 /// v1: StateRoot `Op::Leaf` carries no index (keccak-sorted tables +
 /// counter-derived index in the guest).
-pub const FORMAT_VERSION: u32 = 8; // v8: +target/max_blob_gas_per_block (see above)
+pub const FORMAT_VERSION: u32 = 9;
 
 /// File magic prefix (8 bytes): 4 B ASCII `"ZEG0"` + 4 B little-endian
 /// format version, which also keeps the cursor 8-byte aligned for the
