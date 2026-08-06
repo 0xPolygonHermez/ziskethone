@@ -38,7 +38,7 @@ endif()
 # prover) and -fipa-pta (measurably worse here, and slow to compile).
 #
 # Overridable, e.g. -DZEG_GUEST_OPT="-O3".
-set(ZEG_GUEST_OPT "-O3 -mtune=size -funroll-loops --param=max-inline-insns-single=1600 --param=max-inline-insns-auto=533 --param=inline-unit-growth=266 --param=max-inline-recursive-depth=6 --param=max-completely-peeled-insns=400 --param=large-function-growth=280 --param=large-unit-insns=30000" CACHE STRING "Guest Release optimization flags")
+set(ZEG_GUEST_OPT "-O3 -mtune=size -funroll-loops --param=max-inline-insns-single=1600 --param=max-inline-insns-auto=533 --param=inline-unit-growth=266 --param=max-inline-recursive-depth=6 --param=max-completely-peeled-insns=400 --param=large-function-growth=280 --param=large-unit-insns=30000 -fno-schedule-insns -fno-schedule-insns2 -fno-jump-tables" CACHE STRING "Guest Release optimization flags")
 separate_arguments(ZEG_GUEST_OPT_LIST UNIX_COMMAND "${ZEG_GUEST_OPT}")
 
 set(GUEST_ROOT  ${CMAKE_CURRENT_SOURCE_DIR}/..)        # cpp-guest/
