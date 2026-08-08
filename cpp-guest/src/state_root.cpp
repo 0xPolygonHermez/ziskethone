@@ -67,42 +67,46 @@ constexpr uint64_t kTagHash  = 1;
 constexpr uint64_t kTagNode  = 2;
 
 // `u64 count` then two nibbles per byte, padded to 8 to keep the cursor aligned.
-std::vector<uint8_t> read_nibbles(const uint8_t*& cursor) {
+PackedPath read_nibbles(const uint8_t*& cursor) {
     const uint64_t n = read_u64_le(cursor);
-    if (n > NibblePath::kMax) {
+    if (n > PackedPath::kMaxNibbles) {
         fatal("state_root: nibble run longer than a 64-nibble key");
     }
-    std::vector<uint8_t> nibs(n);
-    for (uint64_t i = 0; i < n; i += 2) {
-        const uint8_t b = cursor[i / 2];
-        nibs[i] = static_cast<uint8_t>(b >> 4);
-        if (i + 1 < n) {
-            nibs[i + 1] = static_cast<uint8_t>(b & 0x0f);
-        }
-    }
+    // The witness already carries them packed from a byte boundary, so this is
+    // the copy it always was minus the unpacking loop.
+    PackedPath out;
+    out.assign(cursor, /*first_off=*/0, n);
     cursor += ((n + 1) / 2 + 7) / 8 * 8;
-    return nibs;
+    return out;
 }
 
 // Reconstruct keccak(address)/keccak(slot) from the trie path (walked prefix
 // + leaf suffix), which must total 64 nibbles = 32 bytes. No preimage needed.
-evmc::bytes32 pack_key_hash(const WalkPath& walked,
-                            const std::vector<uint8_t>& suffix) {
+evmc::bytes32 pack_key_hash(const WalkPath& walked, const PackedPath& suffix) {
     if (walked.size() + suffix.size() != 64) {
         fatal("state_root: leaf key path is not 64 nibbles");
     }
-    uint8_t nibs[64];
-    // Both spans can be empty, and an empty vector's data() may be null —
-    // memcpy forbids a null argument even for a zero count (UBSan flags it).
-    if (walked.size() != 0) {
-        std::memcpy(nibs, walked.data(), walked.size());
-    }
-    if (!suffix.empty()) {
-        std::memcpy(nibs + walked.size(), suffix.data(), suffix.size());
-    }
     evmc::bytes32 out{};
-    for (size_t j = 0; j < 32; ++j) {
-        out.bytes[j] = static_cast<uint8_t>((nibs[2 * j] << 4) | (nibs[2 * j + 1] & 0x0f));
+
+    // The walk stack is still one nibble per byte (it is pushed and popped a
+    // nibble at a time), so it packs here.
+    size_t i = 0;
+    for (; i < walked.size(); ++i) {
+        const uint8_t nib = static_cast<uint8_t>(walked.data()[i] & 0x0f);
+        if (i & 1U) out.bytes[i / 2] = static_cast<uint8_t>(out.bytes[i / 2] | nib);
+        else        out.bytes[i / 2] = static_cast<uint8_t>(nib << 4);
+    }
+
+    // The suffix is already packed. When the walk ended on a byte boundary and
+    // the suffix starts on one too, the rest is a copy.
+    if ((walked.size() & 1U) == 0 && suffix.off == 0) {
+        std::memcpy(out.bytes + walked.size() / 2, suffix.data(), suffix.bytes());
+        return out;
+    }
+    for (size_t k = 0; k < suffix.size(); ++k, ++i) {
+        const uint8_t nib = static_cast<uint8_t>(suffix.at(k) & 0x0f);
+        if (i & 1U) out.bytes[i / 2] = static_cast<uint8_t>(out.bytes[i / 2] | nib);
+        else        out.bytes[i / 2] = static_cast<uint8_t>(nib << 4);
     }
     return out;
 }
@@ -150,7 +154,7 @@ std::size_t prepend_bytes(uint8_t* buf, std::size_t start, const uint8_t* src,
 // [hp, string([nonce, balance, storageRoot, codeHash])] in `buf`.
 rlp::BytesView build_account_leaf_rlp_s(
     uint8_t* buf,
-    const std::vector<uint8_t>& path_nibbles,
+    const PackedPath& path_nibbles,
     const Accounts& accounts,
     size_t account_idx,
     const evmc::bytes32& storage_root,
@@ -187,7 +191,7 @@ rlp::BytesView build_account_leaf_rlp_s(
 // [hp, string(value)] in `buf`.
 rlp::BytesView build_storage_leaf_rlp_s(
     uint8_t* buf,
-    const std::vector<uint8_t>& path_nibbles,
+    const PackedPath& path_nibbles,
     const Storages& storages,
     size_t storage_idx,
     ValueSet which)
@@ -214,7 +218,7 @@ rlp::BytesView build_storage_leaf_rlp_s(
 // [hp, childHash] in `buf`.
 rlp::BytesView build_extension_rlp_s(
     uint8_t* buf,
-    const std::vector<uint8_t>& ext_nibbles,
+    const PackedPath& ext_nibbles,
     const evmc::bytes32& child_hash)
 {
     std::size_t end = kRlpGap;
@@ -230,7 +234,7 @@ rlp::BytesView build_extension_rlp_s(
 }
 
 evmc::bytes32 pack_account_leaf(
-    const std::vector<uint8_t>& path_nibbles,
+    const PackedPath& path_nibbles,
     const Accounts& accounts,
     size_t account_idx,
     const evmc::bytes32& storage_root,
@@ -243,7 +247,7 @@ evmc::bytes32 pack_account_leaf(
 }
 
 evmc::bytes32 pack_storage_leaf(
-    const std::vector<uint8_t>& path_nibbles,
+    const PackedPath& path_nibbles,
     const Storages& storages,
     size_t storage_idx,
     ValueSet which)
@@ -255,7 +259,7 @@ evmc::bytes32 pack_storage_leaf(
 }
 
 evmc::bytes32 pack_extension(
-    const std::vector<uint8_t>& ext_nibbles,
+    const PackedPath& ext_nibbles,
     const evmc::bytes32& child_hash)
 {
     alignas(8) uint8_t buf[kRlpBuf];
@@ -267,7 +271,7 @@ evmc::bytes32 pack_extension(
 // checked against kMaxLeafValue where it is parsed.
 rlp::BytesView build_phantom_leaf_rlp_s(
     uint8_t* buf,
-    const std::vector<uint8_t>& path_nibbles,
+    const PackedPath& path_nibbles,
     const std::vector<uint8_t>& value_rlp)
 {
     std::size_t end = kRlpGap;
@@ -283,7 +287,7 @@ rlp::BytesView build_phantom_leaf_rlp_s(
 }
 
 evmc::bytes32 pack_phantom_leaf(
-    const std::vector<uint8_t>& path_nibbles,
+    const PackedPath& path_nibbles,
     const std::vector<uint8_t>& value_rlp)
 {
     alignas(8) uint8_t buf[kRlpBuf];
@@ -449,25 +453,27 @@ NodeR reduce_branch(const std::array<const NodeR*, 16>& children,
         const NodeR& only = *children[single];
         if (const auto* leaf = std::get_if<AccountLeafR>(&only)) {
             AccountLeafR copy = *leaf;
-            copy.path_nibbles.insert(copy.path_nibbles.begin(), nibble);
+            copy.path_nibbles.prepend(nibble);
             return mk_node<AccountLeafR>(std::move(copy));
         }
         if (const auto* leaf = std::get_if<StorageLeafR>(&only)) {
             StorageLeafR copy = *leaf;
-            copy.path_nibbles.insert(copy.path_nibbles.begin(), nibble);
+            copy.path_nibbles.prepend(nibble);
             return mk_node<StorageLeafR>(std::move(copy));
         }
         if (const auto* leaf = std::get_if<PhantomLeafR>(&only)) {
             PhantomLeafR copy = *leaf;
-            copy.path_nibbles.insert(copy.path_nibbles.begin(), nibble);
+            copy.path_nibbles.prepend(nibble);
             return mk_node<PhantomLeafR>(std::move(copy));
         }
         if (const auto* h = std::get_if<HashR>(&only)) {
-            return mk_node<ExtR>(std::vector<uint8_t>{nibble}, h->hash);
+            PackedPath one;          // assign() takes packed bytes; this is a
+            one.prepend(nibble);     // loose nibble, so let prepend place it
+            return mk_node<ExtR>(std::move(one), h->hash);
         }
         if (const auto* e = std::get_if<ExtR>(&only)) {
             ExtR copy = *e;
-            copy.ext_nibbles.insert(copy.ext_nibbles.begin(), nibble);
+            copy.ext_nibbles.prepend(nibble);
             return mk_node<ExtR>(std::move(copy));
         }
     }
@@ -581,7 +587,7 @@ Child build_node(const uint8_t*& cursor,
         }
 
         case Op::ExtensionHash: {
-            std::vector<uint8_t> ext = read_nibbles(cursor);
+            PackedPath ext = read_nibbles(cursor);
             evmc::bytes32 h;
             zeg::zisk::zisk_xmemcpy<sizeof(h.bytes)>(h.bytes, cursor);
             cursor += sizeof(h.bytes);
@@ -675,7 +681,7 @@ Child build_phantom_leaf_node(const uint8_t*& cursor,
                               WalkPath& walked)
 {
     {
-            std::vector<uint8_t> path = read_nibbles(cursor);
+            PackedPath path = read_nibbles(cursor);
             const uint64_t value_len = read_u64_le(cursor);
             if (value_len > kMaxLeafValue) {
                 fatal("state_root: phantom leaf value exceeds the trie-leaf bound");
@@ -737,7 +743,7 @@ Child build_leaf_node(const uint8_t*& cursor,
             // plaintext key + value. The trie key hash is pack(walked ++
             // suffix); the runtime tables are keyed by the plaintext, bound to
             // the path by keccak(plaintext) == that hash.
-            std::vector<uint8_t> suffix = read_nibbles(cursor);
+            PackedPath suffix = read_nibbles(cursor);
 
             if (kind == TreeKind::State) {
                 // address(20) pad(4) balance(u256be,32) nonce(u64) code_hash(32)
@@ -771,7 +777,7 @@ Child build_leaf_node(const uint8_t*& cursor,
                                 ctx.accounts, ctx.storages),
                     ctx.accounts, ctx.storages, ValueSet::Original);
 
-                auto nib = nibbles_from(addr_hash, walked.size());
+                auto nib = path_from_key(addr_hash, walked.size());
                 ctx.accounts.build_value(idx, nib, addr_hash, storage_child, storage_root);
                 return Child{NodeType::Account, static_cast<uint32_t>(idx)};
             } else {
@@ -795,7 +801,7 @@ Child build_leaf_node(const uint8_t*& cursor,
                 const size_t a = ctx.storages.append(*owning_address, position, value);
                 if (a != idx) fatal("state_root: storage append index desync");
 
-                auto nib = nibbles_from(pos_hash, walked.size());
+                auto nib = path_from_key(pos_hash, walked.size());
                 ctx.storages.build_value(idx, nib, pos_hash);
                 return Child{NodeType::Storage, static_cast<uint32_t>(idx)};
             }
@@ -832,7 +838,7 @@ std::pair<const NodeR*, bool> eval_node(const Child& c, EvalCtx& ctx, std::size_
             const auto [sres, storage_ro] = eval_node(sc, ctx, 0);
             const evmc::bytes32 storage_root =
                 finalize(*sres, ctx.accounts, ctx.storages, ValueSet::Current);
-            auto nib = nibbles_from(ctx.accounts.addr_hash_at(idx), depth);
+            auto nib = path_from_key(ctx.accounts.addr_hash_at(idx), depth);
             const NodeR* r = ctx.accounts.update_value(idx, nib, storage_root);
             const bool read_only = ctx.accounts.fields_unchanged_at(idx) && storage_ro;
             return {r, read_only};
@@ -840,7 +846,7 @@ std::pair<const NodeR*, bool> eval_node(const Child& c, EvalCtx& ctx, std::size_
 
         case NodeType::Storage: {
             const size_t idx = c.idx;
-            auto nib = nibbles_from(ctx.storages.pos_hash_at(idx), depth);
+            auto nib = path_from_key(ctx.storages.pos_hash_at(idx), depth);
             const NodeR* r = ctx.storages.update_value(idx, nib);
             return {r, ctx.storages.value_unchanged_at(idx)};
         }
@@ -948,7 +954,7 @@ uint8_t StateRoot::existing_leaf_nibble(Child leaf, std::size_t d,
             return nibble_at(storages_.pos_hash_at(leaf.idx), d);
         case NodeType::PhantomLeaf:
             // The phantom's stored path is relative to where it sits (depth).
-            return std::get<PhantomLeafR>(aux_[leaf.idx]).path_nibbles[d - depth];
+            return std::get<PhantomLeafR>(aux_[leaf.idx]).path_nibbles.at(d - depth);
         default:
             fatal("state_root: existing_leaf_nibble on a non-leaf node");
     }
@@ -979,9 +985,7 @@ Child StateRoot::split_leaf(Child existing, const evmc::bytes32& key_hash,
     // (deeper) position d+1. Keyed leaves recompute their path from depth in
     // the eval pass, so they need no surgery here.
     if (existing.type == NodeType::PhantomLeaf) {
-        auto& path = std::get<PhantomLeafR>(aux_[existing.idx]).path_nibbles;
-        path.erase(path.begin(),
-                   path.begin() + static_cast<std::ptrdiff_t>(d + 1 - depth));
+        std::get<PhantomLeafR>(aux_[existing.idx]).path_nibbles.drop_front(d + 1 - depth);
     }
 
     // 2-child branch at depth d holding both leaves.
