@@ -1,4 +1,5 @@
 #include "zeg/state_root.hpp"
+#include "zeg/zisk_dma.hpp"
 
 #include <algorithm>
 #include <array>
@@ -301,7 +302,10 @@ constexpr uint8_t kRlpHash32Header = 0xa0;
 
 std::size_t emit_hash_slot(uint8_t* dst, const evmc::bytes32& h) {
     dst[0] = kRlpHash32Header;
-    std::memcpy(dst + 1, h.bytes, sizeof(h.bytes));
+    // Constant 32, so this reaches the precompile as one instruction instead of
+    // a call into the ziskos thunk. The hottest copy in the guest: 472,786 of
+    // them per block, all from reduce_branch.
+    zeg::zisk::zisk_xmemcpy<sizeof(h.bytes)>(dst + 1, h.bytes);
     return kSlotMax;
 }
 
@@ -310,7 +314,7 @@ std::size_t emit_capped_slot(uint8_t* dst, rlp::BytesView node_rlp) {
     if (node_rlp.size() >= 32) {
         return emit_hash_slot(dst, keccak256_bytes32(node_rlp.data(), node_rlp.size()));
     }
-    std::memcpy(dst, node_rlp.data(), node_rlp.size());
+    zeg::zisk::zisk_memcpy(dst, node_rlp.data(), node_rlp.size());
     return node_rlp.size();
 }
 
@@ -571,7 +575,7 @@ Child build_node(const uint8_t*& cursor,
 
         case Op::Hash: {
             evmc::bytes32 h;
-            std::memcpy(h.bytes, cursor, sizeof(h.bytes));
+            zeg::zisk::zisk_xmemcpy<sizeof(h.bytes)>(h.bytes, cursor);
             cursor += sizeof(h.bytes);  // 32 B — already 8-aligned
             return Child{NodeType::Hash, aux_emplace<HashR>(ctx, h)};
         }
@@ -579,7 +583,7 @@ Child build_node(const uint8_t*& cursor,
         case Op::ExtensionHash: {
             std::vector<uint8_t> ext = read_nibbles(cursor);
             evmc::bytes32 h;
-            std::memcpy(h.bytes, cursor, sizeof(h.bytes));
+            zeg::zisk::zisk_xmemcpy<sizeof(h.bytes)>(h.bytes, cursor);
             cursor += sizeof(h.bytes);
             return Child{NodeType::ExtensionHash,
                          aux_emplace<ExtR>(ctx, std::move(ext), h)};
@@ -618,14 +622,23 @@ Child build_branch_node(const uint8_t*& cursor,
     const uint64_t tags = read_u64_le(cursor);
 
     BranchNode bn;
-    for (uint8_t k = 0; k < 16; ++k) {
-        switch ((tags >> (2 * k)) & 0x3u) {
+    // An Empty child is all-zero bytes (NodeType::Empty == 0, idx == 0), and it
+    // is the majority of the 16 slots, so zero the whole array in one op and let
+    // the loop below only write the slots that are not empty. Saves a store per
+    // empty child, ~9 of the 16 on an average node.
+    static_assert(static_cast<int>(NodeType::Empty) == 0,
+                  "an all-zero Child must mean Empty");
+    zeg::zisk::zisk_xmemset<sizeof(bn.children)>(bn.children.data());
+    // `tags` is sixteen 2-bit fields. Shift it along instead of recomputing
+    // `tags >> (2*k)` each time, which costs a variable shift per child.
+    uint64_t t = tags;
+    for (uint8_t k = 0; k < 16; ++k, t >>= 2) {
+        switch (t & 0x3u) {
             case kTagEmpty:
-                bn.children[k] = Child{NodeType::Empty, 0};
-                continue;
+                continue;  // already zeroed above
             case kTagHash: {
                 evmc::bytes32 h;
-                std::memcpy(h.bytes, cursor, sizeof(h.bytes));
+                zeg::zisk::zisk_xmemcpy<sizeof(h.bytes)>(h.bytes, cursor);
                 cursor += sizeof(h.bytes);  // 32 B — already 8-aligned
                 bn.children[k] = Child{NodeType::Hash, aux_emplace<HashR>(ctx, h)};
                 continue;
