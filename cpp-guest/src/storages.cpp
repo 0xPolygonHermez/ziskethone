@@ -37,19 +37,19 @@ size_t Storages::append(const evmc::address& address,
 }
 
 const NodeR* Storages::build_value(size_t idx,
-                                   std::span<const uint8_t> nib,
+                                   const PackedPath& nib,
                                    const evmc::bytes32& pos_hash) {
     LeafCache& lc = leaf_[idx];
     lc.pos_hash = pos_hash;
     if (is_zero_value(value_orig_at(idx))) {
         lc.cached.emplace<EmptyR>();
     } else {
-        lc.cached.emplace<StorageLeafR>(std::vector<uint8_t>(nib.begin(), nib.end()), idx);
+        lc.cached.emplace<StorageLeafR>(nib, idx);
     }
     return &lc.cached;
 }
 
-const NodeR* Storages::update_value(size_t idx, std::span<const uint8_t> nib) {
+const NodeR* Storages::update_value(size_t idx, const PackedPath& nib) {
     LeafCache& lc = leaf_[idx];
     // Always rebuild at path `nib` (cheap — no keccak), so a leaf moved
     // deeper by a new-root insert split gets its path recomputed. Branch-
@@ -57,7 +57,7 @@ const NodeR* Storages::update_value(size_t idx, std::span<const uint8_t> nib) {
     if (is_zero_value(value_at(idx))) {
         lc.cached.emplace<EmptyR>();
     } else {
-        lc.cached.emplace<StorageLeafR>(std::vector<uint8_t>(nib.begin(), nib.end()), idx);
+        lc.cached.emplace<StorageLeafR>(nib, idx);
     }
     return &lc.cached;
 }

@@ -14,6 +14,8 @@
 #include <cstdint>
 #include <span>
 
+#include "zeg/trie_node.hpp"
+
 namespace zeg {
 
 // A trie path is at most 64 nibbles (a 32-byte key hash), so an HP encoding is
@@ -33,10 +35,19 @@ struct HpBytes {
     const uint8_t* end()   const noexcept { return buf + len; }
 };
 
-// Hex-prefix encode `nibbles` (one nibble per byte, low 4 bits used).
-// `leaf` selects the leaf vs. extension flag. Output size is
-// `ceil((nibbles.size() + 1) / 2)`. Aborts via zeg::fatal if `nibbles` is
+// Hex-prefix encode `path`. `leaf` selects the leaf vs. extension flag. Output
+// size is `ceil((path.size() + 1) / 2)`. Aborts via zeg::fatal if the path is
 // longer than `HpBytes::kMaxNibbles`.
+//
+// When the path's packing already has the parity HP wants — which it does for
+// every path derived from a key, see PackedPath — the body is a copy of the
+// packed bytes. Otherwise it falls back to shifting nibble by nibble, which is
+// what this function did for every path when paths were stored unpacked.
+HpBytes hex_prefix(const PackedPath& path, bool leaf);
+
+// Same encoding from one nibble per byte, for the transaction and receipt
+// tries: their keys are RLP-encoded indices, so the paths are a handful of
+// nibbles and never worth packing.
 HpBytes hex_prefix(std::span<const uint8_t> nibbles, bool leaf);
 
 } // namespace zeg
