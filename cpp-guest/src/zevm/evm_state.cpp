@@ -5,9 +5,26 @@
 #include <cstdlib>
 #include <cstring>
 
+#include <evm/jump_dest_bitmap.hpp>  // ZisK jump_dest_bitmap precompile (CSR 0x81C)
+
 #include "evm_mem.hpp"
 
 namespace zevm {
+
+// Name of the software walk below. In the ZisK build it is the precompile's
+// fallback, reached only when the preconditions fail; everywhere else it IS
+// build_jumpdest_bitset — no forwarding wrapper.
+//
+// The wrapper is not free, which is why this is a macro rather than a one-line
+// `build_jumpdest_bitset` that calls `_sw`: that shape cost the ZEG_JUMPDEST_SW
+// control build +721k steps (+0.2%) on block 25659678, measured, even with
+// always_inline on the callee. A control that drifts flatters every A/B run
+// against it, so it keeps the exact codegen of the pre-precompile guest.
+#if defined(ZEG_JUMPDEST_PRECOMPILE)
+#define ZEVM_JUMPDEST_WALK build_jumpdest_bitset_sw
+#else
+#define ZEVM_JUMPDEST_WALK build_jumpdest_bitset
+#endif
 
 // Instruction width for the JUMPDEST boundary walk: PUSH1..PUSH32 (0x60..0x7f)
 // span 1 opcode byte + (op-0x5f) immediate data bytes; every other opcode is 1
@@ -20,7 +37,7 @@ inline size_t instr_width(uint8_t op) {
     return ((op & 0xe0) == 0x60) ? static_cast<size_t>(op) - 0x5e : size_t{1};
 }
 
-void build_jumpdest_bitset(const uint8_t* code, size_t codeSize, uint64_t* out) {
+void ZEVM_JUMPDEST_WALK(const uint8_t* code, size_t codeSize, uint64_t* out) {
     // One bit per code byte: bit i set iff code[i] is a real JUMPDEST (a 0x5b
     // opcode, not PUSH immediate data). Built 64 bytes at a time — each group
     // fills a whole u64 in a register, written with one aligned store (no
@@ -68,6 +85,33 @@ void build_jumpdest_bitset(const uint8_t* code, size_t codeSize, uint64_t* out) 
         out[nFull] = word;
     }
 }
+
+#undef ZEVM_JUMPDEST_WALK
+
+#if defined(ZEG_JUMPDEST_PRECOMPILE)
+
+// ZisK: the whole analysis is one precompile op (see zisk/evm/jump_dest_bitmap.hpp),
+// whose output is bit-for-bit what the walk above produces, so is_jumpdest and both
+// callers are unchanged.
+//
+// Unlike evmone's call site, this one hands the precompile the raw contract
+// bytecode pointer — wherever the witness put it inside the private input buffer
+// — rather than an aligned copy, so the 8-byte alignment it needs is luck, not
+// construction. In practice the luck holds: on block 25659678, 1,269 of 1,270
+// calls were aligned and the odd one out took the software walk below (same
+// bitmap, just at the old price). Copying the bytecode to force alignment would
+// cost more than the walk it saves.
+void build_jumpdest_bitset(const uint8_t* code, size_t codeSize, uint64_t* out) {
+    if (codeSize == 0)
+        return;  // no bitmap word to fill; nothing to compute
+    if (!zeg::evm::jump_dest_bitmap_usable(out, code, codeSize)) {
+        build_jumpdest_bitset_sw(code, codeSize, out);
+        return;
+    }
+    zeg::evm::jump_dest_bitmap(out, code, codeSize);
+}
+
+#endif  // ZEG_JUMPDEST_PRECOMPILE
 
 void EvmState::reset(const evmc_message* msg,
                      const uint8_t* code_, size_t codeSize_,
