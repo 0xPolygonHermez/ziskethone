@@ -116,6 +116,18 @@ public:
         return value_orig_at(idx) == value_at(idx);
     }
 
+    // Sentinel returned by `find` for a slot that is not in the table.
+    static constexpr size_t npos = static_cast<size_t>(-1);
+
+    // Single-probe lookup: the array index of (addr, position), or `npos`.
+    //
+    // Prefer this over `contains` followed by `index_of`: each of those is a
+    // full probe — build a 56-byte Key on the stack, hash it, take the bucket
+    // modulo, walk the chain, compare 56 bytes — so asking both questions
+    // about one slot pays for the same work twice.
+    size_t find(const evmc::address& addr,
+                const evmc::bytes32& position) const noexcept;
+
     // Look up the array index of (addr, position). Aborts the guest via
     // zeg::fatal if the slot isn't in the table — the guest is supposed
     // to have every state it touches in its private input, so a missing
