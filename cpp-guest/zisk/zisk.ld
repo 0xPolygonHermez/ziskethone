@@ -1,7 +1,10 @@
-/* Verbatim copy of zisk's own ziskbuild/zisk_linker_script.ld, taken from
- * the pre-develop-1.2.0-alpha pin (commit 4b11d589c). Sourced directly from
+/* Copy of zisk's own ziskbuild/zisk_linker_script.ld, taken from the
+ * pre-develop-1.2.0-alpha pin (commit 4b11d589c). Sourced directly from
  * upstream instead of hand-maintained, so it can be re-diffed against the
- * pinned zisk repo on any future toolchain bump. */
+ * pinned zisk repo on any future toolchain bump.
+ *
+ * ONE deviation from upstream: the `text` segment is FLAGS(1) (execute-only),
+ * not FLAGS(5) (execute-and-read) — see the PHDRS block below. */
 
 OUTPUT_FORMAT("elf64-littleriscv")
 OUTPUT_ARCH("riscv")
@@ -13,7 +16,18 @@ MEMORY {
 }
 
 PHDRS {
-  text PT_LOAD FLAGS(5);
+  /* FLAGS(1) = PF_X only: execute, NOT read. ZisK's ELF loader treats a
+     PF_X | PF_R segment as "could be code or data anywhere", so it materializes
+     the WHOLE segment a second time as read-only ROM data (elf_extraction.rs,
+     `if is_read { out.ro.push(...) }`) and prints a WARNING banner saying
+     execute-and-read is slower. Our .text is code only — every constant lands in
+     .rodata/.srodata below, and memset.s's jump table is jumped into, not loaded
+     — so dropping PF_R costs nothing and keeps 1.2 MB of instructions out of the
+     readable ROM image. Upstream ships FLAGS(5); this is the only difference.
+     Guard: if something ever does read from .text, its bytes are no longer in ROM
+     data, reads return 0, and the block hash changes — the end-to-end check
+     catches it. */
+  text PT_LOAD FLAGS(1);
   rodata PT_LOAD FLAGS(4);
   data PT_LOAD FLAGS(6);
   bss PT_LOAD FLAGS(6);
