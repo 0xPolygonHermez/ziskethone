@@ -26,6 +26,7 @@
 
 #include <evmc/evmc.hpp>
 
+#include "zeg/zisk_dma.hpp"
 #include "zeg/trie_node.hpp"
 
 namespace zeg {
@@ -241,7 +242,8 @@ private:
     };
     struct KeyEq {
         bool operator()(const Key& x, const Key& y) const noexcept {
-            return std::memcmp(&x, &y, sizeof(x)) == 0;
+            // 56 bytes, constant: one precompile op instead of a call.
+            return zeg::zisk::zisk_xmemcmp<sizeof(x)>(&x, &y) == 0;
         }
     };
 
