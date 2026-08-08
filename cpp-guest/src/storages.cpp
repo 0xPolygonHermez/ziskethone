@@ -73,6 +73,12 @@ const std::vector<size_t>& Storages::slots_of(
     return it == addr_slots_.end() ? kEmpty : it->second;
 }
 
+size_t Storages::find(const evmc::address& addr,
+                      const evmc::bytes32& position) const noexcept {
+    const auto it = index_.find(Key{addr, position});
+    return it == index_.end() ? npos : it->second;
+}
+
 size_t Storages::index_of(const evmc::address& addr,
                           const evmc::bytes32& position) const {
     const auto it = index_.find(Key{addr, position});

@@ -67,7 +67,44 @@ what the lowering does.
 
 Ordered by measured size, not by how interesting they are.
 
-1. **`dma_xor`, ~11.5M steps (4.9%).** The keccak sponge absorbs by XORing 8-byte
+1. **Narrow memory accesses, ~1.41G area (34.9% of MEMORY, 3.2% of the block).**
+   The one item here measured in *area*, not steps: it removes no instructions,
+   it makes the ones we already run cheaper. On ZisK a memory access gets *more*
+   expensive as it gets narrower — an aligned 8B read/write costs 16/18, a 4B
+   read 122, a 1B read 41, a 1B clean write 66 and a 1B dirty write 193 — which
+   inverts every real CPU, where a `sw` is never worse than a `sd`. Per block:
+   18.4M sub-8-byte accesses over 1,769 PCs; at 8 bytes wide they would cost
+   ~312M, so ~1.10G (2.5% of the block) is the ceiling. Where they are, from the
+   full PC histogram attributed with addr2line:
+
+   | | narrow accesses | |
+   |---|---|---|
+   | `dispatch_cgoto` | 5,250,013 | evmone, bytecode a byte at a time |
+   | MPT (`reduce_branch`, `build_branch_node`, `eval_node`, `pack_*`) | 5,409,978 | **ours** |
+   | `std::variant` machinery (`index`, `aux_emplace`, `_M_reset`, ctors) | 3,412,173 | **ours**, the 1-byte discriminant |
+   | `load_partial_push_data<1>` | 624,724 | evmone |
+
+   So this is a **data representation** problem, not a compiler one: the traffic
+   is on user data structures, not on compiler-chosen stack slots. Two
+   independent measurements agree — sweeping `-mmemory-cost` moved nothing (see
+   below), and only 1.09M of the 18.4M accesses are `sp`-relative. A
+   `-mzisk-wide-stack` patch (8-byte stack slots, DImode spills) was the first
+   idea here and the attribution killed it. The `std::variant` row is item 4 seen
+   from the memory side. The compiler-shaped part was chased and is closed: only
+   512k of the 4.2M narrow stores sit in a run of >= 2 stores inside one 8-byte
+   word, worth **151M (0.34%)** if merged, and GCC will not merge them — the
+   hot shape is `sb` at offset 0 plus `sw` at offset 4 with dead padding
+   between, and store-merging refuses to write bytes the program did not write
+   (no `--param` changes it, verified). Merging while *preserving* the padding
+   needs `ld`+`and`+`or`+`sd` = 426, worse than the 395 it replaces, so only the
+   padding-destroying `sd` (86) pays and that needs a deadness proof. Not worth
+   a pass rewrite for 0.34%. Two source-side leads found while looking, both
+   bigger: `reduce_branch` advances its output by **33 bytes per child**, so
+   every store and every DMA copy in that loop is unaligned by construction and
+   pays the pre/post path (91) instead of the 64-bit-aligned one; and 4-byte
+   accesses alone cost ~527M (1.18% of the block) at 122/193 against 16/18,
+   which is `int`/`uint32_t` fields in hot structures.
+2. **`dma_xor`, ~11.5M steps (4.9%).** The keccak sponge absorbs by XORing 8-byte
    lanes into the state: `ld` + `ld` + `xor` + `sd` per lane, 69% of the
    function. A DMA-shaped op — `csrs 0x81X, src` + `add x0, dst, count`, meaning
    `dst[i] ^= src[i]` — collapses a 136-byte block from 17 lanes to one
@@ -75,36 +112,63 @@ Ordered by measured size, not by how interesting they are.
    destination (the sponge state) is always 8-aligned and the source is aligned
    in 89.6% of calls, the rest at offset 1 (an RLP header in front of the
    payload), so a fast path plus the existing pre/post machinery covers it.
-2. **evmone's advanced interpreter, up to 17.7M (7.5%).** `check_requirements`
+3. **evmone's advanced interpreter, up to 17.7M (7.5%).** `check_requirements`
    runs three compares before every opcode — stack overflow, stack underflow,
    gas — and there is nothing to shave inside it. evmone's `advanced` mode
    precomputes gas and stack requirements per basic block and checks once per
    block; its code is already compiled into our ELF, we simply instantiate the
    baseline VM. It trades an analysis pass per contract, which we already do for
    the JUMPDEST bitmap. Untested.
-3. **`variant`/`vector` machinery, 10.9M (4.5%).** `NodeR` is a six-alternative
+4. **`variant`/`vector` machinery, 10.9M (4.5%).** `NodeR` is a six-alternative
    `std::variant`; every `holds_alternative`, `get_if` and `visit` checks the
    index, and `reduce_branch` does it 16 times per branch. An enum plus an
    explicit union, or just ordering the frequent case first as `emit_child_slot`
    already does.
-4. **Hash lookups, 12.9M (5.3%).** All `unordered_map`, no binary search:
-   Storages 5.5M (56-byte key), Accounts 2.9M (20 bytes), DynamicStorage 1.8M,
-   Journal 1.7M, Contracts 1.0M. The keys are already high-entropy so hashing is
-   free; the cost is walking the chained bucket and comparing the whole key. Two
-   ideas: keep the 64-bit hash next to the index and reject on 8 bytes instead of
-   56, and open addressing to drop the dependent `next` load.
-5. **SWAP, 8.2M (3.5%).** `swap<1>` alone is 4.3M: two `uint256` through a
+5. **Hash lookups, ~11.5M (4.9%).** All `unordered_map`, no binary search:
+   Storages, Accounts (20-byte key), DynamicStorage, Journal, Contracts. The keys
+   are already high-entropy so hashing is free; the cost is building the key,
+   taking the bucket modulo (a `remu`, 97 area vs 25 for an `add`), walking the
+   chain and comparing the whole key.
+
+   The *duplicate*-probe half of this is now fixed (see below). What is left, in
+   order: keep the 64-bit hash next to the index so the chain walk rejects on 8
+   bytes instead of 56; open addressing, to drop the dependent `next` load;
+   heterogeneous lookup, so `Storages` stops materialising a 56-byte `Key` on the
+   stack for every probe (~6 of the ~22 steps a probe costs).
+6. **The SLOAD/SSTORE host round trip, ~1.5M (0.6%).** After the fix below, a
+   warm SLOAD still costs 359 steps: 78 in `sload` itself, then *two* full C-ABI
+   crossings — `access_storage` then `get_storage` — each re-marshalling the same
+   20-byte address and 32-byte key and each probing the map once. The real work,
+   one hashmap lookup and a 32-byte read, is under 60 of those steps. Collapsing
+   it means a fused host method, which means extending `evmc_host_interface`; we
+   own both sides (evmone is patched, `ZiskStateDB` implements `evmc::Host`), so
+   it is possible, just invasive. `sload` alone is 2.3% of the block's steps.
+6. **SWAP, 8.2M (3.5%).** `swap<1>` alone is 4.3M: two `uint256` through a
    temporary, 12 loads and 12 stores.
-6. **`pack_branch`, 4.7M (2.0%).** Writes 17 slots per branch; empty children are
+7. **`pack_branch`, 4.7M (2.0%).** Writes 17 slots per branch; empty children are
    a single `0x80` byte and are the majority, and `build_branch_node` already
    knows which they are from the tag word — the same trick applied to the `Child`
    array would apply here.
-7. **`pack_key_hash`, 2.6M (1.1%).** Still packs the walked path a nibble at a
+8. **`pack_key_hash`, 2.6M (1.1%).** Still packs the walked path a nibble at a
    time because `WalkPath` is one nibble per byte. Packing it too would make this
    a copy.
-8. **Nibble expand/compress ops, ~3.3M.** With `PackedPath` most of the nibble
+9. **Nibble expand/compress ops, ~3.3M.** With `PackedPath` most of the nibble
    traffic is gone; what is left would want an op that expands 32 bits into 8
    nibble-per-byte lanes and its inverse. Lower priority now than it was.
+
+## Done
+
+* **One hashmap probe per storage access instead of two** (-0.60% steps, -0.41%
+  area over the eight blocks). `ZiskStateDB`'s three storage entry points each
+  asked `Storages` the same question twice — `contains(addr, key)` to branch,
+  then `index_of(addr, key)` (or `value(addr, key, tx)`, which calls `index_of`)
+  to act — and every one of those is a full probe: build a 56-byte `Key` on the
+  stack, hash, `remu`, walk the chain, compare 56 bytes. A warm SLOAD did four of
+  them for one slot. `Storages::find` answers both questions in one probe by
+  returning `npos`, and the call sites branch on the index.
+
+  Found by disassembling `sload` and following its callees, not by reading the
+  source — from C++ the double question looks like two cheap predicates.
 
 ## Tried, did not pay
 
@@ -127,6 +191,32 @@ Keeping these so nobody spends the afternoon twice.
   not in the fill.
 * **`dma_inputcpy` for fcall results**: -31k steps, -2.5M area. Real but small,
   and it scales with the block's signature traffic.
+* **`-mstrict-align`**, to stop GCC emitting accesses it cannot prove aligned:
+  **+29.7% steps, +17.1% area**, and MEMORY itself went *up* 34.5% (4.08G ->
+  5.48G). GCC does not know an access lands aligned at run time, so it splits it
+  into byte sequences — static `lbu` 4,398 -> 11,029, static `sb` 1,713 -> 5,955
+  — and a byte read costs 41 where the aligned 8-byte read it replaced costs 16.
+  The premise was wrong anyway: `--mem-full-stats` puts genuinely misaligned
+  traffic (the classes that cross an 8-byte boundary) at ~522k accesses and
+  ~110M area, **0.25% of the block**. `slow_unaligned_access = false` is the
+  correct setting for us and the alignment axis is closed. What that measurement
+  did find is a different thing — narrow accesses. On the stack a 4-byte read
+  costs 122 and a 1-byte dirty write 193, against 16/18 for an aligned 8-byte
+  access, so here *narrower is more expensive*, the opposite of every real CPU.
+  Stack traffic below 8 bytes is 7.29M accesses for 843M area; at 8 bytes it
+  would be 123M. See `-mzisk-wide-stack` in the open list.
+* **Sweeping `-mmemory-cost=`** (the knob `0002-riscv-zisk-memory-cost.patch`
+  adds, so IRA's spill price and the `MEM` case of `riscv_rtx_costs` can be set
+  from the command line): nothing there. 1 -> +0.25% steps / +0.14% area; 3 ->
+  -0.11% / **-0.05%**; 5 and 8 flat. `-mmemory-cost=2` comes out byte-identical
+  to no flag, which is the right sanity check — 2 is the tune default under
+  `-mtune=size`. The direction was as predicted (undercharging memory makes GCC
+  spill more, and a spilled 32-bit pseudo really does cost 193/122 rather than
+  the 86/84 of an 8-byte slot) but the magnitude is noise. The useful negative
+  is what it says about the narrow stack traffic above: it is **not** IRA-elective
+  spilling, because moving the spill price 4x did not move it. It is slots that
+  have to exist — address-taken locals, aggregate temporaries, ABI — which is
+  the harder half of `-mzisk-wide-stack`, not the free half.
 
 ## How to measure
 
