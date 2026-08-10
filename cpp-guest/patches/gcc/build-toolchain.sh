@@ -27,7 +27,13 @@ set -euo pipefail
 
 GCC_VERSION=14.3.0
 PATCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PATCHES=("$PATCH_DIR"/0[0-9]*.patch)   # applied in sorted order
+# Only the DMA lowering is part of the toolchain the guest needs: it is the one
+# thing a build turns on (-DZEG_ZISK_DMA=ON -> -mzisk-dma). 0002 (-mmemory-cost=)
+# and 0003 (-mzisk-memops=) are measurement harnesses for experiments already
+# concluded in docs/perf-notes.md, and both are inert without their own flag, so
+# carrying them in the installed compiler buys nothing. Add one here by hand to
+# re-run its measurements.
+PATCHES=("$PATCH_DIR"/0001-*.patch)   # applied in sorted order
 
 # Installed next to the xPack toolchains, and named for what it is, so that
 # having it on PATH is an explicit choice rather than a surprise.
@@ -39,12 +45,12 @@ say() { printf '==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 # ---------------------------------------------------------------- already? ---
-# Every flag the patch set is supposed to add, so that installing a compiler
-# built before a patch was added does not count as up to date.
+# The flag the patch is there to add, so that a stock compiler sitting in the
+# prefix does not count as up to date. Keep this in step with PATCHES.
 supports_flag() {
     [ -x "$1" ] && echo 'int main(){}' |
         "$1" -x c++ -march=rv64ima_zicsr -mabi=lp64 \
-             -mzisk-dma -mmemory-cost=2 -mzisk-memops=1 -fsyntax-only - 2>/dev/null
+             -mzisk-dma -fsyntax-only - 2>/dev/null
 }
 
 if [ "${1:-}" != "--force" ] && supports_flag "$PREFIX/bin/riscv-none-elf-g++"; then
