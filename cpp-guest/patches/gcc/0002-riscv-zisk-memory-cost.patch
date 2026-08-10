@@ -1,0 +1,49 @@
+diff -urN a/gcc/config/riscv/riscv.cc b/gcc/config/riscv/riscv.cc
+--- a/gcc/config/riscv/riscv.cc	2026-08-08 15:34:44.969215837 +0200
++++ b/gcc/config/riscv/riscv.cc	2026-08-08 15:34:44.980412490 +0200
+@@ -3263,7 +3263,7 @@
+ 	      && !riscv_compressed_lw_address_p (XEXP (x, 0)))
+ 	    cost++;
+ 
+-	  *total = COSTS_N_INSNS (cost + tune_param->memory_cost);
++	  *total = COSTS_N_INSNS (cost + riscv_memory_cost);
+ 	  return true;
+ 	}
+       /* Otherwise use the default handling.  */
+@@ -8611,7 +8611,7 @@
+ static int
+ riscv_memory_move_cost (machine_mode mode, reg_class_t rclass, bool in)
+ {
+-  return (tune_param->memory_cost
++  return (riscv_memory_cost
+ 	  + memory_move_secondary_cost (mode, rclass, in));
+ }
+ 
+@@ -9297,6 +9297,13 @@
+   if (opts->x_riscv_branch_cost == 0)
+     opts->x_riscv_branch_cost = tune_param->branch_cost;
+ 
++  /* Likewise for the cost of a memory access.  ZisK charges a flat 68 per
++     executed instruction plus 16/18 for an aligned 8-byte load/store, so a
++     load is only ~1.24x a register-register move and the right value here is
++     near 2 -- but it is worth sweeping, which is what this option is for.  */
++  if (opts->x_riscv_memory_cost == 0)
++    opts->x_riscv_memory_cost = tune_param->memory_cost;
++
+   /* FIXME: We don't allow TARGET_MIN_VLEN > 4096 since the datatypes of
+      both GET_MODE_SIZE and GET_MODE_BITSIZE are poly_uint16.
+ 
+diff -urN a/gcc/config/riscv/riscv.opt b/gcc/config/riscv/riscv.opt
+--- a/gcc/config/riscv/riscv.opt	2026-08-08 15:34:44.968804780 +0200
++++ b/gcc/config/riscv/riscv.opt	2026-08-08 15:34:44.979860941 +0200
+@@ -33,6 +33,10 @@
+ Target RejectNegative Joined UInteger Var(riscv_branch_cost)
+ -mbranch-cost=N	Set the cost of branches to roughly N instructions.
+ 
++mmemory-cost=
++Target RejectNegative Joined UInteger Var(riscv_memory_cost)
++-mmemory-cost=N	Set the cost of a memory access to roughly N instructions.
++
+ mplt
+ Target Var(TARGET_PLT) Init(1)
+ When generating -fpic code, allow the use of PLTs. Ignored for fno-pic.

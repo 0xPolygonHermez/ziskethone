@@ -27,7 +27,7 @@ set -euo pipefail
 
 GCC_VERSION=14.3.0
 PATCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PATCH="$PATCH_DIR/0001-riscv-zisk-dma-lowering.patch"
+PATCHES=("$PATCH_DIR"/0[0-9]*.patch)   # applied in sorted order
 
 # Installed next to the xPack toolchains, and named for what it is, so that
 # having it on PATH is an explicit choice rather than a surprise.
@@ -39,9 +39,12 @@ say() { printf '==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 # ---------------------------------------------------------------- already? ---
+# Every flag the patch set is supposed to add, so that installing a compiler
+# built before a patch was added does not count as up to date.
 supports_flag() {
     [ -x "$1" ] && echo 'int main(){}' |
-        "$1" -x c++ -march=rv64ima_zicsr -mabi=lp64 -mzisk-dma -fsyntax-only - 2>/dev/null
+        "$1" -x c++ -march=rv64ima_zicsr -mabi=lp64 \
+             -mzisk-dma -mmemory-cost=2 -mzisk-memops=1 -fsyntax-only - 2>/dev/null
 }
 
 if [ "${1:-}" != "--force" ] && supports_flag "$PREFIX/bin/riscv-none-elf-g++"; then
@@ -53,7 +56,7 @@ if [ "${1:-}" != "--force" ] && supports_flag "$PREFIX/bin/riscv-none-elf-g++"; 
 fi
 
 # ------------------------------------------------------------ requirements ---
-[ -f "$PATCH" ] || die "patch not found: $PATCH"
+[ -f "${PATCHES[0]:-}" ] || die "no patches found in $PATCH_DIR"
 [ -x "$XPACK/bin/riscv-none-elf-as" ] ||
     die "xPack $GCC_VERSION not found at $XPACK (set ZISK_XPACK_DIR). Its C++ headers and
        binutils are reused, so the version must match GCC $GCC_VERSION exactly."
@@ -96,12 +99,14 @@ if [ ! -d "$SRC" ]; then
     (cd "$SRC" && ./contrib/download_prerequisites >/dev/null)
 fi
 
-if ! (cd "$SRC" && patch -p1 -R --dry-run -s -f < "$PATCH" >/dev/null 2>&1); then
-    say "applying $(basename "$PATCH")"
-    (cd "$SRC" && patch -p1 < "$PATCH")
-else
-    say "patch already applied"
-fi
+for p in "${PATCHES[@]}"; do
+    if (cd "$SRC" && patch -p1 -R --dry-run -s -f < "$p" >/dev/null 2>&1); then
+        say "already applied: $(basename "$p")"
+    else
+        say "applying $(basename "$p")"
+        (cd "$SRC" && patch -p1 < "$p")
+    fi
+done
 
 # --------------------------------------------------------------- configure ---
 say "configuring (compiler only)"
@@ -133,7 +138,8 @@ for t in as ld ar ranlib nm objcopy objdump strip readelf; do
 done
 
 # -------------------------------------------------------------------- check --
-supports_flag "$PREFIX/bin/riscv-none-elf-g++" || die "built compiler does not accept -mzisk-dma"
+supports_flag "$PREFIX/bin/riscv-none-elf-g++" ||
+    die "built compiler does not accept the flags the patch set adds"
 
 # And that the flag actually lowers something, not just parses.
 tmp=$(mktemp -d)

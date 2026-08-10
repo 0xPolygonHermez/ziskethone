@@ -25,6 +25,7 @@
 
 #include <evmone_precompiles/keccak.h>  // union ethash_hash256, signature
 
+#include "zeg/keccakf_cache.hpp"  // memo for repeated permutations, looked up by the executor
 #include "zeg/zisk_dma.hpp"  // zisk_xmemcpy / zisk_xmemset (CSR 0x813 / 0x816)
 
 // The whole sponge below treats a run of message bytes and a run of 64-bit
@@ -41,13 +42,11 @@ static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
 
 namespace {
 
-// ZisK Keccak-f[1600] precompile. CSR 0x800 takes a pointer (in a register) to
-// the 25-word state and permutes it in place. Matches the ziskos_syscall! macro
-// (`csrs {port}, {value}`) and hello-zisk-c/zisk_cpp_howto.md §8.7.
-inline void syscall_keccakf(uint64_t* state /* &state[25] */) {
-    register unsigned long a0 asm("a0") = reinterpret_cast<unsigned long>(state);
-    asm volatile("csrs 0x800, %0" : : "r"(a0) : "memory");
-}
+// Every permutation goes through the memo rather than straight to the precompile: it is the
+// Keccak-f the guest runs, with an executor-side lookup for states already permuted folded
+// in. See zeg/keccakf_cache.hpp — in particular why believing the index it is handed is
+// sound.
+using zeg::keccakf_cache::zisk_keccakf;
 
 // A u64 that promises nothing about alignment and is allowed to alias other
 // types — the two things a message pointer violates. `aligned(1)` stops the
@@ -69,9 +68,9 @@ inline uint64_t load_lane(const uint8_t* p) {
 
 // Keccak sponge for a 256-bit digest (rate r = 1600 - 2*256 = 1088 bits =
 // 136 bytes). Pad10*1 with the Keccak domain byte 0x01 and the 0x80 terminator.
-// Identical to evmone's static keccak(out, 256, …), with syscall_keccakf in
+// Identical to evmone's static keccak(out, 256, …), with zisk_keccakf in
 // place of the software permutation.
-void keccak256(uint64_t* out, const uint8_t* data, size_t size) {
+void keccak256_compute(uint64_t* out, const uint8_t* data, size_t size) {
     constexpr size_t word_size = sizeof(uint64_t);   // 8
     constexpr size_t hash_size = 256 / 8;            // 32
     constexpr size_t block_size = (1600 - 256 * 2) / 8;  // 136
@@ -89,7 +88,7 @@ void keccak256(uint64_t* out, const uint8_t* data, size_t size) {
         zeg::zisk::zisk_xmemcpy<block_size>(state, data);
         zeg::zisk::zisk_xmemset<cap_bytes>(state + rate_words);
         data += block_size;
-        syscall_keccakf(state);
+        zisk_keccakf(state);
         size -= block_size;
     } else {
         zeg::zisk::zisk_xmemset<sizeof(state)>(state);
@@ -100,7 +99,7 @@ void keccak256(uint64_t* out, const uint8_t* data, size_t size) {
             state[i] ^= load_lane(data);
             data += word_size;
         }
-        syscall_keccakf(state);
+        zisk_keccakf(state);
         size -= block_size;
     }
 
@@ -127,7 +126,7 @@ void keccak256(uint64_t* out, const uint8_t* data, size_t size) {
 
     state[block_size / word_size - 1] ^= 0x8000000000000000ULL;  // 10*1 terminator.
 
-    syscall_keccakf(state);
+    zisk_keccakf(state);
 
     // little-endian target: squeeze as-is.
     zeg::zisk::zisk_xmemcpy<hash_size>(out, state);
@@ -137,6 +136,11 @@ void keccak256(uint64_t* out, const uint8_t* data, size_t size) {
 
 extern "C" union ethash_hash256 ethash_keccak256(const uint8_t* data, size_t size) noexcept {
     union ethash_hash256 hash;
-    keccak256(hash.word64s, data, size);
+    // No memo at this level any more. Remembering whole preimages was worth it only while
+    // the permutation-level memo had to pay for its own lookups; now that the executor does
+    // them, every repeat a message-keyed table could find is already a run of permutation
+    // hits inside the sponge — and so are the repeats it could not see, the ones two
+    // different messages share through a common 136-byte-aligned prefix.
+    keccak256_compute(hash.word64s, data, size);
     return hash;
 }
