@@ -170,6 +170,62 @@ Ordered by measured size, not by how interesting they are.
   Found by disassembling `sload` and following its callees, not by reading the
   source — from C++ the double question looks like two cheap predicates.
 
+### Measured: a ZisK indirect-operand ALU form
+
+Not a numbered item because it is an ISA proposal, not guest code: let a base
+operation take an indirect operand (`op [a],[b],[c]`), with a separate machine
+resolving the indirection off the bus so `MAIN` keeps its column count.
+
+Measured with `-mzisk-memops=N`, a GCC harness (`0003-riscv-zisk-memops.patch`).
+The patterns do **not** emit a fused instruction — each expands to exactly the
+instructions the unfused code used, with the loaded value pinned in `t6`/`t5`
+and those registers reserved (`-ffixed-t5 -ffixed-t6`, in the control too). So
+every `ld t6,...` in the output is a site `combine` folded, countable and
+weightable by a real histogram, while the binary still runs. Control: 0 sites,
+zero false positives. All three builds hash `0x7b72c0d9`.
+
+| variant | sites | folds executed | indirections | area @ X=0 |
+|---|---|---|---|---|
+| A, `[reg]` only | 636 | 7,146,149 | 7,146,821 | 486M (**1.09%**) |
+| B, `[reg+disp]` on sources | 4,589 | 16,641,473 | 21,289,609 | 1,448M (**3.25%**) |
+
+**The displacement is worth 2.98x** and decides whether the feature is worth
+building at all. Struct field access is `(mem (plus (reg) (const_int)))`, so
+without a displacement most operands never fold.
+
+Net of the indirection machine's own cost. **The machine resolves an indirect
+operation for 32 against MAIN's 68**, so each fused indirection gives back 36:
+
+| variant | machine charges per indirection | per fused instruction |
+|---|---|---|
+| A, `[reg]` only | 257M (**0.58%**) | 257M (0.58%) |
+| B, `[reg+disp]` sources | 766M (**1.72%**) | 915M (**2.05%**) |
+
+The two columns differ only in the `[mem] OP [mem]` shape, which resolves two
+indirections in one instruction: whether that costs 32 or 64 is worth 0.33% of
+the block on its own, so it is a question worth asking the machine's designer.
+Block total goes 44.60G -> 43.84G (or 43.69G). For scale `-mzisk-dma` in full is
+4.96%, so variant B is a third of it and variant A an eighth. **A alone does not
+justify an ISA change; B does.** The sweep behind those two rows, if the cost
+moves:
+
+| X | 0 | 20 | 32 | 40 | 50 |
+|---|---|---|---|---|---|
+| A | 1.09% | 0.77% | **0.58%** | 0.45% | 0.29% |
+| B | 3.25% | 2.29% | **1.72%** | 1.34% | 0.86% |
+
+Two more results. `reg = [mem] OP [mem]` — two indirections in one instruction —
+is 4.65M executions in B, **28% of B's whole benefit**, and nothing in A (672):
+the two-source form only pays once displacements exist. And the memory
+*destination* is worth 0.001% (7,285 executions), but that is measured with the
+destination bare in both variants, so it says a destination *without* a
+displacement is worthless, not that destinations are. If the encoding can only
+afford two displacement fields, this says put them on the sources; measuring
+one-source-plus-destination would settle it.
+
+For scale, the static upper bound from adjacent dependent pairs was 20.5M and
+`combine` folds 16.6M of them, 81% — the static estimate was a fair proxy.
+
 ## Tried, did not pay
 
 Keeping these so nobody spends the afternoon twice.
@@ -217,6 +273,25 @@ Keeping these so nobody spends the afternoon twice.
   spilling, because moving the spill price 4x did not move it. It is slots that
   have to exist — address-taken locals, aggregate temporaries, ABI — which is
   the harder half of `-mzisk-wide-stack`, not the free half.
+* **Peepholes that swap one opcode for a cheaper one.** The whole family is
+  second order and the executed-opcode table says so before any of them is worth
+  coding. OPCODES is 3.57G against MAIN's 15.97G, so *which* instruction you run
+  matters ~4.5x less than *how many*. Measured ceilings, assuming every single
+  occurrence is converted: `ior` -> `plus` on disjoint operands (`or` is 60,
+  `add` 25) is 561,599 executions, **0.044%**; `add_w` -> `add` 0.18%; dropping
+  the `signextend_w` every `lw` pays (use `lwu`) 0.12%. For contrast `-mzisk-dma`
+  was 4.96%, and it won by collapsing several instructions into one op rather
+  than by making one instruction cheaper. That is the shape to look for.
+* **Instruction-removing compiler tricks, also too small to matter here.**
+  Constant materialisation into the pool: only **757** `lui`+`addi` pairs execute
+  per block, GCC already keeps hot constants in registers — 0.000%.
+  `gp`-relative globals (`-msmall-data-limit`): of 3.09M executed `lui`/`auipc`,
+  8.1% are followed by an access off that same base, so one instruction each,
+  **0.038%**. Profile-driven block layout (AutoFDO from the PC histogram, which
+  is exact — see below): the entire budget is the 3,174,731 executed
+  unconditional jumps, **0.484%**, and no layout turns all of them into
+  fallthrough. The 32.8M executed conditional branches are 9.4% of the block but
+  removing those is an algorithm change, not a layout one.
 
 ## How to measure
 
@@ -236,7 +311,20 @@ target/release/ziskemu ... -X -S -T 250
 
 # per PC, which is what gives SELF cost and works through inlining
 target/release/ziskemu ... -X -H 400000
+
+# memory by class; the second one splits aligned/1B/2B/4B/8B, single vs
+# word-crossing, which is the only way to see what narrow accesses cost
+target/release/ziskemu ... -X --mem-stats
+target/release/ziskemu ... -X --mem-full-stats
 ```
+
+`-H N` is a *top N*, so it truncates — but N above the number of distinct
+executed PCs makes it complete, and that is checkable: `-H 2000000` on 25701329
+lists 55,951 PCs whose executions sum to exactly 234,838,799, the step total.
+Worth the check, because a complete histogram replaces a `--trace-steps` run of
+235M lines. Attributing those PCs needs a `-g` twin built with otherwise
+identical flags; confirm it really is a twin before trusting it —
+`objcopy -O binary --only-section=.text` on both and compare the hashes.
 
 Two traps in reading the report: there are **two `TOTAL` lines** (the op table's
 and COST DISTRIBUTION's) and they are different numbers — compare like with like;
