@@ -497,8 +497,11 @@ struct BuildCtx {
     // power-of-two sized, so GCC lowers each call to a multiply by a reciprocal.
     // Appending one node asked for three of them — the node-limit check reads
     // both, and the returned index reads one again — on the walk's hottest path.
-    uint32_t                 aux_n = 0;
-    uint32_t                 branch_n = 0;
+    // 64-bit deliberately: a 32-bit field is a 4-byte access, which ZisK bills
+    // at ~141 against ~17 for an aligned 8-byte one, and these two are read
+    // and written on the walk's hottest path (once per branch child).
+    uint64_t                 aux_n = 0;
+    uint64_t                 branch_n = 0;
 };
 
 // The result-node of a static EmptyR child (shared, read-only).
@@ -538,11 +541,11 @@ inline const NodeR* result_ptr(const Child& c,
 // large as its widest alternative.
 template <class T, class... Args>
 uint32_t aux_emplace(BuildCtx& ctx, Args&&... args) {
-    if (std::size_t{ctx.branch_n} + ctx.aux_n >= ctx.node_limit) {
+    if (ctx.branch_n + ctx.aux_n >= ctx.node_limit) {
         fatal("state_root: more nodes than declared (numberOfNodes overflow)");
     }
     ctx.aux.emplace_back(std::in_place_type<T>, std::forward<Args>(args)...);
-    return ctx.aux_n++;
+    return static_cast<uint32_t>(ctx.aux_n++);
 }
 
 // Leaf and PhantomLeaf are the heavyweight cases (account decode, an RLP walk, a
@@ -668,11 +671,11 @@ Child build_branch_node(const uint8_t*& cursor,
     bn.cached = reduce_branch(child_results, ctx.accounts, ctx.storages,
                               ValueSet::Original);
 
-    if (std::size_t{ctx.branch_n} + ctx.aux_n >= ctx.node_limit) {
+    if (ctx.branch_n + ctx.aux_n >= ctx.node_limit) {
         fatal("state_root: more nodes than declared (numberOfNodes overflow)");
     }
     ctx.branch_nodes.push_back(std::move(bn));
-    return Child{NodeType::Branch, ctx.branch_n++};
+    return Child{NodeType::Branch, static_cast<uint32_t>(ctx.branch_n++)};
 }
 
 Child build_phantom_leaf_node(const uint8_t*& cursor,
