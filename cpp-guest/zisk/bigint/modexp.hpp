@@ -54,7 +54,7 @@ inline void modexp_short(const uint64_t* base, int lb, const uint64_t* exp, int 
     uint64_t* bits = exp_bits_buf();
     int nb = fcall_bin_decomp(exp, le, bits);
     if (!(nb > 0 && bits[0] == 1)) fail();
-    uint64_t rec[MEXP_MAXW] = {0};
+    uint64_t rec[MEXP_MAXW*4] = {0};
     rec[(nb-1) >> 6] = 1ULL << ((nb-1) & 63);
     uint64_t cur[4]; cp4(cur, base_mod);
     for (int bi = 1; bi < nb; ++bi) {
@@ -71,19 +71,19 @@ inline void modexp_short(const uint64_t* base, int lb, const uint64_t* exp, int 
 // modulus ≥ 2 words. Writes result words to out, returns word count.
 inline int modexp_long(const uint64_t* base, int lb, const uint64_t* exp, int le,
                        const uint64_t* m, int lm, uint64_t* out) {
-    uint64_t base_mod[MEXP_MAXW]; int lbm = rem_long(base, lb, m, lm, base_mod);
+    uint64_t base_mod[MEXP_MAXW*4]; int lbm = rem_long(base, lb, m, lm, base_mod);
     uint64_t* bits = exp_bits_buf();
     int nb = fcall_bin_decomp(exp, le, bits);
     if (!(nb > 0 && bits[0] == 1)) fail();
-    uint64_t rec[MEXP_MAXW] = {0};
+    uint64_t rec[MEXP_MAXW*4] = {0};
     rec[(nb-1) >> 6] = 1ULL << ((nb-1) & 63);
-    uint64_t cur[MEXP_MAXW]; int cl = lbm; wcopy(cur, base_mod, lbm);
+    uint64_t cur[MEXP_MAXW*4]; int cl = lbm; wcopy(cur, base_mod, lbm);
     for (int bi = 1; bi < nb; ++bi) {
         if (cl == 1 && is_zero4(cur)) { out[0]=out[1]=out[2]=out[3]=0; return 1; }
-        uint64_t t[MEXP_MAXW]; int tl = square_and_reduce_long(cur, cl, m, lm, t);
+        uint64_t t[MEXP_MAXW*4]; int tl = square_and_reduce_long(cur, cl, m, lm, t);
         wcopy(cur, t, tl); cl = tl;
         if (bits[bi] == 1) {
-            uint64_t u[MEXP_MAXW]; int ul = mul_and_reduce_long(cur, cl, base_mod, lbm, m, lm, u);
+            uint64_t u[MEXP_MAXW*4]; int ul = mul_and_reduce_long(cur, cl, base_mod, lbm, m, lm, u);
             wcopy(cur, u, ul); cl = ul;
             int pos = nb - 1 - bi; rec[pos >> 6] |= 1ULL << (pos & 63);
         }
@@ -96,12 +96,12 @@ inline int modexp_long(const uint64_t* base, int lb, const uint64_t* exp, int le
 // Writes mod_len big-endian bytes to output (zero-padded). Matches EIP-198.
 inline void modexp_compute(const uint8_t* base_b, int base_len, const uint8_t* exp_b, int exp_len,
                            const uint8_t* mod_b, int mod_len, uint8_t* output) {
-    uint64_t base[MEXP_MAXW], mod[MEXP_MAXW], expv[2*MEXP_MAXW];
+    uint64_t base[MEXP_MAXW*4], mod[MEXP_MAXW*4], expv[2*MEXP_MAXW*4];
     int lb = be_to_words(base_b, base_len, base);
     int lm = be_to_words(mod_b, mod_len, mod);
     int le = be_to_u64(exp_b, exp_len, expv);     // exponent kept as raw u64 limbs
 
-    uint64_t res[MEXP_MAXW]; int rl;
+    uint64_t res[MEXP_MAXW*4]; int rl;
     // Edge cases (mirror zisklib modexp dispatch).
     bool mod_is_zero = (lm == 1 && is_zero4(mod));
     bool mod_is_one  = (lm == 1 && is_one4(mod));

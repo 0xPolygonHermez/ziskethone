@@ -45,17 +45,26 @@ inline G2 g2_dbl(const G2& p) {
     Fp2 y3 = fp2_sub(fp2_mul(lam, fp2_sub(p.x, x3)), p.y);
     return { x3, y3 };
 }
+// complete double. g2_dbl requires y != 0 and the identity is (0,0); fp2_inv(0)
+// would yield a garbage slope. This path is software, so the symptom is a
+// silently wrong point rather than a panic. g2_add above is already complete.
+inline G2 g2_dbl_complete(const G2& a) {
+    if (g2_is_identity(a) || fp2_is_zero(a.y)) return G2_IDENTITY;
+    return g2_dbl(a);
+}
+
 // complete add (handles ∞, doubling, opposite).
 inline G2 g2_add(const G2& a, const G2& b) {
     if (g2_is_identity(a)) return b;
     if (g2_is_identity(b)) return a;
     if (fp2_eq(a.x, b.x)) {
-        if (fp2_eq(a.y, b.y)) return g2_dbl(a);
+        if (fp2_eq(a.y, b.y)) return g2_dbl_complete(a);
         return G2_IDENTITY;
     }
     return g2_add_raw(a, b);
 }
 inline G2 g2_sub(const G2& a, const G2& b) { return g2_add(a, g2_neg(b)); }
+
 
 // [x]·P, x = 4965661367192848881 (BN curve parameter), MSB-first double-and-add.
 inline G2 g2_scalar_mul_by_x(const G2& p) {
@@ -65,8 +74,8 @@ inline G2 g2_scalar_mul_by_x(const G2& p) {
         0,0,1 };
     G2 q = p;
     for (int i = 1; i < 63; ++i) {
-        q = g2_dbl(q);
-        if (X_BIN_BE[i]) q = g2_add(q, p);
+        q = g2_dbl_complete(q);
+        if (X_BIN_BE[i]) q = g2_add(q, p);   // g2_add is complete (handles inf/equal-x)
     }
     return q;
 }
@@ -81,7 +90,7 @@ inline bool g2_is_on_subgroup(const G2& p) {
     if (g2_is_identity(p)) return true;
     G2 xp = g2_scalar_mul_by_x(p);
     G2 lhs = g2_add(g2_add(p, xp), g2_add(g2_utf(xp), g2_utf(g2_utf(xp))));
-    G2 rhs = g2_utf(g2_utf(g2_utf(g2_dbl(xp))));
+    G2 rhs = g2_utf(g2_utf(g2_utf(g2_dbl_complete(xp))));
     return g2_eq(lhs, rhs);
 }
 

@@ -90,9 +90,19 @@ inline bool g1_is_on_curve(const G1& p) {               // y² == x³ + 4
     return fp_eq(lhs, rhs);
 }
 
+// complete double. g1_dbl_raw's 0x80D precompile requires y != 0, and the
+// identity is encoded as (0,0), so both the identity and any 2-torsion point
+// violate its precondition — and the ZisK backend answers a violation by
+// dividing by zero inside opc_bls12_381_curve_add, which panics the emulator
+// rather than returning an error. Both cases double to the identity.
+inline G1 g1_dbl_complete(const G1& a) {
+    if (g1_is_identity(a) || fp_is_zero(a.y)) return G1_IDENTITY;
+    return g1_dbl_raw(a);
+}
+
 // add of two non-identity points (handles x equal → double / infinity).
 inline G1 g1_add(const G1& a, const G1& b) {
-    if (fp_eq(a.x, b.x)) return fp_eq(a.y, b.y) ? g1_dbl_raw(a) : G1_IDENTITY;
+    if (fp_eq(a.x, b.x)) return fp_eq(a.y, b.y) ? g1_dbl_complete(a) : G1_IDENTITY;
     return g1_add_raw(a, b);
 }
 inline G1 g1_sub(const G1& a, const G1& b) { return g1_add(a, g1_neg(b)); }
@@ -104,11 +114,12 @@ inline G1 g1_add_complete(const G1& a, const G1& b) {
     return g1_add(a, b);
 }
 
+
 // k·P for non-identity P, k ∈ Fr (4 limbs). MSB hinted, scalar recomposed.
 inline G1 g1_scalar_mul(const G1& p, const uint64_t k[4]) {
     if (k[0]==0 && k[1]==0 && k[2]==0 && k[3]==0) return G1_IDENTITY;
     if (k[0]==1 && k[1]==0 && k[2]==0 && k[3]==0) return p;
-    if (k[0]==2 && k[1]==0 && k[2]==0 && k[3]==0) return g1_dbl_raw(p);
+    if (k[0]==2 && k[1]==0 && k[2]==0 && k[3]==0) return g1_dbl_complete(p);
     uint64_t ml, mb; msb_pos_256(k, &ml, &mb);
     if (((k[ml] >> mb) & 1) != 1) { for (;;) {} }
     G1 q = p;
@@ -117,8 +128,8 @@ inline G1 g1_scalar_mul(const G1& p, const uint64_t k[4]) {
     if (mb == 0) { li -= 1; curbit = 63; } else curbit = (int)mb - 1;
     for (int i = li; i >= 0; --i) {
         for (int j = curbit; j >= 0; --j) {
-            q = g1_dbl_raw(q);
-            if ((k[i] >> j) & 1ULL) { q = g1_add_raw(q, p); krec[i] |= 1ULL << j; }
+            q = g1_dbl_complete(q);
+            if ((k[i] >> j) & 1ULL) { q = g1_add_complete(q, p); krec[i] |= 1ULL << j; }
         }
         curbit = 63;
     }
@@ -129,7 +140,7 @@ inline G1 g1_scalar_mul(const G1& p, const uint64_t k[4]) {
 // scalar-mul by a fixed big-endian bit string (first bit = MSB = 1), MSB-first.
 inline G1 g1_scalar_mul_bin(const G1& p, const uint8_t* bits, int n) {
     G1 r = p;
-    for (int i = 1; i < n; ++i) { r = g1_dbl_raw(r); if (bits[i]) r = g1_add_raw(r, p); }
+    for (int i = 1; i < n; ++i) { r = g1_dbl_complete(r); if (bits[i]) r = g1_add_complete(r, p); }
     return r;
 }
 inline G1 g1_sigma(const G1& p) { return { fp_mul(p.x, GAMMA), p.y }; }  // σ(x,y)=(γx,y)
@@ -144,7 +155,10 @@ inline bool g1_is_on_subgroup(const G1& p) {
         0,1,0,1,0,1};
     G1 s1 = g1_sigma(p);
     G1 rhs = g1_sigma(s1);                               // σ²(P)
-    G1 lhs = g1_sub(g1_sub(g1_dbl_raw(s1), p), rhs);     // 2σ(P) - P - σ²(P)
+    // complete ops throughout: g1_dbl_raw is undefined for y == 0, and g1_sub
+    // (via g1_add) does not handle the identity, which 2σ(P) - P can be.
+    G1 lhs = g1_add_complete(g1_add_complete(g1_dbl_complete(s1), g1_neg(p)),
+                             g1_neg(rhs));               // 2σ(P) - P - σ²(P)
     lhs = g1_scalar_mul_bin(lhs, X2DIV3_BIN_BE, 126);
     return g1_eq(lhs, rhs);
 }
