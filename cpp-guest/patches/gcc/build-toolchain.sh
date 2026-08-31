@@ -43,6 +43,13 @@ BUILD_DIR="${ZISK_DMA_GCC_BUILD_DIR:-${TMPDIR:-/tmp}/zisk-dma-gcc-build}"
 
 say() { printf '==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+# `nproc` is GNU; macOS and the BSDs answer through sysctl instead.
+ncpu() {
+    if command -v nproc >/dev/null 2>&1; then nproc
+    elif command -v sysctl >/dev/null 2>&1; then sysctl -n hw.ncpu
+    else echo 1
+    fi
+}
 
 # ---------------------------------------------------------------- already? ---
 # The flag the patch is there to add, so that a stock compiler sitting in the
@@ -70,6 +77,8 @@ fi
 # GCC 14's bundled libcody does not build with a host compiler newer than ~14
 # (u8"" literals became char8_t), which is a build-time failure with a very
 # unhelpful message. Pick an older host compiler when one is around.
+# On macOS there is no g++-13/12/11 to find, and Apple clang builds libcody
+# fine. By absolute path: a Homebrew LLVM on PATH fails against the macOS SDK.
 HOST_CC=${CC:-}; HOST_CXX=${CXX:-}
 if [ -z "$HOST_CXX" ]; then
     for v in 13 12 11; do
@@ -77,6 +86,9 @@ if [ -z "$HOST_CXX" ]; then
             HOST_CXX="g++-$v"; HOST_CC="gcc-$v"; break
         fi
     done
+fi
+if [ -z "$HOST_CXX" ] && [ "$(uname -s)" = "Darwin" ] && [ -x /usr/bin/clang++ ]; then
+    HOST_CXX=/usr/bin/clang++; HOST_CC=/usr/bin/clang
 fi
 [ -n "$HOST_CXX" ] || die "no g++-13/12/11 found for the host build; install one or set CXX/CC"
 say "host compiler: $HOST_CXX"
@@ -118,17 +130,23 @@ done
 say "configuring (compiler only)"
 rm -rf "$BUILD_DIR/build" && mkdir -p "$BUILD_DIR/build"
 cd "$BUILD_DIR/build"
+# GCC's in-tree zlib does not compile against the macOS SDK, and macOS ships a
+# zlib of its own. Darwin-only: on Linux this would add a zlib1g-dev
+# prerequisite that the in-tree copy exists to avoid.
+CONFIGURE_EXTRA=()
+[ "$(uname -s)" = "Darwin" ] && CONFIGURE_EXTRA+=(--with-system-zlib)
 CC="$HOST_CC" CXX="$HOST_CXX" "$SRC/configure" \
     --target=riscv-none-elf \
     --prefix="$PREFIX" \
     --with-arch=rv64ima_zicsr --with-abi=lp64 \
     --disable-multilib --disable-nls --disable-shared --disable-threads \
     --disable-libssp --disable-libquadmath --disable-libgomp --disable-libatomic \
-    --enable-languages=c,c++ --without-headers --with-newlib >configure.log 2>&1 ||
+    --enable-languages=c,c++ --without-headers --with-newlib \
+    ${CONFIGURE_EXTRA[@]+"${CONFIGURE_EXTRA[@]}"} >configure.log 2>&1 ||
     { tail -20 configure.log; die "configure failed (see $BUILD_DIR/build/configure.log)"; }
 
-say "building (~10 min on $(nproc) cores)"
-make all-gcc -j"$(nproc)" >build.log 2>&1 ||
+say "building (~10 min on $(ncpu) cores)"
+make all-gcc -j"$(ncpu)" >build.log 2>&1 ||
     { grep -E "error" build.log | head -10; die "build failed (see $BUILD_DIR/build/build.log)"; }
 make install-gcc >install.log 2>&1 || die "install failed"
 
