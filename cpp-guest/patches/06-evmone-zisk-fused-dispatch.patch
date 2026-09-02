@@ -1,0 +1,29 @@
+diff --git a/lib/evmone/baseline_execution.cpp b/lib/evmone/baseline_execution.cpp
+index 907449f9..3692f531 100644
+--- a/lib/evmone/baseline_execution.cpp
++++ b/lib/evmone/baseline_execution.cpp
+@@ -214,6 +214,16 @@ int64_t dispatch(const CostTable& cost_table, ExecutionState& state, int64_t gas
+ }
+ 
+ #if EVMONE_CGOTO_SUPPORTED
++
++// ZisK fused superinstructions (implementation lives in the guest tree; see
++// cpp-guest/zisk/evm/fused_dispatch.inl). No-op for non-ZisK builds.
++#if defined(ZEG_ZISK) || defined(ZEG_FUSE_TEST)
++#include <evm/fused_dispatch.inl>
++#else
++#define ZEG_TRY_FUSE(OPCODE)
++#endif
++
++
+ int64_t dispatch_cgoto(
+     const CostTable& cost_table, ExecutionState& state, int64_t gas, const uint8_t* code) noexcept
+ {
+@@ -239,6 +249,7 @@ int64_t dispatch_cgoto(
+ 
+ #define ON_OPCODE(OPCODE)                                                                 \
+     TARGET_##OPCODE : ASM_COMMENT(OPCODE);                                                \
++    ZEG_TRY_FUSE(OPCODE)                                                                  \
+     if (const auto next = invoke<OPCODE>(cost_table, stack_bottom, position, gas, state); \
+         next.code_it == nullptr)                                                          \
+     {                                                                                     \

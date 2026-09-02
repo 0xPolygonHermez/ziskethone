@@ -44,9 +44,19 @@ inline G2 g2_dbl(const G2& p) {                          // requires y != 0
     Fp2 y3 = fp2_sub(fp2_mul(lam, fp2_sub(p.x, x3)), p.y);
     return { x3, y3 };
 }
+// complete double. g2_dbl requires y != 0, and the identity is encoded (0,0),
+// so both trip its precondition: fp2_inv(0) then yields a garbage slope and a
+// silently wrong point (this path is software, so it does not panic the way the
+// G1 precompile does -- which makes it the more dangerous of the two). Both
+// cases double to the identity, matching revm/reth's EIP-2537 behaviour.
+inline G2 g2_dbl_complete(const G2& a) {
+    if (g2_is_identity(a) || fp2_is_zero(a.y)) return G2_IDENTITY;
+    return g2_dbl(a);
+}
+
 // add of two non-identity points (handles x1==x2 → double / infinity).
 inline G2 g2_add(const G2& a, const G2& b) {
-    if (fp2_eq(a.x, b.x)) return fp2_eq(a.y, b.y) ? g2_dbl(a) : G2_IDENTITY;
+    if (fp2_eq(a.x, b.x)) return fp2_eq(a.y, b.y) ? g2_dbl_complete(a) : G2_IDENTITY;
     Fp2 lam = fp2_mul(fp2_sub(b.y, a.y), fp2_inv(fp2_sub(b.x, a.x)));
     Fp2 x3 = fp2_sub(fp2_sub(fp2_sqr(lam), a.x), b.x);
     Fp2 y3 = fp2_sub(fp2_mul(lam, fp2_sub(a.x, x3)), a.y);
@@ -70,7 +80,7 @@ inline G2 g2_sub_complete(const G2& a, const G2& b) {
 inline G2 g2_scalar_mul(const G2& p, const uint64_t k[4]) {
     if (k[0]==0 && k[1]==0 && k[2]==0 && k[3]==0) return G2_IDENTITY;
     if (k[0]==1 && k[1]==0 && k[2]==0 && k[3]==0) return p;
-    if (k[0]==2 && k[1]==0 && k[2]==0 && k[3]==0) return g2_dbl(p);
+    if (k[0]==2 && k[1]==0 && k[2]==0 && k[3]==0) return g2_dbl_complete(p);
     uint64_t ml, mb; msb_pos_256(k, &ml, &mb);
     if (((k[ml] >> mb) & 1) != 1) { for (;;) {} }
     G2 q = p;
@@ -79,8 +89,8 @@ inline G2 g2_scalar_mul(const G2& p, const uint64_t k[4]) {
     if (mb == 0) { li -= 1; curbit = 63; } else curbit = (int)mb - 1;
     for (int i = li; i >= 0; --i) {
         for (int j = curbit; j >= 0; --j) {
-            q = g2_dbl(q);
-            if ((k[i] >> j) & 1ULL) { q = g2_add(q, p); krec[i] |= 1ULL << j; }
+            q = g2_dbl_complete(q);
+            if ((k[i] >> j) & 1ULL) { q = g2_add_complete(q, p); krec[i] |= 1ULL << j; }
         }
         curbit = 63;
     }

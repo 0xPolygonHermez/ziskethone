@@ -78,13 +78,15 @@ struct PackedPath {
     }
 
     void prepend(uint8_t nib) {
+        // Bounding the nibble count is what keeps `start` inside the buffer: at
+        // 64 nibbles the path spans at most 33 bytes, so `start` stops at 1.
+        if (len >= kMaxNibbles) {
+            fatal("PackedPath: prepend past the 64-nibble capacity");
+        }
         if (off) {  // room in the high half of the leading byte
             buf[start] = static_cast<uint8_t>((nib << 4) | (buf[start] & 0x0f));
             off = 0;
         } else {    // take one more byte at the front
-            if (start == 0) {
-                fatal("PackedPath: prepend past the 64-nibble capacity");
-            }
             --start;
             buf[start] = static_cast<uint8_t>(nib & 0x0f);
             off = 1;
@@ -93,7 +95,10 @@ struct PackedPath {
     }
 
     // Drop the first `k` nibbles — the phantom-leaf shortening in split_leaf.
-    void drop_front(std::size_t k) noexcept {
+    void drop_front(std::size_t k) {
+        if (k > len) {
+            fatal("PackedPath: drop_front past the end of the path");
+        }
         const std::size_t p = std::size_t{off} + k;
         start = static_cast<uint8_t>(start + p / 2);
         off   = static_cast<uint8_t>(p & 1U);
