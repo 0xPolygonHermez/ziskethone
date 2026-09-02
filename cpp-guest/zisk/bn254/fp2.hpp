@@ -11,6 +11,8 @@
 #include <cstdint>
 #include "fp.hpp"
 
+#include "zeg/zisk_dma.hpp"  // zisk_xinputcpy (CSR 0x815)
+
 namespace zeg::bn {
 
 struct Fp2 { Fp c0; Fp c1; };  // c0 + c1·u ; 8 contiguous u64
@@ -50,7 +52,7 @@ inline Fp2 fcall_fp2_inv(const Fp2& x) {
     asm volatile("csrs 0x8F3, %0" : : "r"(p) : "memory");
     asm volatile("csrwi 0x8C0, 7" : : : "memory");  // FCALL_BN254_FP2_INV_ID
     Fp2 r; uint64_t* o = reinterpret_cast<uint64_t*>(&r);
-    for (int i = 0; i < 8; ++i) o[i] = fcall_get();
+    zeg::zisk::zisk_xinputcpy<8 * sizeof(uint64_t)>(o);  // 8 words in one op
     return r;
 }
 

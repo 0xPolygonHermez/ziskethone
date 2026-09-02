@@ -10,29 +10,30 @@
 // Three variants, selected at compile time:
 //
 //  1. No Zbb (__riscv_zbb undefined, e.g. -DZISK_MARCH=rv64ima_zicsr): the
-//     portable zero-shortcut shift/mask sequence below.
+//     portable zero-shortcut shift/mask sequence below. The shortcut earns its
+//     branch here — the nonzero body is ~33 zisk ops.
 //
-//  2. Zbb available (the default guest march, see zisk/toolchain.cmake) and
-//     ZEG_BSWAP_BUILTIN unset (the default): SAME zero-shortcut, but the
-//     nonzero path issues `rev8` via inline asm instead of the shift/mask
-//     tree. This is NOT the same as just calling __builtin_bswap64: GCC's
-//     tree-bswap idiom pass recognizes "x==0 ? 0 : shift/mask-tree" (or an
-//     equivalent __builtin_bswap64 call, since it also knows bswap64(0)==0)
-//     as a whole and rewrites it to an UNCONDITIONAL `rev8`, silently
-//     deleting the shortcut — confirmed by disassembling both forms with
-//     riscv-none-elf-gcc 14.3.0 -O3. Since most EVM values are small (3 of 4
-//     limbs in a 256-bit word are typically zero), that fold regresses the
-//     common case (flat 13-op zisk cost for `rev8` vs. this file's ~2-op
-//     zero exit). Inline asm is opaque to that pass, so the branch survives:
-//     ~2 zisk ops when zero, ~14 (branch + `rev8`'s 13-op transpiler
-//     decomposition) when not — strictly better than variant 3 below and
-//     also better than variant 1's ~33-op nonzero path.
+//  2. ZEG_BSWAP_BUILTIN defined (the DEFAULT, see zisk/CMakeLists.txt): plain
+//     __builtin_bswap64. The guest march carries Zbb/Zbkb, so this is one
+//     unconditional `rev8` — a single zisk op.
 //
-//  3. ZEG_BSWAP_BUILTIN defined: plain __builtin_bswap64, no shortcut — the
-//     "let the compiler fold it" variant purely for A/B step-count
-//     comparison against variant 2; expect it to lose on zero-heavy blocks
-//     and win only if a call site's inputs are reliably nonzero (e.g. a full
-//     256-bit hash).
+//  3. Zbb available and ZEG_BSWAP_BUILTIN unset: a zero shortcut whose nonzero
+//     path issues `rev8` through inline asm. This was the default while `rev8`
+//     still cost 13 zisk ops in the transpiler, when skipping it on a zero limb
+//     (3 of 4 limbs in a 256-bit word are typically zero) beat paying it. It is
+//     now a pessimization twice over, and the second reason is the larger one:
+//       - `rev8` is one op, so the guard branch costs more than the work it skips;
+//       - inline asm is opaque to every GCC pass, so it acts as an optimization
+//         barrier. Every byteswap has to survive to the ELF. With the builtin,
+//         GCC folds swap pairs, constant-folds, and sinks swaps through loads.
+//     Measured A/B on block 25701329 (zevm + -mzisk-dma, two ELFs from the same
+//     configure line bar this flag, both hash-verified): the builtin executes
+//     980k `rev8` against the asm variant's 1.60M — 39% FEWER, not more, which is
+//     the optimization barrier showing up — for -1.49% steps and -1.99% of the
+//     area left once the keccak precompile is excluded. MEMORY drops 2.16%, i.e.
+//     GCC also removes loads/stores around the swaps. Block 25708403 agrees at
+//     about two thirds the size (-1.09% / -1.50%).
+//     Keep the knob for A/B runs; do not expect it to win.
 #pragma once
 
 #include <cstdint>

@@ -33,8 +33,10 @@ inline constexpr size_t kMaxCallDepth = 1024;
 // set iff code[i] is a valid jump target — a JUMPDEST (0x5b) opcode that is not
 // inside PUSH immediate data. With this, is_jumpdest is two loads + a shift &
 // mask instead of a per-jump local re-parse. Built 64 bytes per aligned u64
-// store (see evm_state.cpp). Shared by EvmState's own analysis and by the evmc2
-// `prepare` path, which precomputes it once per distinct bytecode.
+// store (see evm_state.cpp) — or, in the ZisK build, by the jump_dest_bitmap
+// precompile in a single op (zisk/evm/jump_dest_bitmap.hpp). Shared by EvmState's
+// own analysis and by the evmc2 `prepare` path, which precomputes it once per
+// distinct bytecode.
 void build_jumpdest_bitset(const uint8_t* code, size_t codeSize, uint64_t* out);
 
 // All the mutable state of a single call frame. Frames are preallocated, one per

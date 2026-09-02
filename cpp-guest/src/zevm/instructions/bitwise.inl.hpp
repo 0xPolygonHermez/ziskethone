@@ -17,6 +17,8 @@
 
 #include "detail.hpp"
 
+#include "zeg/zisk_dma.hpp"
+
 #include <cstring>  // std::memmove / std::memset (byte-granular shifts)
 
 namespace zevm {
@@ -98,9 +100,16 @@ inline void byte_shr(U256& v, uint64_t k) {
 }
 inline void byte_sar(U256& v, uint64_t k) {
     uint8_t* b = reinterpret_cast<uint8_t*>(&v);
-    const uint8_t fill = (b[31] & 0x80) ? 0xFF : 0x00;  // sign byte (MSB = byte 31)
+    const bool neg = (b[31] & 0x80) != 0;  // sign byte (MSB = byte 31), before the move
     std::memmove(b, b + k, 32 - k);
-    std::memset(b + (32 - k), fill, k);
+    // The fill is the sign byte, so it is data-dependent — and a run-time fill
+    // has no DMA marker at all: it goes to the libc memset and pays that thunk's
+    // 256-entry jump table to turn the byte back into an immediate. It can only
+    // ever be 0x00 or 0xFF, so branching here turns each side into one op.
+    if (neg)
+        zeg::zisk::zisk_xmemset<0xFF>(b + (32 - k), k);
+    else
+        zeg::zisk::zisk_xmemset<0>(b + (32 - k), k);
 }
 
 // 0x10 LT — unsigned a < b.
@@ -293,9 +302,12 @@ bool op_sar(EvmState& s, Regs& R) {
     const uint64_t n = low_scalar(R.top[0]);
     U256& v = R.top[1];
     if (n >= 256) {
-        // out-of-range: every bit becomes the sign bit (raw byte[31] high bit)
-        const uint8_t fill = (reinterpret_cast<const uint8_t*>(&v)[31] & 0x80) ? 0xFF : 0x00;
-        std::memset(&v, fill, 32);
+        // out-of-range: every bit becomes the sign bit (raw byte[31] high bit).
+        // Constant fill on each side, so one op instead of the libc memset.
+        if (reinterpret_cast<const uint8_t*>(&v)[31] & 0x80)
+            zeg::zisk::zisk_xmemset<32, 0xFF>(&v);
+        else
+            zeg::zisk::zisk_xmemset<32, 0>(&v);
     } else if (n == 0)   { /* unchanged */ }
     else if (n % 8 == 0) byte_sar(v, n / 8);
     else                 st_le(R.top + 1, sar(ld_le(R.top + 1), n));
