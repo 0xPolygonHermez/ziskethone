@@ -134,13 +134,22 @@ void keccak256_compute(uint64_t* out, const uint8_t* data, size_t size) {
 
 } // namespace
 
+#ifdef ZKVM_KECCAK
+#include "zkvm_accelerators.h"
+#endif
+
 extern "C" union ethash_hash256 ethash_keccak256(const uint8_t* data, size_t size) noexcept {
     union ethash_hash256 hash;
+#ifdef ZKVM_KECCAK
+    // EF standard C ABI: redirected by elf2rom to the native .zisk keccak256.
+    zkvm_keccak256(data, size, reinterpret_cast<zkvm_keccak256_hash*>(hash.bytes));
+#else
     // No memo at this level any more. Remembering whole preimages was worth it only while
     // the permutation-level memo had to pay for its own lookups; now that the executor does
     // them, every repeat a message-keyed table could find is already a run of permutation
     // hits inside the sponge — and so are the repeats it could not see, the ones two
     // different messages share through a common 136-byte-aligned prefix.
     keccak256_compute(hash.word64s, data, size);
+#endif
     return hash;
 }
