@@ -122,7 +122,7 @@ list(FILTER PAIRING_SRC EXCLUDE REGEX "/pairing/bn254/")
 # Keccak: instead of evmone's software keccak.c, compile our drop-in that
 # routes the Keccak-f[1600] permutation through the ZisK precompile (CSR 0x800).
 # Same public symbol (ethash_keccak256), so every Keccak call site is accelerated.
-set(PRECOMP_C  ${CMAKE_CURRENT_SOURCE_DIR}/keccak_zisk.cpp)
+set(PRECOMP_C  ${CMAKE_CURRENT_SOURCE_DIR}/keccak_zisk.cpp ${CMAKE_CURRENT_SOURCE_DIR}/zkvm_stubs.c)
 # Only the precompile dispatch from test/state (not the json/state machinery).
 set(STATE_SRC  ${EVMONE_SRC}/test/state/precompiles.cpp)
 
@@ -188,8 +188,14 @@ option(ZEG_SECP256K1_SW "Use the software secp256k1 baseline (no accelerators)" 
 # shortcut-preserving default — expect it to lose on zero-heavy blocks.
 option(ZEG_BSWAP_BUILTIN "Use plain __builtin_bswap64 (no zero-shortcut) instead of the default shortcut-preserving rev8" OFF)
 
+# EF zkVM-accelerator C ABI swaps (semicolon list e.g. "ZKVM_KECCAK;ZKVM_SHA256;ZKVM_SECP256K1").
+# Each token guards a drop-in call to the standard zkvm_* symbol, which elf2rom
+# redirects to the native .zisk routine. Empty by default (no behavior change).
+set(ZKVM_ABI "" CACHE STRING "EF ABI crypto swaps to enable in the guest")
+
 target_compile_definitions(zisk_eth_guest.elf PRIVATE
   ZEG_ZISK
+  ${ZKVM_ABI}
   $<$<STREQUAL:${EVM_BACKEND},zevm>:USE_ZEVM>
   $<$<BOOL:${ZEG_SECP256K1_SW}>:ZEG_SECP256K1_SW>
   $<$<BOOL:${ZEG_BSWAP_BUILTIN}>:ZEG_BSWAP_BUILTIN>

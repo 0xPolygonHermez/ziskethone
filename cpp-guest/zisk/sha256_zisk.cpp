@@ -16,12 +16,21 @@
 
 #include <evmone_precompiles/sha256.hpp>
 #include "sha256/sha256_impl.hpp"
+#ifdef ZKVM_SHA256
+#include "zkvm_accelerators.h"
+#endif
 
 namespace evmone::crypto {
 
 void sha256(std::byte hash[SHA256_HASH_SIZE], const std::byte* data, size_t size) {
+#ifdef ZKVM_SHA256
+    // EF standard C ABI: redirected by elf2rom to the native .zisk sha256.
+    zkvm_sha256(reinterpret_cast<const uint8_t*>(data), size,
+                reinterpret_cast<zkvm_sha256_hash*>(hash));
+#else
     zeg::sh2::sha256(reinterpret_cast<uint8_t*>(hash),
                      reinterpret_cast<const uint8_t*>(data), size);
+#endif
 }
 
 }  // namespace evmone::crypto
