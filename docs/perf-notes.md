@@ -12,7 +12,7 @@ DMA operations that bring their own memory cost.
 ## Where the budget goes
 
 Of block 25701329's 44.6G area, 20.8G is the keccak precompile — a fixed price
-we do not control. The **24.5G that is left** breaks down as:
+we do not control. The **~24G that is left** breaks down as:
 
 | | area | of what we can touch |
 |---|---|---|
@@ -143,16 +143,16 @@ Ordered by measured size, not by how interesting they are.
    it means a fused host method, which means extending `evmc_host_interface`; we
    own both sides (evmone is patched, `ZiskStateDB` implements `evmc::Host`), so
    it is possible, just invasive. `sload` alone is 2.3% of the block's steps.
-6. **SWAP, 8.2M (3.5%).** `swap<1>` alone is 4.3M: two `uint256` through a
+7. **SWAP, 8.2M (3.5%).** `swap<1>` alone is 4.3M: two `uint256` through a
    temporary, 12 loads and 12 stores.
-7. **`pack_branch`, 4.7M (2.0%).** Writes 17 slots per branch; empty children are
+8. **`pack_branch`, 4.7M (2.0%).** Writes 17 slots per branch; empty children are
    a single `0x80` byte and are the majority, and `build_branch_node` already
    knows which they are from the tag word — the same trick applied to the `Child`
    array would apply here.
-8. **`pack_key_hash`, 2.6M (1.1%).** Still packs the walked path a nibble at a
+9. **`pack_key_hash`, 2.6M (1.1%).** Still packs the walked path a nibble at a
    time because `WalkPath` is one nibble per byte. Packing it too would make this
    a copy.
-9. **Nibble expand/compress ops, ~3.3M.** With `PackedPath` most of the nibble
+10. **Nibble expand/compress ops, ~3.3M.** With `PackedPath` most of the nibble
    traffic is gone; what is left would want an op that expands 32 bits into 8
    nibble-per-byte lanes and its inverse. Lower priority now than it was.
 
