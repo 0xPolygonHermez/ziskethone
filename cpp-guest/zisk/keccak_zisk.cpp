@@ -92,8 +92,17 @@ void keccak256(uint64_t* out, const uint8_t* data, size_t size) {
 
 } // namespace
 
+#ifdef ZKVM_KECCAK
+#include "zkvm_accelerators.h"
+#endif
+
 extern "C" union ethash_hash256 ethash_keccak256(const uint8_t* data, size_t size) noexcept {
     union ethash_hash256 hash;
+#ifdef ZKVM_KECCAK
+    // EF standard C ABI: redirected by elf2rom to the native .zisk keccak256.
+    zkvm_keccak256(data, size, reinterpret_cast<zkvm_keccak256_hash*>(hash.bytes));
+#else
     keccak256(hash.word64s, data, size);
+#endif
     return hash;
 }

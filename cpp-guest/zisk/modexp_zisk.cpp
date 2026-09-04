@@ -14,13 +14,23 @@
 #include <evmone_precompiles/modexp.hpp>  // declaration
 
 #include "bigint/modexp.hpp"
+#ifdef ZKVM_MODEXP
+#include "zkvm_accelerators.h"
+#endif
 
 namespace evmone::crypto {
 
 void modexp(std::span<const uint8_t> base, std::span<const uint8_t> exp,
             std::span<const uint8_t> mod, uint8_t* output) noexcept {
+#ifdef ZKVM_MODEXP
+    // EF standard C ABI: redirected by elf2rom to the native .zisk modexp. Both
+    // sides use the EVM big-endian byte encoding, so no marshalling is needed.
+    zkvm_modexp(base.data(), base.size(), exp.data(), exp.size(),
+                mod.data(), mod.size(), output);
+#else
     zeg::bi::modexp_compute(base.data(), (int)base.size(), exp.data(), (int)exp.size(),
                             mod.data(), (int)mod.size(), output);
+#endif
 }
 
 }  // namespace evmone::crypto

@@ -625,10 +625,47 @@ inline void fp_sqrt_hint(const u64 alpha[4], u64 parity, u64* is_qr, u64 y[4]) {
 // The scalar multiplications reuse the same accelerated scalar_mul used by
 // verify; the only extra field work is the modular square root for R.y.
 // ===========================================================================
+#ifdef ZKVM_SECP256K1
+#include "zkvm_accelerators.h"
+// LE u64[4] limbs (limb[0]=LSW) <-> 32 big-endian bytes (EF ABI encoding).
+static inline void zkvm_limbs4_to_be32(const uint64_t *limbs, uint8_t *be) {
+    for (int i = 0; i < 4; i++) {
+        uint64_t w = limbs[3 - i];
+        for (int j = 0; j < 8; j++) be[i * 8 + j] = (uint8_t)(w >> (56 - 8 * j));
+    }
+}
+static inline void zkvm_be32_to_limbs4(const uint8_t *be, uint64_t *limbs) {
+    for (int i = 0; i < 4; i++) {
+        uint64_t w = 0;
+        for (int j = 0; j < 8; j++) w = (w << 8) | be[i * 8 + j];
+        limbs[3 - i] = w;
+    }
+}
+#endif
+
 extern "C" int secp256k1_ecdsa_recover(
         const uint64_t *z, const uint64_t *r, const uint64_t *s,
         unsigned recid, uint64_t *pubkey_out) {
     if (recid > 1) return 1;
+#ifdef ZKVM_SECP256K1
+    // EF standard C ABI: marshal LE limbs -> big-endian, call the native .zisk
+    // ecrecover (redirected by elf2rom), marshal the pubkey bytes back to limbs.
+    {
+        uint8_t msg[32], sig[64], out[64];
+        zkvm_limbs4_to_be32(z, msg);
+        zkvm_limbs4_to_be32(r, sig);
+        zkvm_limbs4_to_be32(s, sig + 32);
+        int st = zkvm_secp256k1_ecrecover(
+            reinterpret_cast<const zkvm_secp256k1_hash *>(msg),
+            reinterpret_cast<const zkvm_secp256k1_signature *>(sig),
+            (uint8_t)recid,
+            reinterpret_cast<zkvm_secp256k1_pubkey *>(out));
+        if (st != ZKVM_EOK) return 1;
+        zkvm_be32_to_limbs4(out, pubkey_out);
+        zkvm_be32_to_limbs4(out + 32, pubkey_out + 4);
+        return 0;
+    }
+#endif
     if (is_zero4(r) || !lt4(r, N)) return 1;   // r in [1, N-1]
     if (is_zero4(s) || !lt4(s, N)) return 1;   // s in [1, N-1]
 
