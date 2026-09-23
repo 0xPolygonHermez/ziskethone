@@ -3,8 +3,10 @@
 # lines were dropped — our ASM is built -march=rv64ima_zicsr; see CMakeLists).
 #
 # memmove aliases to the SAME CSR 0x813 (dma_xmemcpy) as memcpy. This is correct:
-# the emulator's Mem::memcpy detects src/dst overlap and copies via a temp buffer,
-# honoring memmove semantics.
+# the DMA copy has memmove semantics end to end. The emulator's Mem::memcpy detects
+# src/dst overlap and copies via a temp buffer, and the prover's DMA circuits
+# constrain the overlapping case too (confirmed with the DMA precompile
+# developers), so one op is correct for every overlap direction.
         .section ".note.GNU-stack","",@progbits
         .text
         .globl  memmove
