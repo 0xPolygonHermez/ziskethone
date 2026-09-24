@@ -22,7 +22,7 @@ namespace evmone::crypto {
 void blake2b_compress(uint32_t rounds, uint64_t h[8], const uint64_t m[16],
                       const uint64_t t[2], bool last) noexcept {
 #ifdef ZKVM_BLAKE2F
-    // EF standard C ABI: redirected by elf2rom to the native .zisk blake2f. The
+    // EF standard C ABI: a zkvmcall to the native .zisk blake2f. The
     // EIP-152 F compression has the same (rounds, h, m, t, f) shape; h/m/t are
     // little-endian u64 words, byte-identical to the zkvm_blake2f_* byte structs
     // on little-endian RISC-V, so the casts need no marshalling. h is updated

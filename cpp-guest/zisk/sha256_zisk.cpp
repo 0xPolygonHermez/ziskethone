@@ -24,7 +24,7 @@ namespace evmone::crypto {
 
 void sha256(std::byte hash[SHA256_HASH_SIZE], const std::byte* data, size_t size) {
 #ifdef ZKVM_SHA256
-    // EF standard C ABI: redirected by elf2rom to the native .zisk sha256.
+    // EF standard C ABI: a zkvmcall to the native .zisk sha256.
     zkvm_sha256(reinterpret_cast<const uint8_t*>(data), size,
                 reinterpret_cast<zkvm_sha256_hash*>(hash));
 #else

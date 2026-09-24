@@ -122,7 +122,8 @@ list(FILTER PAIRING_SRC EXCLUDE REGEX "/pairing/bn254/")
 # Keccak: instead of evmone's software keccak.c, compile our drop-in that
 # routes the Keccak-f[1600] permutation through the ZisK precompile (CSR 0x800).
 # Same public symbol (ethash_keccak256), so every Keccak call site is accelerated.
-set(PRECOMP_C  ${CMAKE_CURRENT_SOURCE_DIR}/keccak_zisk.cpp ${CMAKE_CURRENT_SOURCE_DIR}/zkvm_stubs.c)
+# zkvm_calls.s: the EF ABI zkvm_* functions as zkvmcall thunks (see ZKVM_ABI below).
+set(PRECOMP_C  ${CMAKE_CURRENT_SOURCE_DIR}/keccak_zisk.cpp ${CMAKE_CURRENT_SOURCE_DIR}/zkvm_calls.s)
 # Only the precompile dispatch from test/state (not the json/state machinery).
 set(STATE_SRC  ${EVMONE_SRC}/test/state/precompiles.cpp)
 
@@ -189,8 +190,10 @@ option(ZEG_SECP256K1_SW "Use the software secp256k1 baseline (no accelerators)" 
 option(ZEG_BSWAP_BUILTIN "Use plain __builtin_bswap64 (no zero-shortcut) instead of the default shortcut-preserving rev8" OFF)
 
 # EF zkVM-accelerator C ABI swaps (semicolon list e.g. "ZKVM_KECCAK;ZKVM_SHA256;ZKVM_SECP256K1").
-# Each token guards a drop-in call to the standard zkvm_* symbol, which elf2rom
-# redirects to the native .zisk routine. Empty by default (no behavior change).
+# Each token guards a drop-in call to the standard zkvm_* function, a zkvmcall
+# thunk (zkvm_calls.s) that the transpiler turns into a jump to the native .zisk
+# routine; running it needs ziskemu/cargo-zisk built with --features ziskasm.
+# Empty by default (no behavior change; --gc-sections drops the unused thunks).
 set(ZKVM_ABI "" CACHE STRING "EF ABI crypto swaps to enable in the guest")
 
 target_compile_definitions(zisk_eth_guest.elf PRIVATE

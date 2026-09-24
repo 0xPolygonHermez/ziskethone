@@ -3,11 +3,19 @@
  * interface. Mirrors the standard at:
  *   github.com/eth-act/zkevm-standards/standards/c-interface-accelerators/zkvm_accelerators.h
  *
- * This is the STANDARD, vendor-neutral surface. The ZisK implementation lives in
- * src/zkvm_accelerators.c, which marshals the EF byte-array ABI to the ziskasm
- * flat bindings (zisklib.h -> ziskos_* stubs, redirected to the hand-written
- * .zisk routines by elf2rom). A guest that follows the EF standard links this
- * header + that .c and transparently runs the ziskasm crypto.
+ * This is the STANDARD, vendor-neutral surface. ZisK implements it with NO C
+ * marshalling layer. Each function is a two-instruction thunk in zkvm_calls.s
+ * (`csrs <id>, x0; ret`), which the transpiler turns into a jump to the matching
+ * hand-written `ziskasm_zkvm_*` routine in ziskasm/zisklib/zkvm/. That routine
+ * consumes the EF byte-array ABI as-is. A guest that follows the EF standard
+ * compiles against this header, links `zisklib_c` (see CMakeLists.txt) and runs
+ * the ziskasm crypto.
+ *
+ * zkvm_keccak_f1600 is the exception: it is a single keccak-f precompile, so it is
+ * defined inline below and costs one instruction at the call site.
+ *
+ * Running such a guest needs ziskemu/cargo-zisk built with --features ziskasm.
+ * Without it, the transpiler rejects the ELF instead of running a wrong body.
  */
 #ifndef ZKVM_ACCELERATORS_H
 #define ZKVM_ACCELERATORS_H
@@ -86,6 +94,18 @@ typedef zkvm_bytes_32 zkvm_kzg_field_element;
 
 /* ---- functions --------------------------------------------------------- */
 zkvm_status zkvm_keccak256(const uint8_t* data, size_t len, zkvm_keccak256_hash* output);
+/* Keccak-f[1600] permutation, applied in place to the raw 25-word state (no
+ * sponge/padding). state: 25 uint64_t words, updated in place. Always returns
+ * ZKVM_EOK. On ZisK it is the keccakf precompile (CSR 0x800), inlined; other
+ * targets (e.g. host-side tests) only get the prototype. */
+#if defined(__riscv)
+static inline zkvm_status zkvm_keccak_f1600(uint64_t* state) {
+    __asm__ volatile("csrs 0x800, %0" : : "r"(state) : "memory");
+    return ZKVM_EOK;
+}
+#else
+zkvm_status zkvm_keccak_f1600(uint64_t* state);
+#endif
 zkvm_status zkvm_sha256(const uint8_t* data, size_t len, zkvm_sha256_hash* output);
 zkvm_status zkvm_ripemd160(const uint8_t* data, size_t len, zkvm_ripemd160_hash* output);
 
@@ -99,6 +119,9 @@ zkvm_status zkvm_secp256r1_verify(const zkvm_secp256r1_hash* msg,
                                   const zkvm_secp256r1_signature* sig,
                                   const zkvm_secp256r1_pubkey* pubkey, bool* verified);
 
+/* Modular exponentiation (precompile 0x05). base_len, exp_len and mod_len must each
+ * be <= 1056 bytes: the .zisk implementation assembles operands in fixed-size limb
+ * buffers and returns ZKVM_EFAIL for a longer one. */
 zkvm_status zkvm_modexp(const uint8_t* base, size_t base_len,
                         const uint8_t* exp, size_t exp_len,
                         const uint8_t* modulus, size_t mod_len, uint8_t* output);
@@ -107,6 +130,8 @@ zkvm_status zkvm_bn254_g1_add(const zkvm_bn254_g1_point* p1, const zkvm_bn254_g1
                               zkvm_bn254_g1_point* result);
 zkvm_status zkvm_bn254_g1_mul(const zkvm_bn254_g1_point* point, const zkvm_bn254_scalar* scalar,
                               zkvm_bn254_g1_point* result);
+/* BN254 pairing check. num_pairs must be <= 32: the .zisk implementation stages the
+ * points in fixed-size buffers and returns ZKVM_EFAIL for a larger count. */
 zkvm_status zkvm_bn254_pairing(const zkvm_bn254_pairing_pair* pairs, size_t num_pairs, bool* verified);
 
 zkvm_status zkvm_blake2f(uint32_t rounds, zkvm_blake2f_state* h,
@@ -124,6 +149,9 @@ zkvm_status zkvm_bls12_g2_add(const zkvm_bls12_381_g2_point* p1, const zkvm_bls1
                               zkvm_bls12_381_g2_point* result);
 zkvm_status zkvm_bls12_g2_msm(const zkvm_bls12_381_g2_msm_pair* pairs, size_t num_pairs,
                               zkvm_bls12_381_g2_point* result);
+/* BLS12-381 pairing check. num_pairs must be in 1..=32: the .zisk
+ * implementation stages the points in fixed-size buffers and returns ZKVM_EFAIL
+ * for 0 or a larger count. */
 zkvm_status zkvm_bls12_pairing(const zkvm_bls12_381_pairing_pair* pairs, size_t num_pairs, bool* verified);
 zkvm_status zkvm_bls12_map_fp_to_g1(const zkvm_bls12_381_fp* field_element,
                                     zkvm_bls12_381_g1_point* result);
