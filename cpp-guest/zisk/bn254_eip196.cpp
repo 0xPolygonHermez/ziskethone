@@ -66,8 +66,8 @@ AffinePoint mul(const AffinePoint& pt, const uint256& c) noexcept {
     if (g1_is_identity(p)) return pt;
     if (c == 0) return {};
 #ifdef ZKVM_BN254
-    // EF standard C ABI: [c]P via the native .zisk bn254 mul (redirected by
-    // elf2rom). The scalar is the raw 256-bit c (the .zisk reduces mod r).
+    // EF standard C ABI: [c]P via the native .zisk bn254 mul (a zkvmcall).
+    // The scalar is the raw 256-bit c (the .zisk reduces mod r).
     uint8_t pb[64], sb[32], r[64];
     u256_to_be(pt.x.value(), pb);
     u256_to_be(pt.y.value(), pb + 32);
@@ -135,8 +135,8 @@ AffinePoint<evmmax::bn254::Curve> add_affine<evmmax::bn254::Curve>(
     const AffinePoint<evmmax::bn254::Curve>& p,
     const AffinePoint<evmmax::bn254::Curve>& q) noexcept {
 #ifdef ZKVM_BN254
-    // EF standard C ABI: P + Q via the native .zisk bn254 g1 add (redirected by
-    // elf2rom). Coords are canonical big-endian; the .zisk handles identities.
+    // EF standard C ABI: P + Q via the native .zisk bn254 g1 add (a zkvmcall).
+    // Coords are canonical big-endian; the .zisk handles identities.
     uint8_t a[64], b[64], r[64];
     u256_to_be(p.x.value(), a);
     u256_to_be(p.y.value(), a + 32);

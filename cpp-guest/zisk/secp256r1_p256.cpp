@@ -35,7 +35,7 @@ bool verify(const ethash::hash256& h, const uint256& r, const uint256& s, const 
     const uint256& qy) noexcept {
 #ifdef ZKVM_SECP256R1
     // EF standard C ABI: marshal r/s/qx/qy (LE-limb uint256) to big-endian bytes and
-    // call the native .zisk secp256r1 verify (redirected by elf2rom). h.bytes is
+    // call the native .zisk secp256r1 verify (a zkvmcall). h.bytes is
     // already the 32-byte big-endian message hash, used as-is.
     uint8_t sig[64], pub[64];
     zkvm_u256_to_be32(r, sig);

@@ -651,7 +651,7 @@ extern "C" int secp256k1_ecdsa_recover(
     if (recid > 1) return 1;
 #ifdef ZKVM_SECP256K1
     // EF standard C ABI: marshal LE limbs -> big-endian, call the native .zisk
-    // ecrecover (redirected by elf2rom), marshal the pubkey bytes back to limbs.
+    // ecrecover (a zkvmcall), marshal the pubkey bytes back to limbs.
     {
         uint8_t msg[32], sig[64], out[64];
         zkvm_limbs4_to_be32(z, msg);

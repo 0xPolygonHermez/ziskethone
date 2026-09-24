@@ -141,7 +141,7 @@ void keccak256_compute(uint64_t* out, const uint8_t* data, size_t size) {
 extern "C" union ethash_hash256 ethash_keccak256(const uint8_t* data, size_t size) noexcept {
     union ethash_hash256 hash;
 #ifdef ZKVM_KECCAK
-    // EF standard C ABI: redirected by elf2rom to the native .zisk keccak256.
+    // EF standard C ABI: a zkvmcall to the native .zisk keccak256.
     zkvm_keccak256(data, size, reinterpret_cast<zkvm_keccak256_hash*>(hash.bytes));
 #else
     // No memo at this level any more. Remembering whole preimages was worth it only while
