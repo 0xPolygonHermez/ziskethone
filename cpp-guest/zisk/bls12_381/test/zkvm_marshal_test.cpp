@@ -21,14 +21,14 @@ int main() {
     uint8_t g_fp[64]; unpack_fp(ef_fp, g_fp);
     for (int i=0;i<16;i++) CHECK(g_fp[i]==0);            // top 16 zero-padded
     CHECK(memcmp(g_fp+16, ef_fp, 48)==0);                // element in low 48
-    uint8_t back[48]; pack_fp(g_fp, back); CHECK(memcmp(back, ef_fp, 48)==0);
+    uint8_t back[48]; CHECK(pack_fp(g_fp, back)); CHECK(memcmp(back, ef_fp, 48)==0);
 
     // ---- G1: EF [x48|y48] round-trip; verify x,y land in the right halves ----
     uint8_t ef_g1[96]; fp48(ef_g1, 0x20); fp48(ef_g1+48, 0x60);
     uint8_t gx[64], gy[64]; unpack_g1(ef_g1, gx, gy);
     CHECK(memcmp(gx+16, ef_g1, 48)==0);                  // x half
     CHECK(memcmp(gy+16, ef_g1+48, 48)==0);               // y half
-    uint8_t r_g1[96]; pack_g1(gx, gy, r_g1); CHECK(memcmp(r_g1, ef_g1, 96)==0);
+    uint8_t r_g1[96]; CHECK(pack_g1(gx, gy, r_g1)); CHECK(memcmp(r_g1, ef_g1, 96)==0);
 
     // ---- G2: EF [xc0|xc1|yc0|yc1] natural order; verify each component slot ----
     uint8_t ef_g2[192];
@@ -39,7 +39,7 @@ int main() {
     CHECK(memcmp(g2x+80,  ef_g2+48,  48)==0);
     CHECK(memcmp(g2y+16,  ef_g2+96,  48)==0);            // guest y = (c0,c1)
     CHECK(memcmp(g2y+80,  ef_g2+144, 48)==0);
-    uint8_t r_g2[192]; pack_g2(g2x, g2y, r_g2); CHECK(memcmp(r_g2, ef_g2, 192)==0);
+    uint8_t r_g2[192]; CHECK(pack_g2(g2x, g2y, r_g2)); CHECK(memcmp(r_g2, ef_g2, 192)==0);
 
     // ---- G1 MSM entry stride: guest 160 (x64,y64,scalar32) -> EF 128 (pt96,scalar32) ----
     // Build a 2-entry guest buffer from two known EF points + scalars, marshal like
@@ -50,9 +50,21 @@ int main() {
     unpack_g1(p0, guest+0,   guest+64);   for(int i=0;i<32;i++) guest[128+i]=(uint8_t)(0xA0+i);
     unpack_g1(p1, guest+160, guest+224);  for(int i=0;i<32;i++) guest[160+128+i]=(uint8_t)(0xB0+i);
     uint8_t pairs[2*128];
-    for (int i=0;i<2;i++){ const uint8_t*e=guest+i*160; uint8_t*d=pairs+i*128; pack_g1(e,e+64,d); memcpy(d+96,e+128,32);}
+    for (int i=0;i<2;i++){ const uint8_t*e=guest+i*160; uint8_t*d=pairs+i*128; CHECK(pack_g1(e,e+64,d)); memcpy(d+96,e+128,32);}
     CHECK(memcmp(pairs+0,   p0, 96)==0);  CHECK(pairs[96]==0xA0 && pairs[127]==(uint8_t)(0xA0+31));
     CHECK(memcmp(pairs+128, p1, 96)==0);  CHECK(pairs[128+96]==0xB0);
+
+    // ---- EIP-2537: a non-zero byte anywhere in a 16-byte pad must be rejected ----
+    for (int i = 0; i < 16; i++) {
+        uint8_t bad[64]; memcpy(bad, g_fp, 64); bad[i] = 1;
+        uint8_t out[48]; CHECK(!pack_fp(bad, out));
+    }
+    { uint8_t by[64]; memcpy(by, gy, 64); by[5] = 0x80; uint8_t o[96]; CHECK(!pack_g1(gx, by, o)); }
+    for (int k = 0; k < 4; k++) {                        // one bad pad in each G2 component
+        uint8_t bx[128], bby[128]; memcpy(bx, g2x, 128); memcpy(bby, g2y, 128);
+        (k < 2 ? bx : bby)[(k % 2) * 64 + 3] = 0xff;
+        uint8_t o[192]; CHECK(!pack_g2(bx, bby, o));
+    }
 
     printf(fails ? "\n%d CHECK(S) FAILED\n" : "ALL MARSHAL CHECKS PASSED\n", fails);
     return fails ? 1 : 0;

@@ -124,18 +124,19 @@ file(GLOB EVMONE_CORE   ${EVMONE_SRC}/lib/evmone/*.cpp)
 list(FILTER EVMONE_CORE EXCLUDE REGEX "/cpu_check\\.cpp$|/tracing\\.cpp$")
 file(GLOB EVMMAX_SRC    ${EVMONE_SRC}/lib/evmmax/*.cpp)
 file(GLOB PRECOMP_SRC   ${EVMONE_SRC}/lib/evmone_precompiles/*.cpp)
-# bls/kzg pull blst+c-kzg (asm); modexp pulls std::pmr. bn254 (ecadd/ecmul) is
-# replaced by our ZisK-accelerated bn254_eip196.cpp. All are excluded here and
-# provided by the ZISK_SUPPORT wrapper TUs below.
-list(FILTER PRECOMP_SRC EXCLUDE REGEX "/bls\\.cpp$|/kzg\\.cpp$|/modexp\\.cpp$|/bn254\\.cpp$|/secp256r1\\.cpp$|/sha256\\.cpp$|/blake2b\\.cpp$")
+# Every precompile family with an EF zkVM accelerator is excluded here and provided
+# by a ZISK_SUPPORT wrapper TU below, which calls the zkvm_* function instead.
+list(FILTER PRECOMP_SRC EXCLUDE REGEX "/bls\\.cpp$|/kzg\\.cpp$|/modexp\\.cpp$|/bn254\\.cpp$|/secp256r1\\.cpp$|/sha256\\.cpp$|/blake2b\\.cpp$|/ripemd160\\.cpp$")
 # bn254 pairing lives in a subdirectory (ECPAIRING precompile); we provide our own
 # evmmax::bn254::pairing_check, so exclude evmone's software pairing too.
 file(GLOB PAIRING_SRC   ${EVMONE_SRC}/lib/evmone_precompiles/pairing/*/*.cpp)
 list(FILTER PAIRING_SRC EXCLUDE REGEX "/pairing/bn254/")
-# Keccak: instead of evmone's software keccak.c, compile our drop-in that
-# routes the Keccak-f[1600] permutation through the ZisK precompile (CSR 0x800).
-# Same public symbol (ethash_keccak256), so every Keccak call site is accelerated.
-# zkvm_calls.s: the EF ABI zkvm_* functions as zkvmcall thunks (see ZKVM_ABI below).
+# Keccak: instead of evmone's software keccak.c, compile our drop-in that calls
+# zkvm_keccak256. Same public symbol (ethash_keccak256), so every Keccak call site
+# goes through the ABI.
+# zkvm_calls.s: the EF ABI zkvm_* functions as zkvmcall thunks. Each is
+# `csrs <id>, x0; ret`, which the transpiler turns into a jump to the native .zisk
+# routine; running the guest needs ziskemu/cargo-zisk built with --features ziskasm.
 set(PRECOMP_C  ${CMAKE_CURRENT_SOURCE_DIR}/keccak_zisk.cpp ${CMAKE_CURRENT_SOURCE_DIR}/zkvm_calls.s)
 # Only the precompile dispatch from test/state (not the json/state machinery).
 set(STATE_SRC  ${EVMONE_SRC}/test/state/precompiles.cpp)
@@ -158,29 +159,20 @@ set(ZISK_SUPPORT
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   ${DMA_SRC}
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp
-  # secp256k1 ECDSA. Default: ZisK precompiles + fcall hints. With
-  # -DZEG_SECP256K1_SW=ON: portable software baseline (same source, same result).
+  # The precompile families, each a drop-in for evmone's symbol that calls the EF
+  # zkVM accelerator ABI (zkvm_accelerators.h):
+  #   secp256k1 ECDSA recover (tx senders, EIP-7702 signers, ECRECOVER 0x01),
+  #   KZG point evaluation (0x0a), MODEXP (0x05), EIP-2537 BLS12-381 (0x0b–0x11),
+  #   BN254 ecAdd/ecMul/ecPairing (0x06–0x08), P-256 verify (0x100), SHA-256
+  #   (0x02, plus the KZG and EIP-7685 hashes), RIPEMD-160 (0x03), BLAKE2 F (0x09).
   ${CMAKE_CURRENT_SOURCE_DIR}/secp256k1.cpp
-  # KZG point-eval (EIP-4844) via the self-contained BLS12-381 pairing port
-  # (bls12_381/*.hpp) on the ZisK precompiles + fcall hints.
   ${CMAKE_CURRENT_SOURCE_DIR}/bls12_381_kzg.cpp
-  # MODEXP (EIP-198) via the self-contained arbitrary-precision bigint port
-  # (bigint/*.hpp) on the ZisK arith256/add256 precompiles + fcall hints.
   ${CMAKE_CURRENT_SOURCE_DIR}/modexp_zisk.cpp
-  # EIP-2537 BLS12-381 precompiles (0x0b–0x11) via the bls12_381/ port.
   ${CMAKE_CURRENT_SOURCE_DIR}/bls12_381_eip2537.cpp
-  # alt_bn128 / BN254 precompiles (ecAdd 0x06, ecMul 0x07, ecPairing 0x08) via the
-  # bn254/ port on the ZisK bn254 precompiles + fcall hints.
   ${CMAKE_CURRENT_SOURCE_DIR}/bn254_eip196.cpp
-  # secp256r1 / P-256 ECDSA precompile (p256verify 0x100) via the secp256r1/ port
-  # on the ZisK secp256r1 precompiles (0x817/0x818) + fn_inv fcall.
   ${CMAKE_CURRENT_SOURCE_DIR}/secp256r1_p256.cpp
-  # SHA-256 precompile (0x02) + KZG/EIP-7685 hashing: drop-in evmone::crypto::sha256
-  # routing the compression through the ZisK sha256f precompile (CSR 0x805).
   ${CMAKE_CURRENT_SOURCE_DIR}/sha256_zisk.cpp
-  # BLAKE2 precompile (0x09, EIP-152 F compression): drop-in
-  # evmone::crypto::blake2b_compress routing each round through the ZisK
-  # blake2b_round precompile (CSR 0x819).
+  ${CMAKE_CURRENT_SOURCE_DIR}/ripemd160_zisk.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/blake2b_zisk.cpp
   # Stubs for evmone's create_*_tracer factories so tracing.cpp (and its iostream
   # deps) can be dropped from the build — the guest never enables a tracer.
@@ -190,9 +182,6 @@ set(ZISK_SUPPORT
 add_executable(zisk_eth_guest.elf
   ${GUEST_SRC} ${EVMONE_CORE} ${EVMMAX_SRC} ${PRECOMP_SRC} ${PAIRING_SRC}
   ${PRECOMP_C} ${STATE_SRC} ${ZISK_SUPPORT})
-
-# secp256k1 backend: precompiles+fcalls by default; software baseline when ON.
-option(ZEG_SECP256K1_SW "Use the software secp256k1 baseline (no accelerators)" OFF)
 
 # zeg::bswap64 defaults to plain __builtin_bswap64, which the guest march's Zbb
 # lowers to a single unconditional `rev8`. Turning this OFF selects the older
@@ -232,18 +221,9 @@ endif()
 # unavailable in the pinned toolchain.
 option(ZEG_JUMPDEST_SW "Use the software JUMPDEST analysis (no jump_dest_bitmap precompile)" OFF)
 
-# EF zkVM-accelerator C ABI swaps (semicolon list e.g. "ZKVM_KECCAK;ZKVM_SHA256;ZKVM_SECP256K1").
-# Each token guards a drop-in call to the standard zkvm_* function, a zkvmcall
-# thunk (zkvm_calls.s) that the transpiler turns into a jump to the native .zisk
-# routine; running it needs ziskemu/cargo-zisk built with --features ziskasm.
-# Empty by default (no behavior change; --gc-sections drops the unused thunks).
-set(ZKVM_ABI "" CACHE STRING "EF ABI crypto swaps to enable in the guest")
-
 target_compile_definitions(zisk_eth_guest.elf PRIVATE
   ZEG_ZISK
-  ${ZKVM_ABI}
   $<$<STREQUAL:${EVM_BACKEND},zevm>:USE_ZEVM>
-  $<$<BOOL:${ZEG_SECP256K1_SW}>:ZEG_SECP256K1_SW>
   $<$<BOOL:${ZEG_BSWAP_BUILTIN}>:ZEG_BSWAP_BUILTIN>
   $<$<BOOL:${ZEG_JUMPDEST_SW}>:ZEG_JUMPDEST_SW>
   PROJECT_VERSION="0.21.0")          # normally injected by evmone's CMake
@@ -260,7 +240,7 @@ set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
 
 # ECADD (0x06) reaches the generic evmmax::ecc::add_affine template inside
 # precompiles.cpp; force-include our explicit BN254 specialization so the dispatch
-# routes through the accelerated G1 add (definition in bn254_eip196.cpp).
+# routes through zkvm_bn254_g1_add (definition in bn254_eip196.cpp).
 set_source_files_properties(${STATE_SRC} TARGET_DIRECTORY zisk_eth_guest.elf PROPERTIES
   COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/bn254/add_affine_spec.hpp")
 
@@ -290,238 +270,4 @@ add_custom_command(TARGET zisk_eth_guest.elf POST_BUILD
     --remove-section '.gcc_except_table*' --remove-section .comment
     --remove-section .riscv.attributes
     $<TARGET_FILE:zisk_eth_guest.elf> $<TARGET_FILE:zisk_eth_guest.elf>
-  COMMENT "Stripping ZisK-incompatible sections")
-
-# --- bls_selftest.elf: on-emulator self-test of the BLS12-381 ZisK backend ---
-# Lean ELF (no evmone) that exercises the precompile/fcall paths; run under
-# ziskemu to validate/debug the accelerated BLS layers. See bls12_381/test/.
-add_executable(bls_selftest.elf
-  ${CMAKE_CURRENT_SOURCE_DIR}/bls12_381/test/selftest_zisk.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
-  ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
-  ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
-target_compile_definitions(bls_selftest.elf PRIVATE ZEG_ZISK)
-target_compile_options(bls_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
-target_include_directories(bls_selftest.elf PRIVATE ${GUEST_ROOT}/include)
-target_link_options(bls_selftest.elf PRIVATE
-  -T ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld -nostdlib -nostartfiles -Wl,--gc-sections)
-set_target_properties(bls_selftest.elf PROPERTIES LINK_DEPENDS
-  ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld)
-add_custom_command(TARGET bls_selftest.elf POST_BUILD
-  COMMAND ${CMAKE_OBJCOPY}
-    --remove-section .eh_frame --remove-section .eh_frame_hdr
-    --remove-section '.gcc_except_table*' --remove-section .comment
-    --remove-section .riscv.attributes
-    $<TARGET_FILE:bls_selftest.elf> $<TARGET_FILE:bls_selftest.elf>
-  COMMENT "Stripping ZisK-incompatible sections")
-
-# --- bigint_selftest.elf: on-emulator self-test of the MODEXP backend ---
-# Exercises the arith256 (0x801) precompile + bin_decomp/bigint_div fcalls.
-add_executable(bigint_selftest.elf
-  ${CMAKE_CURRENT_SOURCE_DIR}/bigint/test/selftest_backend_zisk.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
-  ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
-  ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
-target_compile_definitions(bigint_selftest.elf PRIVATE ZEG_ZISK)
-target_compile_options(bigint_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
-target_include_directories(bigint_selftest.elf PRIVATE ${GUEST_ROOT}/include)
-target_link_options(bigint_selftest.elf PRIVATE
-  -T ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld -nostdlib -nostartfiles -Wl,--gc-sections)
-set_target_properties(bigint_selftest.elf PROPERTIES LINK_DEPENDS
-  ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld)
-add_custom_command(TARGET bigint_selftest.elf POST_BUILD
-  COMMAND ${CMAKE_OBJCOPY}
-    --remove-section .eh_frame --remove-section .eh_frame_hdr
-    --remove-section '.gcc_except_table*' --remove-section .comment
-    --remove-section .riscv.attributes
-    $<TARGET_FILE:bigint_selftest.elf> $<TARGET_FILE:bigint_selftest.elf>
-  COMMENT "Stripping ZisK-incompatible sections")
-
-# --- modexp_selftest.elf: on-emulator EIP-198 modexp on the ZisK backend ---
-add_executable(modexp_selftest.elf
-  ${CMAKE_CURRENT_SOURCE_DIR}/bigint/test/selftest_modexp_zisk.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
-  ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
-  ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
-target_compile_definitions(modexp_selftest.elf PRIVATE ZEG_ZISK)
-target_compile_options(modexp_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
-target_include_directories(modexp_selftest.elf PRIVATE ${GUEST_ROOT}/include)
-target_link_options(modexp_selftest.elf PRIVATE
-  -T ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld -nostdlib -nostartfiles -Wl,--gc-sections)
-set_target_properties(modexp_selftest.elf PROPERTIES LINK_DEPENDS
-  ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld)
-add_custom_command(TARGET modexp_selftest.elf POST_BUILD
-  COMMAND ${CMAKE_OBJCOPY}
-    --remove-section .eh_frame --remove-section .eh_frame_hdr
-    --remove-section '.gcc_except_table*' --remove-section .comment
-    --remove-section .riscv.attributes
-    $<TARGET_FILE:modexp_selftest.elf> $<TARGET_FILE:modexp_selftest.elf>
-  COMMENT "Stripping ZisK-incompatible sections")
-
-# --- modexp_bench.elf: RSA-2048 large-exponent modexp benchmark (cost profiling) ---
-add_executable(modexp_bench.elf
-  ${CMAKE_CURRENT_SOURCE_DIR}/bigint/test/bench_modexp_zisk.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
-  ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
-  ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
-target_compile_definitions(modexp_bench.elf PRIVATE ZEG_ZISK)
-target_compile_options(modexp_bench.elf PRIVATE $<$<CONFIG:Release>:-Os>)
-target_include_directories(modexp_bench.elf PRIVATE ${GUEST_ROOT}/include)
-target_link_options(modexp_bench.elf PRIVATE
-  -T ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld -nostdlib -nostartfiles -Wl,--gc-sections)
-set_target_properties(modexp_bench.elf PROPERTIES LINK_DEPENDS
-  ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld)
-add_custom_command(TARGET modexp_bench.elf POST_BUILD
-  COMMAND ${CMAKE_OBJCOPY}
-    --remove-section .eh_frame --remove-section .eh_frame_hdr
-    --remove-section '.gcc_except_table*' --remove-section .comment
-    --remove-section .riscv.attributes
-    $<TARGET_FILE:modexp_bench.elf> $<TARGET_FILE:modexp_bench.elf>
-  COMMENT "Stripping ZisK-incompatible sections")
-
-# --- ecrecover_bench.elf: secp256k1 ECRECOVER selftest + GLV cost benchmark ---
-add_executable(ecrecover_bench.elf
-  ${CMAKE_CURRENT_SOURCE_DIR}/bigint/test/bench_ecrecover_zisk.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/secp256k1.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
-  ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
-  ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
-target_compile_definitions(ecrecover_bench.elf PRIVATE ZEG_ZISK)
-target_compile_options(ecrecover_bench.elf PRIVATE $<$<CONFIG:Release>:-Os>)
-target_include_directories(ecrecover_bench.elf PRIVATE ${GUEST_ROOT}/include)
-target_link_options(ecrecover_bench.elf PRIVATE
-  -T ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld -nostdlib -nostartfiles -Wl,--gc-sections)
-set_target_properties(ecrecover_bench.elf PROPERTIES LINK_DEPENDS
-  ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld)
-add_custom_command(TARGET ecrecover_bench.elf POST_BUILD
-  COMMAND ${CMAKE_OBJCOPY}
-    --remove-section .eh_frame --remove-section .eh_frame_hdr
-    --remove-section '.gcc_except_table*' --remove-section .comment
-    --remove-section .riscv.attributes
-    $<TARGET_FILE:ecrecover_bench.elf> $<TARGET_FILE:ecrecover_bench.elf>
-  COMMENT "Stripping ZisK-incompatible sections")
-
-# --- bls2537_selftest.elf: on-emulator self-test of the EIP-2537 layers ---
-# Exercises mul/msm, pairing_check and map-to-curve (SWU + isogeny + cofactor)
-# on the precompile/fcall backend. See bls12_381/test/selftest_eip2537_zisk.cpp.
-add_executable(bls2537_selftest.elf
-  ${CMAKE_CURRENT_SOURCE_DIR}/bls12_381/test/selftest_eip2537_zisk.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
-  ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
-  ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
-target_compile_definitions(bls2537_selftest.elf PRIVATE ZEG_ZISK)
-target_compile_options(bls2537_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
-target_include_directories(bls2537_selftest.elf PRIVATE ${GUEST_ROOT}/include)
-target_link_options(bls2537_selftest.elf PRIVATE
-  -T ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld -nostdlib -nostartfiles -Wl,--gc-sections)
-set_target_properties(bls2537_selftest.elf PROPERTIES LINK_DEPENDS
-  ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld)
-add_custom_command(TARGET bls2537_selftest.elf POST_BUILD
-  COMMAND ${CMAKE_OBJCOPY}
-    --remove-section .eh_frame --remove-section .eh_frame_hdr
-    --remove-section '.gcc_except_table*' --remove-section .comment
-    --remove-section .riscv.attributes
-    $<TARGET_FILE:bls2537_selftest.elf> $<TARGET_FILE:bls2537_selftest.elf>
-  COMMENT "Stripping ZisK-incompatible sections")
-
-# --- bn254_selftest.elf: on-emulator self-test of the BN254 (alt_bn128) layers ---
-# Exercises ecAdd/ecMul (curve precompiles 0x806/0x807) + ecPairing (Fp2 complex
-# precompiles, fp_inv/fp2_inv/twist-line fcalls) on the precompile/fcall backend.
-add_executable(bn254_selftest.elf
-  ${CMAKE_CURRENT_SOURCE_DIR}/bn254/test/selftest_eip196_zisk.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
-  ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
-  ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
-target_compile_definitions(bn254_selftest.elf PRIVATE ZEG_ZISK)
-target_compile_options(bn254_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
-target_include_directories(bn254_selftest.elf PRIVATE ${GUEST_ROOT}/include)
-target_link_options(bn254_selftest.elf PRIVATE
-  -T ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld -nostdlib -nostartfiles -Wl,--gc-sections)
-set_target_properties(bn254_selftest.elf PROPERTIES LINK_DEPENDS
-  ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld)
-add_custom_command(TARGET bn254_selftest.elf POST_BUILD
-  COMMAND ${CMAKE_OBJCOPY}
-    --remove-section .eh_frame --remove-section .eh_frame_hdr
-    --remove-section '.gcc_except_table*' --remove-section .comment
-    --remove-section .riscv.attributes
-    $<TARGET_FILE:bn254_selftest.elf> $<TARGET_FILE:bn254_selftest.elf>
-  COMMENT "Stripping ZisK-incompatible sections")
-
-# --- p256_selftest.elf: on-emulator self-test of the secp256r1 (P-256) layer ---
-# Exercises ecdsa_verify (arith256_mod + secp256r1 add/dbl precompiles 0x817/0x818
-# + fn_inv/msb fcalls) on valid + tampered + boundary vectors.
-add_executable(p256_selftest.elf
-  ${CMAKE_CURRENT_SOURCE_DIR}/secp256r1/test/selftest_p256_zisk.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
-  ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
-  ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
-target_compile_definitions(p256_selftest.elf PRIVATE ZEG_ZISK)
-target_compile_options(p256_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
-target_include_directories(p256_selftest.elf PRIVATE ${GUEST_ROOT}/include)
-target_link_options(p256_selftest.elf PRIVATE
-  -T ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld -nostdlib -nostartfiles -Wl,--gc-sections)
-set_target_properties(p256_selftest.elf PROPERTIES LINK_DEPENDS
-  ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld)
-add_custom_command(TARGET p256_selftest.elf POST_BUILD
-  COMMAND ${CMAKE_OBJCOPY}
-    --remove-section .eh_frame --remove-section .eh_frame_hdr
-    --remove-section '.gcc_except_table*' --remove-section .comment
-    --remove-section .riscv.attributes
-    $<TARGET_FILE:p256_selftest.elf> $<TARGET_FILE:p256_selftest.elf>
-  COMMENT "Stripping ZisK-incompatible sections")
-
-# --- sha256_selftest.elf: on-emulator self-test of the SHA-256 layer ---
-# Hashes known inputs (incl. multi-block/padding-boundary) via the sha256f
-# precompile (0x805) and checks the FIPS 180-4 KAT digests.
-add_executable(sha256_selftest.elf
-  ${CMAKE_CURRENT_SOURCE_DIR}/sha256/test/selftest_sha256_zisk.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
-  ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
-  ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
-target_compile_definitions(sha256_selftest.elf PRIVATE ZEG_ZISK)
-target_compile_options(sha256_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
-target_include_directories(sha256_selftest.elf PRIVATE ${GUEST_ROOT}/include)
-target_link_options(sha256_selftest.elf PRIVATE
-  -T ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld -nostdlib -nostartfiles -Wl,--gc-sections)
-set_target_properties(sha256_selftest.elf PROPERTIES LINK_DEPENDS
-  ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld)
-add_custom_command(TARGET sha256_selftest.elf POST_BUILD
-  COMMAND ${CMAKE_OBJCOPY}
-    --remove-section .eh_frame --remove-section .eh_frame_hdr
-    --remove-section '.gcc_except_table*' --remove-section .comment
-    --remove-section .riscv.attributes
-    $<TARGET_FILE:sha256_selftest.elf> $<TARGET_FILE:sha256_selftest.elf>
-  COMMENT "Stripping ZisK-incompatible sections")
-
-# --- blake2_selftest.elf: on-emulator self-test of the BLAKE2b layer ---
-# Runs the EIP-152 F compression (rounds 0/1/12, "abc" vector) via the
-# blake2b_round precompile (0x819) and checks the working-state outputs.
-add_executable(blake2_selftest.elf
-  ${CMAKE_CURRENT_SOURCE_DIR}/blake2b/test/selftest_blake2_zisk.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
-  ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
-  ${DMA_SRC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp)
-target_compile_definitions(blake2_selftest.elf PRIVATE ZEG_ZISK)
-target_compile_options(blake2_selftest.elf PRIVATE $<$<CONFIG:Release>:-Os>)
-target_include_directories(blake2_selftest.elf PRIVATE ${GUEST_ROOT}/include)
-target_link_options(blake2_selftest.elf PRIVATE
-  -T ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld -nostdlib -nostartfiles -Wl,--gc-sections)
-set_target_properties(blake2_selftest.elf PROPERTIES LINK_DEPENDS
-  ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld)
-add_custom_command(TARGET blake2_selftest.elf POST_BUILD
-  COMMAND ${CMAKE_OBJCOPY}
-    --remove-section .eh_frame --remove-section .eh_frame_hdr
-    --remove-section '.gcc_except_table*' --remove-section .comment
-    --remove-section .riscv.attributes
-    $<TARGET_FILE:blake2_selftest.elf> $<TARGET_FILE:blake2_selftest.elf>
   COMMENT "Stripping ZisK-incompatible sections")
