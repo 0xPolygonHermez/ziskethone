@@ -247,7 +247,7 @@ set_source_files_properties(${STATE_SRC} TARGET_DIRECTORY zisk_eth_guest.elf PRO
 target_include_directories(zisk_eth_guest.elf PRIVATE
   ${GUEST_ROOT}/include
   ${GUEST_ROOT}/src/zevm                # zevm headers (no-op for evmone backend)
-  ${CMAKE_CURRENT_SOURCE_DIR}           # zeg::bi backend: bigint/backend.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}           # zkvm_*.h ABI headers, bls12_381/zkvm_marshal.hpp
   ${EVMONE_SRC}/include
   ${EVMONE_SRC}/evmc/include
   ${EVMONE_SRC}                       # for <lib/...> and <test/state/...>

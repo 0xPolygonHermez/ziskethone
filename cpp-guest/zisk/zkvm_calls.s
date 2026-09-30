@@ -1,5 +1,6 @@
 /* zkvm_calls.s -- the zkvmcall thunks: every EF standard function implemented by
- * a hand-written .zisk routine (zkvm_accelerators.h, zkvm_io.h, zkvm_u256.h).
+ * a hand-written .zisk routine (zkvm_accelerators.h, zkvm_io.h, zkvm_u256.h),
+ * plus ZisK's little-endian U256 variant (zkvm_u256_le.h).
  *
  * Each thunk is a `csrs <id>, x0` followed by `ret`. The caller has already put
  * the arguments in a0..a7 and its return address in ra, following the RISC-V
@@ -85,3 +86,32 @@ ZKVMCALL zkvm_u256_shl,            0x87C
 ZKVMCALL zkvm_u256_shr,            0x87D
 ZKVMCALL zkvm_u256_sar,            0x87E
 ZKVMCALL zkvm_u256_signextend,     0x87F
+
+/* ---- little-endian U256 (zkvm_u256_le.h, not EF) ---- */
+ZKVMCALL zkvm_u256_le_div,         0x880
+ZKVMCALL zkvm_u256_le_mod,         0x881
+ZKVMCALL zkvm_u256_le_divmod,      0x882
+ZKVMCALL zkvm_u256_le_sdiv,        0x883
+ZKVMCALL zkvm_u256_le_smod,        0x884
+ZKVMCALL zkvm_u256_le_sdivmod,     0x885
+/* zkvm_u256_le_add (0x886) is an inline zkvmcall: no thunk (zkvm_u256_le.h). */
+/* zkvm_u256_le_sub (0x887) is an inline zkvmcall: no thunk (zkvm_u256_le.h). */
+/* zkvm_u256_le_mul (0x888) is an inline zkvmcall: no thunk (zkvm_u256_le.h). */
+/* zkvm_u256_le_addmod (0x889) is an inline zkvmcall: no thunk (zkvm_u256_le.h). */
+/* zkvm_u256_le_mulmod (0x88A) is an inline zkvmcall: no thunk (zkvm_u256_le.h). */
+ZKVMCALL zkvm_u256_le_exp,          0x88B
+/* zkvm_u256_le_lt (0x88C) is an inline zkvmcall: no thunk (zkvm_u256_le.h). */
+/* zkvm_u256_le_gt (0x88D) is an inline zkvmcall: no thunk (zkvm_u256_le.h). */
+/* zkvm_u256_le_slt (0x88E) is an inline zkvmcall: no thunk (zkvm_u256_le.h). */
+/* zkvm_u256_le_sgt (0x88F) is an inline zkvmcall: no thunk (zkvm_u256_le.h). */
+/* zkvm_u256_le_eq (0x890) is an inline zkvmcall: no thunk (zkvm_u256_le.h). */
+/* zkvm_u256_le_iszero (0x891) is an inline zkvmcall: no thunk (zkvm_u256_le.h). */
+/* zkvm_u256_le_and (0x892) is an inline zkvmcall: no thunk (zkvm_u256_le.h). */
+/* zkvm_u256_le_or (0x893) is an inline zkvmcall: no thunk (zkvm_u256_le.h). */
+/* zkvm_u256_le_xor (0x894) is an inline zkvmcall: no thunk (zkvm_u256_le.h). */
+/* zkvm_u256_le_not (0x895) is an inline zkvmcall: no thunk (zkvm_u256_le.h). */
+/* zkvm_u256_le_byte (0x896) is an inline zkvmcall: no thunk (zkvm_u256_le.h). */
+/* zkvm_u256_le_shl (0x897) is an inline zkvmcall: no thunk (zkvm_u256_le.h). */
+/* zkvm_u256_le_shr (0x898) is an inline zkvmcall: no thunk (zkvm_u256_le.h). */
+/* zkvm_u256_le_sar (0x899) is an inline zkvmcall: no thunk (zkvm_u256_le.h). */
+/* zkvm_u256_le_signextend (0x89A) is an inline zkvmcall: no thunk (zkvm_u256_le.h). */
