@@ -141,23 +141,14 @@ set(PRECOMP_C  ${CMAKE_CURRENT_SOURCE_DIR}/keccak_zisk.cpp ${CMAKE_CURRENT_SOURC
 # Only the precompile dispatch from test/state (not the json/state machinery).
 set(STATE_SRC  ${EVMONE_SRC}/test/state/precompiles.cpp)
 
-# DMA mem* thunks: memcpy/memmove/memcmp/memset routed through the ZisK DMA
-# precompiles (CSR 0x813/0x814/0x816). These replace runtime.cpp's software mem*,
-# so EVERY target that compiles runtime.cpp must also link DMA_SRC (otherwise any
-# memcpy/memset reference — incl. ones the compiler synthesizes from STL/intx —
-# is undefined). The transpiler lowers the csrs+add/addi pattern to a single
-# accelerated op; see dma/*.s.
-set(DMA_SRC
-  ${CMAKE_CURRENT_SOURCE_DIR}/dma/memcpy.s
-  ${CMAKE_CURRENT_SOURCE_DIR}/dma/memmove.s
-  ${CMAKE_CURRENT_SOURCE_DIR}/dma/memcmp.s
-  ${CMAKE_CURRENT_SOURCE_DIR}/dma/memset.s)
-
 # ZisK runtime / freestanding support.
 set(ZISK_SUPPORT
   ${CMAKE_CURRENT_SOURCE_DIR}/_start.s
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
-  ${DMA_SRC}
+  # The freestanding libc memory functions — every memcpy/memmove/memcmp/memset the
+  # compiler or STL/intx calls — on the ZisK memory ABI's DMA ops (zkvm_mem.s,
+  # vendored), plus the run-time-fill memset that zkvm_mem.h falls back to.
+  ${CMAKE_CURRENT_SOURCE_DIR}/zkvm_mem.s
   ${CMAKE_CURRENT_SOURCE_DIR}/stdcxx_stubs.cpp
   # The precompile families, each a drop-in for evmone's symbol that calls the EF
   # zkVM accelerator ABI (zkvm_accelerators.h):
@@ -191,31 +182,8 @@ add_executable(zisk_eth_guest.elf
 # recommendation.
 option(ZEG_BSWAP_BUILTIN "Use plain __builtin_bswap64 (Zbb lowers it to one rev8); OFF selects the legacy zero-shortcut inline asm" ON)
 
-# Lower block memcpy/memset/memcmp to the DMA precompile markers instead of
-# calling the ziskos mem* thunks. Needs the patched cross-compiler — plain GCC
-# has no such flag — which patches/gcc/build-toolchain.sh builds once from
-# upstream sources plus patches/gcc/0001-riscv-zisk-dma-lowering.patch.
-#
-# OFF by default so a stock xPack toolchain still builds the guest unchanged.
-# Measured on block 25659678: -12.06% steps, -3.17% cost.
-option(ZEG_ZISK_DMA "Lower block mem* to the ZisK DMA precompiles (needs the patched GCC)" OFF)
-if(ZEG_ZISK_DMA)
-  include(CheckCXXCompilerFlag)
-  set(CMAKE_REQUIRED_FLAGS "-march=${ZISK_MARCH} -mabi=lp64")
-  check_cxx_compiler_flag("-mzisk-dma" ZEG_HAS_ZISK_DMA)
-  unset(CMAKE_REQUIRED_FLAGS)
-  if(NOT ZEG_HAS_ZISK_DMA)
-    message(FATAL_ERROR
-      "ZEG_ZISK_DMA=ON but ${CMAKE_CXX_COMPILER} does not accept -mzisk-dma.\n"
-      "Build the patched compiler once and put it first on PATH:\n"
-      "    ${CMAKE_CURRENT_SOURCE_DIR}/../patches/gcc/build-toolchain.sh")
-  endif()
-  list(APPEND ZEG_GUEST_OPT_LIST "-mzisk-dma")
-  message(STATUS "ZisK DMA lowering: ON (-mzisk-dma)")
-endif()
-
 # JUMPDEST analysis: by default both backends offload it to the jump_dest_bitmap
-# precompile (CSR 0x81C, one op per contract — see evm/jump_dest_bitmap.hpp,
+# precompile (through zkvm_evm_jumpdest_bitmap, one op per contract — see evm/jump_dest_bitmap.hpp,
 # evmone patch 05 and zevm's build_jumpdest_bitset). ON restores the software
 # byte walk in both, for A/B step counts and as a fallback if the precompile is
 # unavailable in the pinned toolchain.
@@ -230,8 +198,8 @@ target_compile_definitions(zisk_eth_guest.elf PRIVATE
 target_compile_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
 target_link_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
 # runtime.cpp's calloc no longer zero-fills (the bump arena is fresh, ZisK-zero
-# RAM) and realloc copies via the DMA memcpy. -fno-builtin keeps that an
-# out-of-line call to the dma/*.s memcpy symbol rather than an inlined byte loop;
+# RAM) and realloc copies via memcpy. -fno-builtin keeps that an out-of-line call
+# to the memcpy symbol (zkvm_mem.s) rather than an inlined byte loop;
 # -fno-tree-loop-distribute-patterns keeps any other runtime.cpp loops (str*) from
 # being rewritten into mem* idioms.
 set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
