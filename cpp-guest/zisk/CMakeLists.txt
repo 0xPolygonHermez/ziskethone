@@ -182,6 +182,33 @@ add_executable(zisk_eth_guest.elf
 # recommendation.
 option(ZEG_BSWAP_BUILTIN "Use plain __builtin_bswap64 (Zbb lowers it to one rev8); OFF selects the legacy zero-shortcut inline asm" ON)
 
+# Lower block memcpy/memset/memcmp to the DMA precompile markers inline, including
+# the copies GCC synthesizes itself (struct assignments), which no header can see:
+# the compiler-side form of zkvm_mem.h, emitting the same marker sequences the ABI
+# header inlines (a 16-byte floor keeps small copies as loads and stores). Needs
+# the patched cross-compiler — plain GCC has no such flag — which
+# patches/gcc/build-toolchain.sh builds once from upstream sources plus
+# patches/gcc/0001-riscv-zisk-dma-lowering.patch.
+#
+# OFF by default so a stock xPack toolchain still builds the guest unchanged.
+# Measured on the perf branch (docs/perf-notes.md, 32 blocks): -14.5% steps,
+# -4.96% area on evmone; -16.4% / -6.31% on zevm.
+option(ZEG_ZISK_DMA "Lower block mem* to the ZisK DMA markers (needs the patched GCC)" OFF)
+if(ZEG_ZISK_DMA)
+  include(CheckCXXCompilerFlag)
+  set(CMAKE_REQUIRED_FLAGS "-march=${ZISK_MARCH} -mabi=lp64")
+  check_cxx_compiler_flag("-mzisk-dma" ZEG_HAS_ZISK_DMA)
+  unset(CMAKE_REQUIRED_FLAGS)
+  if(NOT ZEG_HAS_ZISK_DMA)
+    message(FATAL_ERROR
+      "ZEG_ZISK_DMA=ON but ${CMAKE_CXX_COMPILER} does not accept -mzisk-dma.\n"
+      "Build the patched compiler once and put it first on PATH:\n"
+      "    ${CMAKE_CURRENT_SOURCE_DIR}/../patches/gcc/build-toolchain.sh")
+  endif()
+  list(APPEND ZEG_GUEST_OPT_LIST "-mzisk-dma")
+  message(STATUS "ZisK DMA lowering: ON (-mzisk-dma)")
+endif()
+
 # JUMPDEST analysis: by default both backends offload it to the jump_dest_bitmap
 # precompile (through zkvm_evm_jumpdest_bitmap, one op per contract — see evm/jump_dest_bitmap.hpp,
 # evmone patch 05 and zevm's build_jumpdest_bitset). ON restores the software
