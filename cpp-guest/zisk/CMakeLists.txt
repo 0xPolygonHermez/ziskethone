@@ -98,6 +98,19 @@ set(EVM_BACKEND "evmone" CACHE STRING "EVM implementation: evmone | zevm")
 if(EVM_BACKEND STREQUAL "zevm")
   list(FILTER GUEST_SRC EXCLUDE REGEX "/evmc2_evmone\\.cpp$")
   file(GLOB ZEVM_SRC ${GUEST_ROOT}/src/zevm/*.cpp ${GUEST_ROOT}/src/zevm/instructions/*.cpp)
+
+  # zevm dispatches with a 140-case switch, so -fno-jump-tables (in
+  # ZEG_GUEST_OPT, where it is worth -1.58% area to evmone) turns it into a
+  # binary tree of comparisons: 7-8 branches per opcode instead of one indexed
+  # jump. Measured on block 25701329, that tree costs 47% of the dispatch loop —
+  # `bne`+`bltu`+`bgeu`+`li` alone are 89.6M of its 189M steps — and the whole
+  # backend +3.42% area. evmone never notices the flag because its computed goto
+  # is a hand-written label table, not a switch GCC has to lower.
+  #
+  # So the flag is right globally and wrong for this one file: put the jump
+  # table back where the switch lives.
+  set_source_files_properties(${GUEST_ROOT}/src/zevm/zevm.cpp
+                              PROPERTIES COMPILE_OPTIONS "-fjump-tables")
   list(APPEND GUEST_SRC ${ZEVM_SRC})
 endif()
 message(STATUS "EVM backend: ${EVM_BACKEND}")
@@ -180,19 +193,50 @@ add_executable(zisk_eth_guest.elf
 # secp256k1 backend: precompiles+fcalls by default; software baseline when ON.
 option(ZEG_SECP256K1_SW "Use the software secp256k1 baseline (no accelerators)" OFF)
 
-# zeg::bswap64 defaults to a zero-shortcut swap that uses inline-asm `rev8`
-# (now that the guest march includes Zbb) for the nonzero path, keeping the
-# branch GCC would otherwise silently fold away (see include/zeg/bswap.hpp for
-# why plain __builtin_bswap64 loses that shortcut). ZEG_BSWAP_BUILTIN swaps in
-# the plain builtin instead, purely for A/B step-count comparison against the
-# shortcut-preserving default — expect it to lose on zero-heavy blocks.
-option(ZEG_BSWAP_BUILTIN "Use plain __builtin_bswap64 (no zero-shortcut) instead of the default shortcut-preserving rev8" OFF)
+# zeg::bswap64 defaults to plain __builtin_bswap64, which the guest march's Zbb
+# lowers to a single unconditional `rev8`. Turning this OFF selects the older
+# inline-asm variant that guards `rev8` with a zero shortcut; that only paid back
+# when `rev8` cost 13 zisk ops, and it now loses on both counts — see
+# include/zeg/bswap.hpp for the measurement. Kept as an A/B knob, not a tuning
+# recommendation.
+option(ZEG_BSWAP_BUILTIN "Use plain __builtin_bswap64 (Zbb lowers it to one rev8); OFF selects the legacy zero-shortcut inline asm" ON)
+
+# Lower block memcpy/memset/memcmp to the DMA precompile markers instead of
+# calling the ziskos mem* thunks. Needs the patched cross-compiler — plain GCC
+# has no such flag — which patches/gcc/build-toolchain.sh builds once from
+# upstream sources plus patches/gcc/0001-riscv-zisk-dma-lowering.patch.
+#
+# OFF by default so a stock xPack toolchain still builds the guest unchanged.
+# Measured on block 25659678: -12.06% steps, -3.17% cost.
+option(ZEG_ZISK_DMA "Lower block mem* to the ZisK DMA precompiles (needs the patched GCC)" OFF)
+if(ZEG_ZISK_DMA)
+  include(CheckCXXCompilerFlag)
+  set(CMAKE_REQUIRED_FLAGS "-march=${ZISK_MARCH} -mabi=lp64")
+  check_cxx_compiler_flag("-mzisk-dma" ZEG_HAS_ZISK_DMA)
+  unset(CMAKE_REQUIRED_FLAGS)
+  if(NOT ZEG_HAS_ZISK_DMA)
+    message(FATAL_ERROR
+      "ZEG_ZISK_DMA=ON but ${CMAKE_CXX_COMPILER} does not accept -mzisk-dma.\n"
+      "Build the patched compiler once and put it first on PATH:\n"
+      "    ${CMAKE_CURRENT_SOURCE_DIR}/../patches/gcc/build-toolchain.sh")
+  endif()
+  list(APPEND ZEG_GUEST_OPT_LIST "-mzisk-dma")
+  message(STATUS "ZisK DMA lowering: ON (-mzisk-dma)")
+endif()
+
+# JUMPDEST analysis: by default both backends offload it to the jump_dest_bitmap
+# precompile (CSR 0x81C, one op per contract — see evm/jump_dest_bitmap.hpp,
+# evmone patch 05 and zevm's build_jumpdest_bitset). ON restores the software
+# byte walk in both, for A/B step counts and as a fallback if the precompile is
+# unavailable in the pinned toolchain.
+option(ZEG_JUMPDEST_SW "Use the software JUMPDEST analysis (no jump_dest_bitmap precompile)" OFF)
 
 target_compile_definitions(zisk_eth_guest.elf PRIVATE
   ZEG_ZISK
   $<$<STREQUAL:${EVM_BACKEND},zevm>:USE_ZEVM>
   $<$<BOOL:${ZEG_SECP256K1_SW}>:ZEG_SECP256K1_SW>
   $<$<BOOL:${ZEG_BSWAP_BUILTIN}>:ZEG_BSWAP_BUILTIN>
+  $<$<BOOL:${ZEG_JUMPDEST_SW}>:ZEG_JUMPDEST_SW>
   PROJECT_VERSION="0.21.0")          # normally injected by evmone's CMake
 target_compile_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
 target_link_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)

@@ -155,16 +155,20 @@ evmc::bytes32 ZiskStateDB::get_storage(const evmc::address& addr,
     // `dynamic_storage_` scratchpad (block-original implicitly 0); surviving
     // non-zero slots are committed to the static table at tx-end so the
     // new-root walk inserts them.
-    if (!storages_.contains(addr, key)) {
+    const size_t idx = storages_.find(addr, key);
+    if (idx == Storages::npos) {
         auto& ds = const_cast<DynamicStorage&>(dynamic_storage_);
         ds.mark_touched(addr, key, tx_counter_);
         return ds.value(addr, key);
     }
-    // `storages_.value(...)` touches the slot for tx_counter_ (snapshots
-    // tx_original on first access, marks warm). The const_cast is safe:
-    // mods_ is logically mutable scratch — evmc::Host::get_storage is
-    // const-by-interface but the per-tx tracking has to happen here.
-    return const_cast<Storages&>(storages_).value(addr, key, tx_counter_);
+    // What `storages_.value(addr, key, tx)` does, minus its second probe of
+    // the same key: touch the slot for tx_counter_ (snapshots tx_original on
+    // first access, marks warm), then read. The const_cast is safe: mods_ is
+    // logically mutable scratch — evmc::Host::get_storage is const-by-
+    // interface but the per-tx tracking has to happen here.
+    auto& s = const_cast<Storages&>(storages_);
+    s.mark_touched_at(idx, tx_counter_);
+    return s.value_at(idx);
 }
 
 evmc_storage_status ZiskStateDB::set_storage(const evmc::address& addr,
@@ -172,7 +176,8 @@ evmc_storage_status ZiskStateDB::set_storage(const evmc::address& addr,
                                              const evmc::bytes32& value) noexcept {
     // See routing comment in get_storage: dynamic_storage_ holds every
     // (addr, key) pair the witness didn't include (block-original 0).
-    if (!storages_.contains(addr, key)) {
+    const size_t idx = storages_.find(addr, key);
+    if (idx == Storages::npos) {
         // Slot absent from witness: route through dynamic_storage_.
         // access_storage(addr, key) was called by evmone before this,
         // which marked the slot touched and (if absent) inserted it with
@@ -193,8 +198,6 @@ evmc_storage_status ZiskStateDB::set_storage(const evmc::address& addr,
     // always calls access_storage(addr, key) before set_storage, and
     // our access_storage already does the snapshot. So by the time
     // we read tx_original_at below the per-tx-original is in place.
-    const size_t idx = storages_.index_of(addr, key);
-
     const auto& original = storages_.tx_original_at(idx);
     const auto  current  = storages_.value_at(idx);
 
@@ -397,12 +400,11 @@ void ZiskStateDB::commit_dynamic_storage() noexcept {
             if (slot.value == evmc::bytes32{}) {
                 continue;
             }
-            if (storages_.contains(addr, pos)) {
-                storages_.set_value(addr, pos, slot.value, tx_counter_);
-            } else {
-                const size_t idx = storages_.append(addr, pos, evmc::bytes32{});
-                storages_.set_value_at(idx, slot.value, tx_counter_);
+            size_t idx = storages_.find(addr, pos);
+            if (idx == Storages::npos) {
+                idx = storages_.append(addr, pos, evmc::bytes32{});
             }
+            storages_.set_value_at(idx, slot.value, tx_counter_);
         }
     }
     dynamic_storage_.clear();
@@ -657,7 +659,8 @@ evmc_access_status ZiskStateDB::access_storage(const evmc::address& addr,
                                                const evmc::bytes32& key) noexcept {
     // Same routing rule as get_storage/set_storage: any slot the witness
     // didn't include goes through dynamic_storage_ (block-original 0).
-    if (!storages_.contains(addr, key)) {
+    const size_t idx = storages_.find(addr, key);
+    if (idx == Storages::npos) {
         // Witness-absent slot: route through dynamic_storage_. We
         // auto-insert the slot if absent
         // (mark_touched does it) so the subsequent SLOAD/SSTORE find
@@ -688,8 +691,7 @@ evmc_access_status ZiskStateDB::access_storage(const evmc::address& addr,
     // EIP-2929 warm/cold: a slot is warm iff it was already touched in
     // this tx (last_tx_idx == tx_counter_). Either way, touch it now
     // so the next access sees it warm.
-    const size_t idx       = storages_.index_of(addr, key);
-    const bool   was_warm  = storages_.is_warm_at(idx, tx_counter_);
+    const bool was_warm = storages_.is_warm_at(idx, tx_counter_);
     if (!was_warm) {
         // Journal the cold→warm transition so a reverted EVM frame
         // restores cold-ness (EIP-2929 / EIP-2200 gas accounting).
@@ -1355,7 +1357,8 @@ void ZiskStateDB::pre_warm_for_tx(const Transactions::View& tx) noexcept {
                 }
                 evmc::bytes32 slot;
                 std::memcpy(slot.bytes, k.payload.data(), 32);
-                if (!storages_.contains(a, slot)) {
+                const size_t sidx = storages_.find(a, slot);
+                if (sidx == Storages::npos) {
                     // Witness-absent access-list slot (block-original 0):
                     // pre-warm it in the dynamic table so its first SLOAD/
                     // SSTORE is WARM (EIP-2930). Mirrors the static branch
@@ -1363,7 +1366,6 @@ void ZiskStateDB::pre_warm_for_tx(const Transactions::View& tx) noexcept {
                     dynamic_storage_.mark_touched(a, slot, tx_counter_);
                     continue;
                 }
-                const size_t sidx = storages_.index_of(a, slot);
                 storages_.mark_touched_at(sidx, tx_counter_);
             }
         }

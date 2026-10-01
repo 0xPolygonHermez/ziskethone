@@ -24,6 +24,8 @@
 
 #include <cstdint>
 
+#include "zeg/zisk_dma.hpp"  // zisk_xinputcpy (CSR 0x815)
+
 #if !defined(ZEG_ZISK)
 // ===========================================================================
 // Host: delegate to evmone's reference recover.
@@ -351,7 +353,7 @@ inline u64 fcall_get() {
 inline void fn_inv_hint(const u64 x[4], u64 o[4]) {     // fcall id 2: 1/x mod N
     asm volatile("csrs 0x8F2, %0" : : "r"(x) : "memory");   // param: x, 4 words
     asm volatile("csrwi 0x8C0, 2" : : : "memory");          // trigger FN_INV
-    o[0]=fcall_get(); o[1]=fcall_get(); o[2]=fcall_get(); o[3]=fcall_get();
+    zeg::zisk::zisk_xinputcpy<4 * sizeof(u64)>(o);   // 4 words in one op
 }
 inline void msb_pos256(const u64 x[4], u64 *limb, u64 *bit) {  // fcall id 17
     u64 one = 1;
@@ -376,7 +378,7 @@ inline void msb_pos256_4(const u64 a[4], const u64 b[4], const u64 c[4], const u
 inline void glv_decompose_hint(const u64 k[4], u64 out[10]) {
     asm volatile("csrs 0x8F2, %0" : : "r"(k) : "memory");    // param: k, 4 words
     asm volatile("csrwi 0x8C0, 4" : : : "memory");           // trigger GLV_DECOMPOSE
-    for (int i = 0; i < 10; ++i) out[i] = fcall_get();
+    zeg::zisk::zisk_xinputcpy<10 * sizeof(u64)>(out);  // 10 words in one op
 }
 
 } // namespace
@@ -605,8 +607,8 @@ inline void fp_sqrt_hint(const u64 alpha[4], u64 parity, u64* is_qr, u64 y[4]) {
     asm volatile("csrs 0x8F2, %0" : : "r"(alpha)  : "memory");  // param: alpha, 4 words
     asm volatile("csrs 0x8F0, %0" : : "r"(parity) : "memory");  // param: parity (direct)
     asm volatile("csrwi 0x8C0, 3" : : : "memory");              // trigger FP_SQRT
-    *is_qr = fcall_get();
-    y[0]=fcall_get(); y[1]=fcall_get(); y[2]=fcall_get(); y[3]=fcall_get();
+    *is_qr = fcall_get();                            // scalar, stays a csrr
+    zeg::zisk::zisk_xinputcpy<4 * sizeof(u64)>(y);   // the 4 result words in one op
 #endif
 }
 

@@ -82,4 +82,20 @@ inline void uart_putc(char c) {
         static_cast<unsigned char>(c);
 }
 
+// UART debug: write a NUL-terminated string.
+inline void uart_puts(const char *s) {
+    for (; *s != '\0'; ++s) {
+        uart_putc(*s);
+    }
+}
+
+// UART debug: write `len` bytes as lowercase hex, no prefix.
+inline void uart_put_hex(const uint8_t *bytes, unsigned len) {
+    static const char kHexDigits[] = "0123456789abcdef";
+    for (unsigned i = 0; i < len; ++i) {
+        uart_putc(kHexDigits[bytes[i] >> 4]);
+        uart_putc(kHexDigits[bytes[i] & 0x0f]);
+    }
+}
+
 } // namespace zeg::zisk

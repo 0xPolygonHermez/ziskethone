@@ -16,6 +16,8 @@
 
 #include <cstdint>
 
+#include "zeg/zisk_dma.hpp"  // zisk_xinputcpy (CSR 0x815)
+
 namespace zeg::r1 {
 
 typedef uint64_t u64;
@@ -61,7 +63,7 @@ inline u64 fcall_get() { u64 v; asm volatile("csrr %0, 0xFFE" : "=r"(v)); return
 inline void fn_inv_hint(const u64 x[4], u64 o[4]) {     // fcall id 5: 1/x mod n
     asm volatile("csrs 0x8F2, %0" : : "r"(x) : "memory");
     asm volatile("csrwi 0x8C0, 5" : : : "memory");       // FCALL_SECP256R1_FN_INV_ID
-    o[0]=fcall_get(); o[1]=fcall_get(); o[2]=fcall_get(); o[3]=fcall_get();
+    zeg::zisk::zisk_xinputcpy<4 * sizeof(u64)>(o);   // 4 words in one op
 }
 inline void msb_pos256(const u64 x[4], u64 *limb, u64 *bit) {  // fcall id 17
     u64 one = 1;
