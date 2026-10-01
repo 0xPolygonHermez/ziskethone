@@ -73,17 +73,16 @@ extern "C" int secp256k1_ecdsa_recover(const uint64_t* z, const uint64_t* r,
     if (recid > 1) return 1;
     // The ABI rejects r or s outside [1, n-1] and signatures with no recoverable
     // point, both as a non-EOK status.
-    uint8_t msg[32], sig[64], out[64];
-    limbs_to_be(z, msg);
-    limbs_to_be(r, sig);
-    limbs_to_be(s, sig + 32);
-    if (zkvm_secp256k1_ecrecover(reinterpret_cast<const zkvm_secp256k1_hash*>(msg),
-                                 reinterpret_cast<const zkvm_secp256k1_signature*>(sig),
-                                 static_cast<uint8_t>(recid),
-                                 reinterpret_cast<zkvm_secp256k1_pubkey*>(out)) != ZKVM_EOK)
+    zkvm_secp256k1_hash msg;
+    zkvm_secp256k1_signature sig;
+    zkvm_secp256k1_pubkey out;
+    limbs_to_be(z, msg.data);
+    limbs_to_be(r, sig.data);
+    limbs_to_be(s, sig.data + 32);
+    if (zkvm_secp256k1_ecrecover(&msg, &sig, static_cast<uint8_t>(recid), &out) != ZKVM_EOK)
         return 1;
-    be_to_limbs(out, pubkey);
-    be_to_limbs(out + 32, pubkey + 4);
+    be_to_limbs(out.data, pubkey);
+    be_to_limbs(out.data + 32, pubkey + 4);
     return 0;
 }
 

@@ -32,13 +32,18 @@ bool kzg_verify_proof(const std::byte versioned_hash[32], const std::byte z[32],
     // Only the proof verification is delegated; the versioned-hash binding above
     // stays in the guest. All operands already use the packed big-endian encoding
     // the EF ABI expects (commitment/proof 48 B, z/y 32 B), so no marshalling is
-    // needed. Note the EF argument order is (commitment, z, y, proof).
+    // needed, but they point into the precompile input at any alignment, and the
+    // ABI types are 8-byte aligned: copy them. Note the EF argument order is
+    // (commitment, z, y, proof).
+    zkvm_kzg_commitment c;
+    zkvm_kzg_field_element zz, yy;
+    zkvm_kzg_proof p;
+    std::memcpy(c.data, commitment, sizeof c.data);
+    std::memcpy(zz.data, z, sizeof zz.data);
+    std::memcpy(yy.data, y, sizeof yy.data);
+    std::memcpy(p.data, proof, sizeof p.data);
     bool ok = false;
-    zkvm_status st = zkvm_kzg_point_eval(
-        reinterpret_cast<const zkvm_kzg_commitment*>(commitment),
-        reinterpret_cast<const zkvm_kzg_field_element*>(z),
-        reinterpret_cast<const zkvm_kzg_field_element*>(y),
-        reinterpret_cast<const zkvm_kzg_proof*>(proof), &ok);
+    const zkvm_status st = zkvm_kzg_point_eval(&c, &zz, &yy, &p, &ok);
     return st == ZKVM_EOK && ok;
 }
 

@@ -38,24 +38,21 @@ namespace evmmax::bn254 {
 // all-zero identity first, then coordinates < p and on the curve) and fails on an
 // invalid one, so adding the identity is exactly this check.
 bool validate(const AffinePoint& pt) noexcept {
-    uint8_t p[64], o[64] = {}, r[64];
-    store_g1(pt, p);
-    return zkvm_bn254_g1_add(reinterpret_cast<const zkvm_bn254_g1_point*>(p),
-                             reinterpret_cast<const zkvm_bn254_g1_point*>(o),
-                             reinterpret_cast<zkvm_bn254_g1_point*>(r)) == ZKVM_EOK;
+    zkvm_bn254_g1_point p, o = {}, r;
+    store_g1(pt, p.data);
+    return zkvm_bn254_g1_add(&p, &o, &r) == ZKVM_EOK;
 }
 
 // [c]P. P is already field-valid + on-curve (caller validated). The scalar is the
 // raw 256-bit c: zkvm_bn254_g1_mul reduces it mod r.
 AffinePoint mul(const AffinePoint& pt, const uint256& c) noexcept {
-    uint8_t p[64], k[32], r[64];
-    store_g1(pt, p);
-    intx::be::unsafe::store(k, c);
-    if (zkvm_bn254_g1_mul(reinterpret_cast<const zkvm_bn254_g1_point*>(p),
-                          reinterpret_cast<const zkvm_bn254_scalar*>(k),
-                          reinterpret_cast<zkvm_bn254_g1_point*>(r)) != ZKVM_EOK)
+    zkvm_bn254_g1_point p, r;
+    zkvm_bn254_scalar k;
+    store_g1(pt, p.data);
+    intx::be::unsafe::store(k.data, c);
+    if (zkvm_bn254_g1_mul(&p, &k, &r) != ZKVM_EOK)
         return {};
-    return load_g1(r);
+    return load_g1(r.data);
 }
 
 // ecPairing: ∏ e(Pᵢ,Qᵢ) == 1. zkvm_bn254_pairing validates every pair itself (field,
@@ -66,8 +63,9 @@ AffinePoint mul(const AffinePoint& pt, const uint256& c) noexcept {
 // imag-first byte order the EF ABI expects we emit .second (imag) then .first (real).
 std::optional<bool> pairing_check(std::span<const std::pair<Point, ExtPoint>> pairs) noexcept {
     if (pairs.empty()) return true;
-    std::vector<uint8_t> buf(pairs.size() * 192);
-    uint8_t* b = buf.data();
+    static_assert(sizeof(zkvm_bn254_pairing_pair) == 192);
+    std::vector<zkvm_bn254_pairing_pair> buf(pairs.size());
+    uint8_t* b = buf.data()->g1.data;
     for (const auto& [P, Q] : pairs) {
         intx::be::unsafe::store(b, P.x);
         intx::be::unsafe::store(b + 32, P.y);
@@ -78,8 +76,7 @@ std::optional<bool> pairing_check(std::span<const std::pair<Point, ExtPoint>> pa
         b += 192;
     }
     bool ok = false;
-    if (zkvm_bn254_pairing(reinterpret_cast<const zkvm_bn254_pairing_pair*>(buf.data()),
-                           pairs.size(), &ok) != ZKVM_EOK)
+    if (zkvm_bn254_pairing(buf.data(), pairs.size(), &ok) != ZKVM_EOK)
         return std::nullopt;
     return ok;
 }
@@ -93,13 +90,11 @@ template <>
 AffinePoint<evmmax::bn254::Curve> add_affine<evmmax::bn254::Curve>(
     const AffinePoint<evmmax::bn254::Curve>& p,
     const AffinePoint<evmmax::bn254::Curve>& q) noexcept {
-    uint8_t a[64], b[64], r[64];
-    store_g1(p, a);
-    store_g1(q, b);
-    if (zkvm_bn254_g1_add(reinterpret_cast<const zkvm_bn254_g1_point*>(a),
-                          reinterpret_cast<const zkvm_bn254_g1_point*>(b),
-                          reinterpret_cast<zkvm_bn254_g1_point*>(r)) != ZKVM_EOK)
+    zkvm_bn254_g1_point a, b, r;
+    store_g1(p, a.data);
+    store_g1(q, b.data);
+    if (zkvm_bn254_g1_add(&a, &b, &r) != ZKVM_EOK)
         return {};
-    return load_g1(r);
+    return load_g1(r.data);
 }
 }  // namespace evmmax::ecc

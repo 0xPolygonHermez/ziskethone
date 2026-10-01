@@ -13,16 +13,16 @@ namespace evmmax::secp256r1 {
 
 bool verify(const ethash::hash256& h, const uint256& r, const uint256& s, const uint256& qx,
     const uint256& qy) noexcept {
-    uint8_t sig[64], pub[64];
-    intx::be::unsafe::store(sig, r);
-    intx::be::unsafe::store(sig + 32, s);
-    intx::be::unsafe::store(pub, qx);
-    intx::be::unsafe::store(pub + 32, qy);
+    zkvm_secp256r1_signature sig;
+    zkvm_secp256r1_pubkey pub;
+    intx::be::unsafe::store(sig.data, r);
+    intx::be::unsafe::store(sig.data + 32, s);
+    intx::be::unsafe::store(pub.data, qx);
+    intx::be::unsafe::store(pub.data + 32, qy);
     bool ok = false;
+    // h is an ethash::hash256, a union with 64-bit words, so it is 8-byte aligned.
     const zkvm_status st = zkvm_secp256r1_verify(
-        reinterpret_cast<const zkvm_secp256r1_hash*>(h.bytes),
-        reinterpret_cast<const zkvm_secp256r1_signature*>(sig),
-        reinterpret_cast<const zkvm_secp256r1_pubkey*>(pub), &ok);
+        reinterpret_cast<const zkvm_secp256r1_hash*>(h.bytes), &sig, &pub, &ok);
     return st == ZKVM_EOK && ok;
 }
 
