@@ -28,8 +28,8 @@ guest source is the same for all of them:
   the precompile's own marker, a `csrs` plus the `add`/`addi` that follows,
   which the transpiler folds into one operation.
 
-So the ELF only runs on a `ziskemu` / `cargo-zisk` built with `--features ziskasm`
-(the ZisK library); a plain build rejects it.
+So the ELF only runs under ZisK, whose transpiler gives these instructions their
+meaning; every `ziskemu` / `cargo-zisk` includes the ZisK library.
 
 ## Prerequisites
 
@@ -41,8 +41,8 @@ So the ELF only runs on a `ziskemu` / `cargo-zisk` built with `--features ziskas
   branch's patches (`cpp-guest/patches/`) are applied:
   `cmake -S cpp-guest -B cpp-guest/build` (populates `build/_deps/evmone-src` and
   the intx headers under `~/.hunter`).
-- A `ziskemu` with the ZisK library, from the matching `../zisk` checkout:
-  `cargo build --release -p ziskemu --features ziskasm --manifest-path ../zisk/Cargo.toml`
+- A `ziskemu` from the matching `../zisk` checkout:
+  `cargo build --release -p ziskemu --manifest-path ../zisk/Cargo.toml`
   → `../zisk/target/release/ziskemu`.
 
 ## Build

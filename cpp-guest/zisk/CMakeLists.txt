@@ -136,7 +136,7 @@ list(FILTER PAIRING_SRC EXCLUDE REGEX "/pairing/bn254/")
 # goes through the ABI.
 # zkvm_calls.s: the EF ABI zkvm_* functions as zkvmcall thunks. Each is
 # `csrs <id>, x0; ret`, which the transpiler turns into a jump to the native .zisk
-# routine; running the guest needs ziskemu/cargo-zisk built with --features ziskasm.
+# routine.
 set(PRECOMP_C  ${CMAKE_CURRENT_SOURCE_DIR}/keccak_zisk.cpp ${CMAKE_CURRENT_SOURCE_DIR}/zkvm_calls.s)
 # Only the precompile dispatch from test/state (not the json/state machinery).
 set(STATE_SRC  ${EVMONE_SRC}/test/state/precompiles.cpp)
