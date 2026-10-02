@@ -1,34 +1,25 @@
-// jump_dest_bitmap.hpp — JUMPDEST analysis on the ZisK EVM precompile.
+// jump_dest_bitmap.hpp — JUMPDEST analysis on the ZisK EVM precompile, through the
+// ZisK EVM ABI (zkvm_evm.h).
 //
-// The ZisK `jump_dest_bitmap` precompile (CSR 0x81C) does in one op what both
-// EVM backends otherwise do with a byte-walk loop over every executed contract:
-// given bytecode and its length, it writes the JUMPDEST bitmap — ceil(size/64)
-// little-endian u64 words, bit i set iff code[i] is a real JUMPDEST (opcode 0x5b
-// that is not PUSH immediate data). Bit layout, word count and PUSH-skipping are
-// exactly what evmone's BitsetSpan and zevm's build_jumpdest_bitset already
-// produce (reference impl: zisk precompiles/evm/src/jump_dest_bitmap.rs), so it
-// is a drop-in for both.
+// The ZisK `jump_dest_bitmap` precompile does in one op what both EVM backends
+// otherwise do with a byte-walk loop over every executed contract: given bytecode
+// and its length, it writes the JUMPDEST bitmap — ceil(size/64) little-endian u64
+// words, bit i set iff code[i] is a real JUMPDEST (opcode 0x5b that is not PUSH
+// immediate data). Bit layout, word count and PUSH-skipping are exactly what
+// evmone's BitsetSpan and zevm's build_jumpdest_bitset already produce (reference
+// impl: zisk precompiles/evm/src/jump_dest_bitmap.rs), so it is a drop-in for both.
+// The guest reaches it with zkvm_evm_jumpdest_bitmap, which the ABI header inlines
+// as the precompile marker, rather than by issuing the precompile's CSR itself.
 //
 // Cost: EVM_JUMP_DEST_BITMAP_COST = DMA_64_ALIGNED_COST = 77 per 64 bytes of
 // code, i.e. ~1.1x a single main-step (MAIN_COST = 68) per 64 code bytes,
 // against the software walk's ~1 step per instruction boundary.
 //
-// Invocation follows the same csrs+add marker pattern as the DMA mem* thunks
-// (zisk/dma/memcpy.s) and ziskos' `ziskos_jump_dest_bitmap!` macro:
-//
-//     csrs 0x81c, <src>        # marker: bytecode pointer
-//     add  x0, <dst>, <size>   # bitmap pointer, byte count
-//
-// The transpiler (riscv2zisk) recognizes the pair and lowers it to one
-// jump_dest_bitmap op with params (bitmap, bytecode, count). Both instructions
-// must stay adjacent, hence one asm block.
-//
-// Dual mode, like bigint/backend.hpp: the precompile only exists in the ZisK
-// build (ZEG_ZISK). Elsewhere — and with -DZEG_JUMPDEST_SW=ON, kept for A/B
-// step-count runs against the software walk — this header defines nothing and
-// ZEG_JUMPDEST_PRECOMPILE stays undefined, so call sites keep their software
-// analysis and the host build remains the independent reference.
-
+// Dual mode: the ABI only exists in the ZisK build (ZEG_ZISK). Elsewhere — and
+// with -DZEG_JUMPDEST_SW=ON, kept for A/B step-count runs against the software
+// walk — this header defines nothing and ZEG_JUMPDEST_PRECOMPILE stays undefined,
+// so call sites keep their software analysis and the host build remains the
+// independent reference.
 #pragma once
 
 #include <cstddef>
@@ -37,6 +28,7 @@
 #if defined(ZEG_ZISK) && !defined(ZEG_JUMPDEST_SW)
 
 #define ZEG_JUMPDEST_PRECOMPILE 1
+#include "zkvm_evm.h"
 
 namespace zeg::evm {
 
@@ -74,12 +66,9 @@ inline bool jump_dest_bitmap_usable(const uint64_t* bitmap, const uint8_t* code,
 // Preconditions as above: call `jump_dest_bitmap_usable()` first, and use a
 // software walk when it says no.
 inline void jump_dest_bitmap(uint64_t* bitmap, const uint8_t* code, size_t size) {
-    asm volatile(
-        "csrs 0x81c, %[src]\n\t"
-        "add  x0, %[dst], %[size]"
-        :
-        : [src] "r"(code), [dst] "r"(bitmap), [size] "r"(size)
-        : "memory");
+    // The ABI rechecks the preconditions and fails without writing when they do
+    // not hold; jump_dest_bitmap_usable() has already made sure they do.
+    zkvm_evm_jumpdest_bitmap(code, size, bitmap);
 }
 
 }  // namespace zeg::evm

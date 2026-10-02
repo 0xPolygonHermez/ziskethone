@@ -8,7 +8,7 @@
 // namespace above dispatch_cgoto and calls ZEG_TRY_FUSE from its ON_OPCODE
 // macro — that hook is all patch 06 contains. Active under ZEG_ZISK (guest) or
 // ZEG_FUSE_TEST (host unit tests, which multiply with intx instead of the
-// arith256 precompile).
+// U256 ABI).
 //
 // Contract, all or nothing: zeg_try_fuse<Op>() either executes Op plus what
 // follows — leaving position/gas/stack exactly as the generic handlers would —
@@ -107,14 +107,13 @@ constexpr bool zeg_fusable = Op == OP_JUMP || Op == OP_PUSH2 || Op == OP_PUSH1 |
     return true;
 }
 
-// out = low 256 bits of out * b (the EVM MUL). ZisK: arith256 precompile,
-// which reads its operands in place — b may alias out. Host test: intx.
+// out = low 256 bits of out * b (the EVM MUL). ZisK: zkvm_u256_le_mul (the U256
+// ABI, see evmone patch 03), which reads its operands in place — b may alias out.
+// Host test: intx.
 [[gnu::always_inline]] inline void zeg_mul_into(uint256& out, const uint256& b) noexcept
 {
 #ifdef ZEG_ZISK
-    uint64_t r[4];
-    zeg_arith::mul_low(&out[0], &b[0], r);
-    zeg_arith::store(out, r);
+    zkvm_u256_le_mul(zeg_u256::le(b), zeg_u256::le(out), zeg_u256::le(out));
 #else
     out = out * b;
 #endif
@@ -282,7 +281,7 @@ template <Opcode Op>
         pos.stack_end -= 2;
         return true;
     }
-    // DUPn + MUL: the arith256 precompile reads its operands from the stack
+    // DUPn + MUL: zkvm_u256_le_mul reads its operands from the stack
     // slots in place, so the duplicate never hits the stack. DUP1+MUL squares
     // the top; DUP2+MUL multiplies top by second, second preserved.
     else if constexpr (Op == OP_DUP1 || Op == OP_DUP2)
