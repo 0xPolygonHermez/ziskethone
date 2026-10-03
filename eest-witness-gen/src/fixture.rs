@@ -15,7 +15,7 @@
 
 use std::collections::BTreeMap;
 
-use alloy_primitives::{Address, Bloom, Bytes, B256, B64, U256};
+use alloy_primitives::{Address, Bloom, Bytes, B256, B64, U256, U64};
 use serde::Deserialize;
 
 /// Top-level shape of an EEST blockchain-test JSON file:
@@ -42,6 +42,26 @@ pub struct BlockchainTest {
     pub network: String,
     #[serde(default, rename = "genesisRLP")]
     pub genesis_rlp: Option<Bytes>,
+    /// Fixture chain config; only the blob schedule is used (the
+    /// BPO forks' blob parameters, which can be test-only values).
+    #[serde(default)]
+    pub config: Config,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Config {
+    /// Fork name (`Cancun`, …, `BPO1`, …) → blob parameters.
+    #[serde(default)]
+    pub blob_schedule: BTreeMap<String, BlobScheduleEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlobScheduleEntry {
+    pub target: U64,
+    pub max: U64,
+    pub base_fee_update_fraction: U64,
 }
 
 #[derive(Debug, Deserialize)]

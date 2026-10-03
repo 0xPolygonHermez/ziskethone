@@ -129,7 +129,7 @@ fn main() -> Result<()> {
     for (name, test) in &fixture {
         info!(test = %name, network = %test.network, blocks = test.blocks.len(), "executing");
 
-        let chain_spec = match chain_spec::from_network(&test.network) {
+        let chain_spec = match chain_spec::from_network(&test.network, &test.config.blob_schedule) {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!(test = %name, "skipping: {e}");

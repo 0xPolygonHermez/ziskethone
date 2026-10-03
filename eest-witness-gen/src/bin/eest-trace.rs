@@ -97,7 +97,7 @@ fn main() -> Result<()> {
         test.blocks.len()
     );
 
-    let chain_spec = chain_spec::from_network(&test.network)?;
+    let chain_spec = chain_spec::from_network(&test.network, &test.config.blob_schedule)?;
 
     // ---- genesis seeding: mirrors executor.rs::run_fixture's setup,
     // minus the witness/proof machinery this tool doesn't need (we only
