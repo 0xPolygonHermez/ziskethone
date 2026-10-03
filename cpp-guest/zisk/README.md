@@ -5,8 +5,9 @@ that runs in the ZisK emulator (`ziskemu`) and is proved by `cargo-zisk`. It liv
 alongside the native host build (`cpp-guest/CMakeLists.txt`), which is unchanged;
 the ZisK path is selected by the `ZEG_ZISK` compile macro.
 
-The guest reaches the ZisK machine only through a C ABI, never by issuing
-precompile CSRs or fcalls itself:
+The guest reaches the ZisK machine through a C ABI, with one exception: the
+keccak-f memo (`../include/zeg/keccakf_cache.hpp`) issues its two fcalls itself,
+because the ABI has no call for it. Everything else goes through:
 
 - the Ethereum Foundation zkVM standard: `zkvm_accelerators.h` (the precompile
   crypto) and `zkvm_io.h` (`read_input` / `write_output`);
@@ -89,7 +90,7 @@ memory); `-m` prints timing metrics. The output must match the native guest:
 
 | Guest feature | ABI | Where |
 |---|---|---|
-| Keccak-256 (MPT, tx/header hashes, CREATE, code hashes, `KECCAK256`) | `zkvm_keccak256` | `keccak_zisk.cpp` (drop-in for evmone's `keccak.c`) |
+| Keccak-256 (MPT, tx/header hashes, CREATE, code hashes, `KECCAK256`) | `zkvm_keccak_f1600`, behind the keccak-f memo (fcalls 24/25) | `keccak_zisk.cpp` (drop-in for evmone's `keccak.c`: the sponge), `../include/zeg/keccakf_cache.hpp` (the memo) |
 | SHA-256 (0x02, KZG versioned hash, EIP-7685 requests) | `zkvm_sha256` | `sha256_zisk.cpp` |
 | RIPEMD-160 (0x03) | `zkvm_ripemd160` | `ripemd160_zisk.cpp` |
 | ECRECOVER (0x01), tx senders, EIP-7702 signers | `zkvm_secp256k1_ecrecover` | `secp256k1.cpp` (the host build delegates to evmone) |
