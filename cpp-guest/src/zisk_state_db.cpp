@@ -2254,7 +2254,13 @@ void ZiskStateDB::collect_withdrawal_requests() noexcept {
         fatal("EIP-7002: withdrawal system contract empty (invalid block)");
     }
     auto result = system_call(kWithdrawalRequestsAddress, {});
-    if (result.status_code != EVMC_SUCCESS || result.output_size == 0) {
+    // A failed call (revert, OOG, ...) also makes the block invalid
+    // (execution-specs process_checked_system_transaction,
+    // BlockException.SYSTEM_CONTRACT_CALL_FAILED).
+    if (result.status_code != EVMC_SUCCESS) {
+        fatal("EIP-7002: withdrawal system contract call failed (invalid block)");
+    }
+    if (result.output_size == 0) {
         return;
     }
     std::vector<uint8_t> req;
@@ -2279,7 +2285,11 @@ void ZiskStateDB::collect_consolidation_requests() noexcept {
         fatal("EIP-7251: consolidation system contract empty (invalid block)");
     }
     auto result = system_call(kConsolidationRequestsAddress, {});
-    if (result.status_code != EVMC_SUCCESS || result.output_size == 0) {
+    // Failed call ⇒ invalid block; see collect_withdrawal_requests().
+    if (result.status_code != EVMC_SUCCESS) {
+        fatal("EIP-7251: consolidation system contract call failed (invalid block)");
+    }
+    if (result.output_size == 0) {
         return;
     }
     std::vector<uint8_t> req;
