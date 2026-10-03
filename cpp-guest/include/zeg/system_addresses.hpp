@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include <evmc/evmc.hpp>
@@ -80,5 +81,11 @@ constexpr uint64_t kMinBaseFeePerBlobGas      = 1;
 // Hardcoded to the latest mainnet value; bump on each BPO fork.
 constexpr uint64_t kBlobBaseFeeUpdateFraction = 11684671;
 constexpr uint64_t kGasPerBlob                = 131072;
+constexpr uint8_t  kVersionedHashVersionKzg   = 0x01;     // EIP-4844
+
+// Tx validity limits.
+constexpr size_t   kMaxInitCodeSize           = 2 * 24576; // EIP-3860
+constexpr uint64_t kMaxTxGasLimit             = 1u << 24;  // EIP-7825 (Osaka)
+constexpr size_t   kMaxBlobsPerTx             = 6;         // EIP-7594 (Osaka)
 
 } // namespace zeg

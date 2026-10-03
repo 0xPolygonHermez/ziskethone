@@ -6,15 +6,19 @@
 namespace zeg {
 
 int64_t compute_intrinsic_gas(const Transactions::View& tx,
-                              bool is_shanghai_or_later) {
+                              bool is_shanghai_or_later,
+                              int64_t* calldata_floor) {
     using TxType = Transactions::Type;
 
     int64_t gas = (tx.to() == nullptr) ? 53000 : 21000;
 
     // EIP-2028: 4 gas per byte, plus 12 more for each non-zero one.
     const auto data = tx.data();
-    gas += static_cast<int64_t>(data.size()) * 4 +
-           static_cast<int64_t>(count_nonzero_bytes(data)) * 12;
+    const auto nonzero = static_cast<int64_t>(count_nonzero_bytes(data));
+    gas += static_cast<int64_t>(data.size()) * 4 + nonzero * 12;
+    if (calldata_floor != nullptr) {
+        *calldata_floor = 21000 + (static_cast<int64_t>(data.size()) + nonzero * 3) * 10;
+    }
     // EIP-3860 (Shanghai): 2 gas per 32-byte word of init code on
     // creation txs. Pre-Shanghai (Berlin/London/Paris) doesn't
     // charge this — applying it over-charges 14 gas on a 222-byte
