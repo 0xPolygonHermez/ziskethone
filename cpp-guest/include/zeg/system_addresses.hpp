@@ -88,4 +88,7 @@ constexpr size_t   kMaxInitCodeSize           = 2 * 24576; // EIP-3860
 constexpr uint64_t kMaxTxGasLimit             = 1u << 24;  // EIP-7825 (Osaka)
 constexpr size_t   kMaxBlobsPerTx             = 6;         // EIP-7594 (Osaka)
 
+// EIP-7934 (Osaka): MAX_BLOCK_SIZE - SAFETY_MARGIN = 10 MiB - 2 MiB.
+constexpr size_t   kMaxRlpBlockSize           = 8'388'608;
+
 } // namespace zeg

@@ -149,6 +149,11 @@ public:
         return transactions_root_;
     }
 
+    // Payload size of the block body's RLP transactions list (EIP-7934):
+    // a legacy envelope is already an RLP list item, a typed one is
+    // encoded as a string.
+    std::size_t rlp_list_payload_size() const noexcept { return rlp_list_payload_size_; }
+
 private:
     // Per-type parsers. Each consumes the outer RLP list payload (after
     // the optional type-byte prefix has been stripped) and writes every
@@ -164,6 +169,7 @@ private:
 
     std::vector<View> views_;
     evmc::bytes32     transactions_root_{};
+    std::size_t       rlp_list_payload_size_{0};
 };
 
 } // namespace zeg

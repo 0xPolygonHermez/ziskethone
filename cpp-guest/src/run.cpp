@@ -28,6 +28,7 @@
 #include "zeg/fake_exponential.hpp"
 #include "zeg/fatal.hpp"
 #include "zeg/previous_blocks.hpp"
+#include "zeg/rlp.hpp"
 #include "zeg/state_root.hpp"
 #include "zeg/storages.hpp"
 #include "zeg/system_addresses.hpp"
@@ -379,8 +380,23 @@ int run(const uint8_t* input, size_t len, uint8_t out[32]) {
         dump32("parent_beacon_block_root", header.parent_beacon_block_root);
         dump32("requests_hash", header.requests_hash);
     }
+    std::size_t header_rlp_size = 0;
     const evmc::bytes32 execution_block_hash =
-        zeg::compute_block_header_hash(header);
+        zeg::compute_block_header_hash(header, &header_rlp_size);
+
+    // 7.5 EIP-7934 (Osaka): rlp([header, txs, ommers, withdrawals]) must
+    //     not exceed MAX_RLP_BLOCK_SIZE = 10 MiB - 2 MiB safety margin.
+    //     Sized from its parts; ommers is the empty list (1 byte).
+    if (consensus.fork_id() >= zeg::ForkId::Osaka) {
+        const std::size_t block_rlp_size = zeg::rlp::item_size(
+            header_rlp_size +
+            zeg::rlp::item_size(transactions.rlp_list_payload_size()) +
+            1 +
+            zeg::rlp::item_size(state.withdrawals_rlp_list_payload_size()));
+        if (block_rlp_size > zeg::kMaxRlpBlockSize) {
+            zeg::fatal("block RLP size exceeds limit");
+        }
+    }
 
     // 8. Hand the execution-layer block hash back to the caller.
     std::memcpy(out, execution_block_hash.bytes, 32);

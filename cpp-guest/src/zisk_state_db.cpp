@@ -793,6 +793,7 @@ void ZiskStateDB::execute_block(const Transactions& transactions) noexcept {
                                             validator_index_rlp,
                                             address_rlp,
                                             amount_rlp});
+            withdrawals_rlp_list_payload_size_ += record.size();
             trie.insert(rlp::encode_u64(i), std::move(record));
         }
         withdrawals_root_ = trie.root_hash();
