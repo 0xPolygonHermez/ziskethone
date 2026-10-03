@@ -176,14 +176,13 @@ fn main() -> Result<()> {
         // (255 bytes on macOS/ext4). EEST parametrized test names can exceed it,
         // which would fail `create_dir_all` with "File name too long". Keep a
         // readable prefix and append a deterministic hash of the full name for
-        // uniqueness.
-        if slug.len() > 200 {
-            use std::hash::{Hash, Hasher};
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            name.hash(&mut h);
-            slug.truncate(180);
-            slug.push_str(&format!("_{:016x}", h.finish()));
-        }
+        // uniqueness — always, since names differing only in non-alphanumerics
+        // (`…N+1]` vs `…N-1]`) share a slug and would overwrite each other.
+        slug.truncate(180);
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        name.hash(&mut h);
+        slug.push_str(&format!("_{:016x}", h.finish()));
         let test_dir = args.output_dir.join(&slug);
         std::fs::create_dir_all(&test_dir)
             .with_context(|| format!("creating {}", test_dir.display()))?;
