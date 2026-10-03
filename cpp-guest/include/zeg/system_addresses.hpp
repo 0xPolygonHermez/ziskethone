@@ -88,6 +88,11 @@ constexpr size_t   kMaxInitCodeSize           = 2 * 24576; // EIP-3860
 constexpr uint64_t kMaxTxGasLimit             = 1u << 24;  // EIP-7825 (Osaka)
 constexpr size_t   kMaxBlobsPerTx             = 6;         // EIP-7594 (Osaka)
 
+// keccak256(rlp([])): the ommers hash of every post-Merge block (EIP-3675).
+constexpr evmc::bytes32 kEmptyOmmersHash{{
+    0x1d, 0xcc, 0x4d, 0xe8, 0xde, 0xc7, 0x5d, 0x7a, 0xab, 0x85, 0xb5, 0x67, 0xb6, 0xcc, 0xd4, 0x1a,
+    0xd3, 0x12, 0x45, 0x1b, 0x94, 0x8a, 0x74, 0x13, 0xf0, 0xa1, 0x42, 0xfd, 0x40, 0xd4, 0x93, 0x47}};
+
 // EIP-7934 (Osaka): MAX_BLOCK_SIZE - SAFETY_MARGIN = 10 MiB - 2 MiB.
 constexpr size_t   kMaxRlpBlockSize           = 8'388'608;
 

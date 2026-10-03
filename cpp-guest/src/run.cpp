@@ -12,6 +12,7 @@
 
 #include "zeg/run.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -188,6 +189,46 @@ int run(const uint8_t* input, size_t len, uint8_t out[32]) {
     constexpr uint64_t kMinGasLimit = 5000;
     if (consensus.gas_limit() < kMinGasLimit) {
         zeg::fatal("gas_limit below the minimum (5000)");
+    }
+    // EIP-1985: gas limit <= 2^63 - 1.
+    if (consensus.gas_limit() > static_cast<uint64_t>(INT64_MAX)) {
+        zeg::fatal("gas_limit above the maximum (2^63 - 1)");
+    }
+
+    // 3.8 Header fields bound to the parent (execution-specs
+    //     validate_header / check_gas_limit): number, timestamp, and a
+    //     gas limit within 1/1024 of the parent's. At London's own
+    //     activation block the parent's limit is doubled first (EIP-1559
+    //     elasticity), detected like 3.6 by the parent's zero base fee.
+    {
+        const auto& parent = previous_blocks.at(0);
+        if (consensus.number() != parent.number() + 1) {
+            zeg::fatal("block number is not parent number + 1");
+        }
+        if (consensus.timestamp() <= parent.timestamp()) {
+            zeg::fatal("block timestamp is not after the parent's");
+        }
+        uint64_t parent_gas_limit = parent.gas_limit();
+        if (consensus.fork_id() >= zeg::ForkId::London &&
+            intx::be::load<intx::uint256>(parent.base_fee_per_gas()) == 0) {
+            parent_gas_limit *= 2;
+        }
+        const uint64_t max_delta = parent_gas_limit / 1024;
+        if (consensus.gas_limit() >= parent_gas_limit + max_delta ||
+            consensus.gas_limit() <= parent_gas_limit - max_delta) {
+            zeg::fatal("gas_limit differs from the parent's by 1/1024 or more");
+        }
+    }
+
+    // 3.9 Post-Merge (EIP-3675): the PoW header fields are constants —
+    //     difficulty 0, nonce 0, no ommers.
+    if (consensus.fork_id() >= zeg::ForkId::Paris) {
+        const auto nonce = consensus.nonce();
+        if (consensus.difficulty() != evmc::uint256be{} ||
+            std::any_of(nonce.begin(), nonce.end(), [](uint8_t b) { return b != 0; }) ||
+            consensus.ommers_hash() != zeg::kEmptyOmmersHash) {
+            zeg::fatal("post-Merge header has PoW fields set (difficulty, nonce or ommers)");
+        }
     }
 
     // 4. Build the Accounts/Storages tables and verify the pre-execution
