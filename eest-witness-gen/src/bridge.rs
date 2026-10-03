@@ -35,8 +35,8 @@ use std::sync::Arc;
 pub fn manifests_for_fixture(
     chain_spec: &Arc<ChainSpec>,
     test: &BlockchainTest,
-    executed: &[ExecutedBlock],
-) -> Result<Vec<ManifestSources>> {
+    executed: &[Option<ExecutedBlock>],
+) -> Result<Vec<Option<ManifestSources>>> {
     assert_eq!(test.blocks.len(), executed.len());
 
     let mut out = Vec::with_capacity(executed.len());
@@ -56,6 +56,10 @@ pub fn manifests_for_fixture(
     let mut ancestor_chain: Vec<Value> = vec![genesis_value];
 
     for (i, exec) in executed.iter().enumerate() {
+        let Some(exec) = exec else {
+            out.push(None);
+            continue;
+        };
         // (a) Snapshot pre-block state BEFORE applying this block's
         //     mutations, FILTERED to only addresses reth actually
         //     touched. EEST `pre` may include accounts the EVM
@@ -250,7 +254,7 @@ pub fn manifests_for_fixture(
         let mut ancestors = ancestor_chain.clone();
         ancestors.reverse();
 
-        out.push(ManifestSources {
+        out.push(Some(ManifestSources {
             current: current.clone(),
             parent,
             ancestors,
@@ -284,13 +288,18 @@ pub fn manifests_for_fixture(
                 .blob_params_at_timestamp(exec.block.header().timestamp())
                 .map(|p| p.max_blob_count * DATA_GAS_PER_BLOB)
                 .unwrap_or(0),
-        });
+        }));
 
         // (h) Apply post-state to running_prestate for the next iter.
         apply_bundle_to_prestate(&mut running_prestate, &exec.bundle_state);
 
-        // (i) Push current into ancestor chain (oldest-first).
-        ancestor_chain.push(current);
+        // (i) Push current into ancestor chain (oldest-first),
+        //     unless the fixture expects it rejected: invalid
+        //     blocks don't advance the chain (their bundle_state
+        //     is empty too, so (h) was a no-op).
+        if test.blocks[i].expect_exception.is_none() {
+            ancestor_chain.push(current);
+        }
     }
 
     Ok(out)

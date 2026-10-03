@@ -121,6 +121,10 @@ fn main() -> Result<()> {
     let mut total_blocks = 0usize;
     let mut hash_matches = 0usize;
     let mut written = 0usize;
+    // Fixtures that failed for a reason they don't expect. Any of
+    // them makes the process exit non-zero, so a sweep can't lose
+    // them.
+    let mut failed_fixtures = 0usize;
 
     for (name, test) in &fixture {
         info!(test = %name, network = %test.network, blocks = test.blocks.len(), "executing");
@@ -137,12 +141,14 @@ fn main() -> Result<()> {
             Ok(b) => b,
             Err(e) => {
                 tracing::error!(test = %name, "execution failed: {e:#}");
+                failed_fixtures += 1;
                 continue;
             }
         };
 
         for (i, b) in executed.iter().enumerate() {
             total_blocks += 1;
+            let Some(b) = b else { continue };
             let expected = test
                 .blocks
                 .get(i)
@@ -157,6 +163,7 @@ fn main() -> Result<()> {
             Ok(m) => m,
             Err(e) => {
                 tracing::error!(test = %name, "bridge failed: {e:#}");
+                failed_fixtures += 1;
                 continue;
             }
         };
@@ -182,6 +189,7 @@ fn main() -> Result<()> {
             .with_context(|| format!("creating {}", test_dir.display()))?;
 
         for (i, m) in manifests.iter().enumerate() {
+            let Some(m) = m else { continue };
             let path = test_dir.join(format!("block-{i}.json"));
             let json = serde_json::to_string(m)
                 .with_context(|| format!("serializing manifest {}", path.display()))?;
@@ -215,7 +223,9 @@ fn main() -> Result<()> {
         total_blocks,
         hash_matches,
         manifests_written = written,
+        failed_fixtures,
         "summary",
     );
+    anyhow::ensure!(failed_fixtures == 0, "{failed_fixtures} fixture(s) failed");
     Ok(())
 }
