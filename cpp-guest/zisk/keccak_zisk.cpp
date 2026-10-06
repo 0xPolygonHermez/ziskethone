@@ -25,15 +25,15 @@
 
 #include <evmone_precompiles/keccak.h>  // union ethash_hash256, signature
 
+#include "zeg/keccakf_cache.hpp"  // memo for repeated permutations, looked up by the executor
+
 namespace {
 
-// ZisK Keccak-f[1600] precompile. CSR 0x800 takes a pointer (in a register) to
-// the 25-word state and permutes it in place. Matches the ziskos_syscall! macro
-// (`csrs {port}, {value}`) and hello-zisk-c/zisk_cpp_howto.md §8.7.
-inline void syscall_keccakf(uint64_t* state /* &state[25] */) {
-    register unsigned long a0 asm("a0") = reinterpret_cast<unsigned long>(state);
-    asm volatile("csrs 0x800, %0" : : "r"(a0) : "memory");
-}
+// Every permutation goes through the memo rather than straight to the precompile: it is the
+// Keccak-f the guest runs, with an executor-side lookup for states already permuted folded
+// in. See zeg/keccakf_cache.hpp — in particular why believing the index it is handed is
+// sound.
+using zeg::keccakf_cache::zisk_keccakf;
 
 // Load 64 bits little-endian from a possibly-unaligned byte pointer.
 inline uint64_t load_le(const uint8_t* p) {
@@ -44,7 +44,7 @@ inline uint64_t load_le(const uint8_t* p) {
 
 // Keccak sponge for a 256-bit digest (rate r = 1600 - 2*256 = 1088 bits =
 // 136 bytes). Pad10*1 with the Keccak domain byte 0x01 and the 0x80 terminator.
-// Identical to evmone's static keccak(out, 256, …), with syscall_keccakf in
+// Identical to evmone's static keccak(out, 256, …), with zisk_keccakf in
 // place of the software permutation.
 void keccak256(uint64_t* out, const uint8_t* data, size_t size) {
     constexpr size_t word_size = sizeof(uint64_t);   // 8
@@ -58,7 +58,7 @@ void keccak256(uint64_t* out, const uint8_t* data, size_t size) {
             state[i] ^= load_le(data);
             data += word_size;
         }
-        syscall_keccakf(state);
+        zisk_keccakf(state);
         size -= block_size;
     }
 
@@ -84,7 +84,7 @@ void keccak256(uint64_t* out, const uint8_t* data, size_t size) {
 
     state[block_size / word_size - 1] ^= 0x8000000000000000ULL;  // 10*1 terminator.
 
-    syscall_keccakf(state);
+    zisk_keccakf(state);
 
     for (size_t i = 0; i < hash_size / word_size; ++i)
         out[i] = state[i];            // little-endian target: squeeze as-is.
