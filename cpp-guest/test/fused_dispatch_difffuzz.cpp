@@ -160,7 +160,13 @@ int main(int argc, char** argv)
 
     evmc::VM fused{evmc_create_evmone()};                 // dispatch_cgoto (patched)
     evmc::VM plain{evmc_create_evmone()};                 // plain switch dispatch
-    plain.set_option("cgoto", "no");
+    // Without cgoto support both VMs would run the switch dispatch, the
+    // fusions would never execute, and a clean run would prove nothing.
+    if (plain.set_option("cgoto", "no") != EVMC_SET_OPTION_SUCCESS)
+    {
+        std::fprintf(stderr, "evmone built without cgoto dispatch; nothing to compare\n");
+        return 2;
+    }
 
     const evmc_revision revs[] = {
         EVMC_BERLIN, EVMC_LONDON, EVMC_PARIS, EVMC_SHANGHAI, EVMC_CANCUN, EVMC_PRAGUE,
