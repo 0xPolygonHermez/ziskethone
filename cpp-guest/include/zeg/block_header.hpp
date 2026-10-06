@@ -60,7 +60,9 @@ struct BlockHeader {
 };
 
 // keccak256 of the canonical RLP encoding of `h`. Field order matches
-// the Yellow Paper (App. L) — any reorder produces a wrong hash.
-evmc::bytes32 compute_block_header_hash(const BlockHeader& h);
+// the Yellow Paper (App. L) — any reorder produces a wrong hash. If
+// `rlp_size` is given, it receives the encoding's size.
+evmc::bytes32 compute_block_header_hash(const BlockHeader& h,
+                                        std::size_t* rlp_size = nullptr);
 
 } // namespace zeg

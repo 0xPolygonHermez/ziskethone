@@ -113,8 +113,11 @@ rlp::Bytes encode_block_header_rlp(const BlockHeader& h) {
 
 } // namespace
 
-evmc::bytes32 compute_block_header_hash(const BlockHeader& h) {
+evmc::bytes32 compute_block_header_hash(const BlockHeader& h, std::size_t* rlp_size) {
     const auto rlp_bytes = encode_block_header_rlp(h);
+    if (rlp_size != nullptr) {
+        *rlp_size = rlp_bytes.size();
+    }
     return keccak256_bytes32(rlp_bytes.data(), rlp_bytes.size());
 }
 

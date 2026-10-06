@@ -47,7 +47,12 @@ inline size_t count_nonzero_bytes(std::span<const uint8_t> data) {
 // activates in Shanghai — pre-Shanghai EEST fixtures (Berlin/London/
 // Paris) would be over-charged otherwise, producing a state-root
 // divergence on every creation tx.
+//
+// If `calldata_floor` is given, it receives the EIP-7623 (Prague)
+// calldata floor, 21000 + 10 per token (tokens = zero_bytes +
+// 4 * non_zero_bytes), from the same non-zero-byte count.
 int64_t compute_intrinsic_gas(const Transactions::View& tx,
-                              bool is_shanghai_or_later);
+                              bool is_shanghai_or_later,
+                              int64_t* calldata_floor = nullptr);
 
 } // namespace zeg

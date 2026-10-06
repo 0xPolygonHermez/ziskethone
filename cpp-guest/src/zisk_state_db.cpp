@@ -1,5 +1,6 @@
 #include "zeg/zisk_state_db.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -792,6 +793,7 @@ void ZiskStateDB::execute_block(const Transactions& transactions) noexcept {
                                             validator_index_rlp,
                                             address_rlp,
                                             amount_rlp});
+            withdrawals_rlp_list_payload_size_ += record.size();
             trie.insert(rlp::encode_u64(i), std::move(record));
         }
         withdrawals_root_ = trie.root_hash();
@@ -1462,19 +1464,144 @@ evmc_tx_context ZiskStateDB::build_per_tx_context(
     return ctx;
 }
 
+int64_t ZiskStateDB::check_transaction(const Transactions::View& tx,
+                                       size_t sender_idx) noexcept {
+    using TxType = Transactions::Type;
+    const TxType type = tx.type();
+
+    // Tx type must be active at this fork (EIP-1559 / 4844 / 7702).
+    // EIP-7873 (type 5) isn't scheduled in any fork.
+    if ((type == TxType::DynamicFee && !is_london_or_later()) ||
+        (type == TxType::Blob && !is_cancun_or_later()) ||
+        (type == TxType::SetCode && !is_prague_or_later()) ||
+        type == TxType::Osaka) {
+        fatal("tx type not active at this fork");
+    }
+    // Chain id (execution-specs recover_sender): typed and EIP-155
+    // legacy txs must carry this chain's id; pre-EIP-155 legacy txs
+    // (v = 27 / 28) carry none and stay valid.
+    if (tx.chain_id() != kChainId &&
+        !(type == TxType::Legacy && tx.v_or_y_parity() < 35)) {
+        fatal("tx chain_id mismatch");
+    }
+
+    // ----- validate_transaction -----
+    // gas_limit must cover the intrinsic gas and (EIP-7623, Prague) the
+    // calldata floor.
+    const int64_t intrinsic_gas =
+        compute_intrinsic_gas(tx, is_shanghai_or_later(), &tx_floor_gas_);
+    const int64_t min_gas = is_prague_or_later()
+                                ? std::max(intrinsic_gas, tx_floor_gas_)
+                                : intrinsic_gas;
+    if (static_cast<int64_t>(tx.gas_limit()) < min_gas) {
+        fatal("tx gas_limit below intrinsic gas");
+    }
+    // EIP-7825 (Osaka): tx gas limit cap.
+    if (is_osaka_or_later() && tx.gas_limit() > kMaxTxGasLimit) {
+        fatal("tx gas_limit exceeds cap");
+    }
+    // EIP-2681: nonce < 2^64 - 1.
+    if (tx.nonce() == UINT64_MAX) {
+        fatal("tx nonce at maximum");
+    }
+    // EIP-3860: creation tx init code <= 2 * MAX_CODE_SIZE.
+    if (tx.to() == nullptr && is_shanghai_or_later() &&
+        tx.data().size() > kMaxInitCodeSize) {
+        fatal("tx init code exceeds size limit");
+    }
+
+    // ----- check_transaction -----
+    // The tx must fit in the block's remaining gas (cumulative_gas_used_
+    // covers the txs before this one).
+    if (tx.gas_limit() > consensus_.gas_limit() - cumulative_gas_used_) {
+        fatal("tx gas_limit exceeds block gas available");
+    }
+
+    const auto base_fee =
+        intx::be::load<intx::uint256>(consensus_.base_fee_per_gas());
+    const bool legacy_fee = type == TxType::Legacy || type == TxType::AccessList;
+    const auto fee_cap = intx::be::load<intx::uint256>(
+        legacy_fee ? tx.gas_price() : tx.max_fee_per_gas());
+    if (!legacy_fee &&
+        fee_cap < intx::be::load<intx::uint256>(tx.max_priority_fee_per_gas())) {
+        fatal("tx max_priority_fee_per_gas above max_fee_per_gas");
+    }
+    if (fee_cap < base_fee) {
+        fatal("tx fee cap below base fee");
+    }
+    // 512-bit: the fee fields are arbitrary 256-bit values and the
+    // spec's sums are unbounded.
+    intx::uint512 max_cost = intx::umul(intx::uint256{tx.gas_limit()}, fee_cap);
+
+    if (type == TxType::Blob) {
+        if (tx_context_.blob_hashes_count == 0) {
+            fatal("blob tx without blobs");
+        }
+        // EIP-7594 (Osaka): blob count per tx.
+        if (is_osaka_or_later() && tx_context_.blob_hashes_count > kMaxBlobsPerTx) {
+            fatal("blob tx exceeds blob count limit");
+        }
+        for (size_t i = 0; i < tx_context_.blob_hashes_count; ++i) {
+            if (tx_context_.blob_hashes[i].bytes[0] != kVersionedHashVersionKzg) {
+                fatal("blob versioned hash has wrong version");
+            }
+        }
+        // Block blob gas, already including this tx (build_per_tx_context).
+        if (blob_gas_used_ > consensus_.max_blob_gas_per_block()) {
+            fatal("block blob gas exceeds max");
+        }
+        const auto blob_fee_cap =
+            intx::be::load<intx::uint256>(tx.max_fee_per_blob_gas());
+        if (blob_fee_cap < intx::be::load<intx::uint256>(tx_context_.blob_base_fee)) {
+            fatal("tx max_fee_per_blob_gas below blob base fee");
+        }
+        max_cost += intx::umul(
+            intx::uint256{tx_context_.blob_hashes_count * kGasPerBlob}, blob_fee_cap);
+    }
+    if ((type == TxType::Blob || type == TxType::SetCode) && tx.to() == nullptr) {
+        fatal("blob / set-code tx cannot create a contract");
+    }
+    if (type == TxType::SetCode && tx.num_authorizations() == 0) {
+        fatal("set-code tx with empty authorization list");
+    }
+
+    if (tx.nonce() != accounts_.nonce_at(sender_idx)) {
+        fatal("tx nonce mismatch");
+    }
+    // The sender must cover the MAXIMUM fee plus the value. The value
+    // itself is moved later by `transfer_value`; without the `value`
+    // term the debit wraps mod 2^256 and mints ether.
+    max_cost += intx::be::load<intx::uint256>(tx.value());
+    if (intx::uint512{intx::be::load<intx::uint256>(accounts_.balance_at(sender_idx))} <
+        max_cost) {
+        fatal("tx sender balance below upfront cost");
+    }
+
+    // EIP-3607: the sender must not have code, except (Prague+) an
+    // EIP-7702 delegation designator (0xef0100 || address).
+    const auto sender_code_hash = accounts_.code_hash_at(sender_idx);
+    if (sender_code_hash != EMPTY_CODE_HASH) {
+        const auto& c = contracts_.by_hash(sender_code_hash);
+        const bool delegation = is_prague_or_later() && c.code_size == 23 &&
+                                c.code[0] == 0xef && c.code[1] == 0x01 &&
+                                c.code[2] == 0x00;
+        if (!delegation) {
+            fatal("tx sender has code");
+        }
+    }
+    return intrinsic_gas;
+}
+
 int64_t ZiskStateDB::apply_pre_evm_accounting(const Transactions::View& tx,
                                               size_t sender_idx) noexcept {
     using TxType = Transactions::Type;
+
+    const int64_t intrinsic_gas = check_transaction(tx, sender_idx);
 
     // EIP-161 / YP §6: sender nonce += 1, then debit upfront gas
     // (gas_limit × eff_gas_price + blob_gas × blob_base_fee). The
     // blob portion is burned. These changes are kept even if the EVM
     // frame reverts, matching mainnet semantics.
-    const int64_t intrinsic_gas = compute_intrinsic_gas(tx, is_shanghai_or_later());
-    if (static_cast<int64_t>(tx.gas_limit()) < intrinsic_gas) {
-        fatal("tx gas_limit below intrinsic gas");
-    }
-
     accounts_.set_nonce_at(sender_idx, accounts_.nonce_at(sender_idx) + 1,
                            tx_counter_);
 
@@ -1494,16 +1621,10 @@ int64_t ZiskStateDB::apply_pre_evm_accounting(const Transactions::View& tx,
         upfront_u += blob_gas_u * blob_fee_u;
     }
 
+    // No overflow / underflow: check_transaction bounded this by the
+    // balance (eff_gas_price <= fee cap, blob_base_fee <= blob fee cap).
     const auto bal_u =
         intx::be::load<intx::uint256>(accounts_.balance_at(sender_idx));
-    // Tx validity: sender must be able to cover the entire upfront
-    // cost (execution gas + blob fee + value would also count if not
-    // transferred separately by the EVM frame — here just upfront gas
-    // + blob, since value transfer is journaled inside the checkpoint
-    // taken by the caller).
-    if (bal_u < upfront_u) {
-        fatal("tx sender balance below upfront cost");
-    }
     accounts_.set_balance_at(sender_idx,
         intx::be::store<evmc::uint256be>(bal_u - upfront_u),
         tx_counter_);
@@ -1960,10 +2081,7 @@ uint64_t ZiskStateDB::settle_tx_gas(const Transactions::View& tx,
     // EIP-2565 minimum 200 gas; the floor would inflate the tx to
     // 25350 gas vs the canonical 22940).
     if (is_prague_or_later()) {
-        const auto data = tx.data();
-        const int64_t tokens = static_cast<int64_t>(data.size()) +
-                               static_cast<int64_t>(count_nonzero_bytes(data)) * 3;
-        const int64_t floor_gas = 21000 + tokens * 10;
+        const int64_t floor_gas = tx_floor_gas_;  // check_transaction
         if (gas_used < floor_gas) {
             gas_used = floor_gas;
         }
@@ -2137,7 +2255,13 @@ void ZiskStateDB::collect_withdrawal_requests() noexcept {
         fatal("EIP-7002: withdrawal system contract empty (invalid block)");
     }
     auto result = system_call(kWithdrawalRequestsAddress, {});
-    if (result.status_code != EVMC_SUCCESS || result.output_size == 0) {
+    // A failed call (revert, OOG, ...) also makes the block invalid
+    // (execution-specs process_checked_system_transaction,
+    // BlockException.SYSTEM_CONTRACT_CALL_FAILED).
+    if (result.status_code != EVMC_SUCCESS) {
+        fatal("EIP-7002: withdrawal system contract call failed (invalid block)");
+    }
+    if (result.output_size == 0) {
         return;
     }
     std::vector<uint8_t> req;
@@ -2162,7 +2286,11 @@ void ZiskStateDB::collect_consolidation_requests() noexcept {
         fatal("EIP-7251: consolidation system contract empty (invalid block)");
     }
     auto result = system_call(kConsolidationRequestsAddress, {});
-    if (result.status_code != EVMC_SUCCESS || result.output_size == 0) {
+    // Failed call ⇒ invalid block; see collect_withdrawal_requests().
+    if (result.status_code != EVMC_SUCCESS) {
+        fatal("EIP-7251: consolidation system contract call failed (invalid block)");
+    }
+    if (result.output_size == 0) {
         return;
     }
     std::vector<uint8_t> req;

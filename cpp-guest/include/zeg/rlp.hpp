@@ -103,6 +103,12 @@ inline std::size_t prepend(uint8_t* buf, std::size_t start, std::size_t end) {
 
 }  // namespace detail
 
+// Encoded size of a string or list item with a `payload_len`-byte payload.
+inline std::size_t item_size(std::size_t payload_len) {
+    uint8_t hdr[5];
+    return detail::make_header<0x80, 0xb7>(hdr, payload_len) + payload_len;
+}
+
 // Return how many bytes were written at `dst`.
 inline std::size_t write_string(uint8_t* dst, const uint8_t* src, std::size_t len) {
     if (len == 1 && src[0] < 0x80) {  // single byte < 0x80 encodes as itself
