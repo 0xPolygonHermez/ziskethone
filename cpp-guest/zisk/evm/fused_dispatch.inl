@@ -2,7 +2,8 @@
 //
 // Opcodes that always run back to back (PUSH2+JUMP, ISZERO+PUSH2+JUMPI, ...)
 // otherwise pay two dispatches, two gas checks and a 256-bit stack round-trip.
-// Running each pattern as a single step is worth 2-9% of a block's ZisK steps.
+// Running each pattern as a single step saves 1.4-2.2% of a block's ZisK steps
+// (1.0-1.7% of its cost), measured on five mainnet blocks on top of develop.
 //
 // Wiring: baseline_execution.cpp includes this file inside its anonymous
 // namespace above dispatch_cgoto and calls ZEG_TRY_FUSE from its ON_OPCODE

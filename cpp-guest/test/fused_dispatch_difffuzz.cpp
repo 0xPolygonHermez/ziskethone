@@ -33,6 +33,7 @@
 #include <cstdint>
 #include <cstring>
 #include <random>
+#include <utility>
 #include <vector>
 
 namespace
@@ -143,8 +144,12 @@ Out run(evmc::VM& vm, const Bytes& code, int64_t gas, evmc_revision rev)
     msg.recipient = evmc_address{{0x01}};
     msg.sender = evmc_address{{0x02}};
     const auto r = vm.execute(host, rev, msg, code.data(), code.size());
-    return {r.status_code, r.gas_left,
-        Bytes(r.output_data, r.output_data + r.output_size)};
+    // Most generated programs halt without output, and EVMC then hands back
+    // output_data == nullptr; build the empty Bytes explicitly.
+    Bytes output;
+    if (r.output_size != 0)
+        output.assign(r.output_data, r.output_data + r.output_size);
+    return {r.status_code, r.gas_left, std::move(output)};
 }
 }  // namespace
 
