@@ -331,7 +331,7 @@ impl Client {
             })
     }
 
-    /// Execution witness for block `number`, pinned to `hash`.
+    /// Execution witness for block `number`, whose anchored hash is `hash`.
     ///
     /// Returns the raw MPT nodes (`state`), deployed bytecodes
     /// (`codes`), and pre-image keys (`keys`). Sufficient for
@@ -339,16 +339,17 @@ impl Client {
     ///
     /// reth (≤ this project's compatible range) only exposes
     /// `debug_executionWitness(block_number)` — no `*ByHash`
-    /// variant exists. The caller passes the `number` it anchored
-    /// `hash` at, and we re-confirm `number → hash` right after the
-    /// witness call. If the canonical chain at `number` resolves to a
-    /// different hash by then, we surface `ReorgDetected` instead of
-    /// returning data from a stale fork.
+    /// variant exists. There is no post-witness `number → hash`
+    /// recheck (reth's input does none either): a reorg in the
+    /// window between the anchor and this call would pair the block
+    /// with a sibling's witness, and the guest, which recomputes
+    /// everything, then aborts or proves the (valid, orphaned) block —
+    /// wasted work, not a wrong proof. `hash` only labels a
+    /// not-found error as `ReorgDetected`.
     pub async fn execution_witness(&self, number: u64, hash: B256) -> Result<ExecutionWitness> {
-        // (a) Issue the by-number witness call. Deserialized straight into
-        // the typed struct: going through `serde_json::Value` first and
-        // hex-decoding per field cost ~40 ms on a 15-19 MB witness, against
-        // ~2 ms in one pass.
+        // Deserialized straight into the typed struct: going through
+        // `serde_json::Value` first and hex-decoding per field cost
+        // ~40 ms on a 15-19 MB witness, against ~2 ms in one pass.
         let block_hex = format!("0x{number:x}");
         let witness: ExecutionWitness = self
             .provider
@@ -361,29 +362,6 @@ impl Client {
                     "debug_executionWitness",
                 )
             })?;
-
-        // (b) Re-confirm canonical block at `number` still has our hash.
-        let post = self
-            .provider
-            .get_block_by_number(BlockNumberOrTag::Number(number))
-            .hashes()
-            .await
-            .with_context(|| format!("eth_getBlockByNumber({number}) post-witness"))?
-            .ok_or(ReorgDetected {
-                block: number,
-                expected: hash,
-                actual: None,
-                phase: "post-witness eth_getBlockByNumber",
-            })?;
-        if post.header.hash != hash {
-            return Err(ReorgDetected {
-                block: number,
-                expected: hash,
-                actual: Some(post.header.hash),
-                phase: "post-witness hash drifted",
-            }
-            .into());
-        }
 
         Ok(witness)
     }
