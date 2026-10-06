@@ -79,8 +79,13 @@ pub struct ExecutionWitness {
     pub state: Vec<Bytes>,
     pub codes: Vec<Bytes>,
     pub keys: Vec<Bytes>,
-    #[serde(default)]
+    /// reth-specific: absent or null on nodes that don't populate it.
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub headers: Vec<Bytes>,
+}
+
+fn null_as_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Bytes>, D::Error> {
+    Ok(Option::<Vec<Bytes>>::deserialize(d)?.unwrap_or_default())
 }
 
 /// Helper: wrap a `B256` block hash as the `BlockId` needed by
@@ -326,7 +331,7 @@ impl Client {
             })
     }
 
-    /// Execution witness for a block, pinned to `hash`.
+    /// Execution witness for block `number`, pinned to `hash`.
     ///
     /// Returns the raw MPT nodes (`state`), deployed bytecodes
     /// (`codes`), and pre-image keys (`keys`). Sufficient for
@@ -334,43 +339,18 @@ impl Client {
     ///
     /// reth (≤ this project's compatible range) only exposes
     /// `debug_executionWitness(block_number)` — no `*ByHash`
-    /// variant exists. We bracket the by-number call with two
-    /// hash lookups: resolve `hash → number` immediately before,
-    /// and re-confirm `number → hash` immediately after. If the
-    /// canonical chain at `number` ever resolves to a different
-    /// hash, we surface `ReorgDetected` instead of returning data
-    /// from a stale fork.
-    pub async fn execution_witness_by_hash(&self, hash: B256) -> Result<ExecutionWitness> {
-        // (a) Resolve hash → number. Confirms the hash is on the
-        // canonical chain right now; if the node already pruned this
-        // side branch we'll get "block not found", which we elevate
-        // to ReorgDetected so the caller retries cleanly.
-        let pre = self
-            .provider
-            .get_block_by_hash(hash)
-            .hashes()
-            .await
-            .map_err(|e| {
-                promote_not_found_to_reorg(
-                    anyhow::Error::from(e)
-                        .context(format!("eth_getBlockByHash({hash}) pre-witness")),
-                    hash,
-                    "pre-witness block_by_hash",
-                )
-            })?
-            .ok_or_else(|| {
-                anyhow::Error::new(ReorgDetected {
-                    block: 0,
-                    expected: hash,
-                    actual: None,
-                    phase: "pre-witness block_by_hash (Ok(None))",
-                })
-            })?;
-        let number = pre.header.number;
-
-        // (b) Issue the by-number witness call.
+    /// variant exists. The caller passes the `number` it anchored
+    /// `hash` at, and we re-confirm `number → hash` right after the
+    /// witness call. If the canonical chain at `number` resolves to a
+    /// different hash by then, we surface `ReorgDetected` instead of
+    /// returning data from a stale fork.
+    pub async fn execution_witness(&self, number: u64, hash: B256) -> Result<ExecutionWitness> {
+        // (a) Issue the by-number witness call. Deserialized straight into
+        // the typed struct: going through `serde_json::Value` first and
+        // hex-decoding per field cost ~40 ms on a 15-19 MB witness, against
+        // ~2 ms in one pass.
         let block_hex = format!("0x{number:x}");
-        let v: Value = self
+        let witness: ExecutionWitness = self
             .provider
             .raw_request("debug_executionWitness".into(), (block_hex,))
             .await
@@ -382,7 +362,7 @@ impl Client {
                 )
             })?;
 
-        // (c) Re-confirm canonical block at `number` still has our hash.
+        // (b) Re-confirm canonical block at `number` still has our hash.
         let post = self
             .provider
             .get_block_by_number(BlockNumberOrTag::Number(number))
@@ -405,15 +385,7 @@ impl Client {
             .into());
         }
 
-        Ok(ExecutionWitness {
-            state: decode_hex_array(&v, "state")?,
-            codes: decode_hex_array(&v, "codes")?,
-            keys: decode_hex_array(&v, "keys")?,
-            // `headers` is reth-specific and optional — absent on nodes that
-            // don't populate it; empty then, and the caller falls back to a
-            // per-ancestor fetch.
-            headers: decode_hex_array_opt(&v, "headers")?,
-        })
+        Ok(witness)
     }
 
     /// Fetch the node's chain id (`eth_chainId`).
@@ -451,34 +423,6 @@ impl Client {
                 )
             })
     }
-}
-
-/// Like `decode_hex_array` but returns an empty Vec when the field is
-/// absent or null (rather than erroring). For optional witness fields.
-fn decode_hex_array_opt(v: &Value, field: &'static str) -> Result<Vec<Bytes>> {
-    match v.get(field) {
-        None | Some(Value::Null) => Ok(Vec::new()),
-        Some(_) => decode_hex_array(v, field),
-    }
-}
-
-fn decode_hex_array(v: &Value, field: &'static str) -> Result<Vec<Bytes>> {
-    let arr = v
-        .get(field)
-        .ok_or_else(|| anyhow!("witness: missing `{}` field", field))?
-        .as_array()
-        .ok_or_else(|| anyhow!("witness: `{}` is not an array", field))?;
-    arr.iter()
-        .map(|x| {
-            let s = x
-                .as_str()
-                .ok_or_else(|| anyhow!("witness: `{}` item not string", field))?;
-            let s = s.strip_prefix("0x").unwrap_or(s);
-            let bytes =
-                hex::decode(s).with_context(|| format!("witness: decoding `{}` hex", field))?;
-            Ok(Bytes::from(bytes))
-        })
-        .collect()
 }
 
 // ----- prestate parsing ----------------------------------------------------

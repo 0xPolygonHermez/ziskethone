@@ -41,7 +41,9 @@ pub(crate) async fn fetch_offline_sources_online(
 
     // Witness first (a non-archive node prunes trie state within a few blocks
     // of head, so grab it before anything else). Sequential — no concurrency.
-    let witness = client.execution_witness_by_hash(block_hash).await?;
+    let witness = client
+        .execution_witness(current.header.number, block_hash)
+        .await?;
     info!(
         state_nodes = witness.state.len(),
         codes = witness.codes.len(),
@@ -124,7 +126,7 @@ pub(crate) async fn fetch_offline_sources_online(
     );
 
     // No separate end-of-run reorg reverify: with the block+witness-only
-    // path, the only RPC after the anchor is `execution_witness_by_hash`,
+    // path, the only RPC after the anchor is `execution_witness`,
     // which ALREADY re-confirms (step c) that the canonical block at
     // `number` still hashes to `block_hash` after fetching the witness —
     // covering the full reorg window. Nothing but a no-RPC ancestor build
