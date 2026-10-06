@@ -17,6 +17,7 @@ use std::collections::HashMap;
 
 use alloy::primitives::{Address, Bytes, B256, U256};
 use anyhow::{bail, Context, Result};
+use rayon::prelude::*;
 
 use crate::mpt::{self, hp_decode, keccak256, Rlp};
 use crate::writer::Writer;
@@ -61,7 +62,7 @@ enum ChildRef {
 /// accumulates the opcode stream and the leaf counts (which become the
 /// section header).
 struct Encoder<'a> {
-    nodes: &'a HashMap<[u8; 32], Vec<u8>>,
+    nodes: &'a HashMap<[u8; 32], &'a [u8]>,
     /// keccak(preimage) → preimage (addresses for the state trie, slots for
     /// storage tries). Only accessed keys have a preimage; keyless siblings
     /// stay `Op::PhantomLeaf`.
@@ -83,13 +84,15 @@ pub fn write(
     witness_nodes: &[Bytes],
     witness_keys: &[Bytes],
 ) -> Result<()> {
-    let mut nodes: HashMap<[u8; 32], Vec<u8>> = HashMap::with_capacity(witness_nodes.len());
-    for raw in witness_nodes {
-        if raw.len() < 32 {
-            continue;
-        }
-        nodes.insert(keccak256(raw), raw.to_vec());
-    }
+    // Hashing every witness node is most of this function's time and each
+    // hash is independent, so spread it over the cores.
+    let hashed: Vec<([u8; 32], &[u8])> = witness_nodes
+        .par_iter()
+        .filter(|raw| raw.len() >= 32)
+        .map(|raw| (keccak256(raw), raw.as_ref()))
+        .collect();
+    let mut nodes: HashMap<[u8; 32], &[u8]> = HashMap::with_capacity(hashed.len());
+    nodes.extend(hashed);
     let mut preimages: HashMap<[u8; 32], Vec<u8>> = HashMap::with_capacity(witness_keys.len());
     for key in witness_keys {
         preimages.insert(keccak256(key), key.to_vec());
@@ -109,9 +112,7 @@ pub fn write(
     w.u64_le(enc.n_nodes);
     w.u64_le(enc.n_accounts);
     w.u64_le(enc.n_storages);
-    for byte in &enc.out {
-        w.u8(*byte);
-    }
+    w.bytes(&enc.out);
     w.assert_aligned();
     Ok(())
 }
@@ -209,11 +210,8 @@ impl<'a> Encoder<'a> {
                 self.n_nodes += 1;
                 put_op(&mut self.out, Op::Empty);
             }
-            ChildRef::Hash(h) => match self.nodes.get(&h) {
-                Some(raw) => {
-                    let raw = raw.clone();
-                    self.emit_node(walked, &raw, kind)?;
-                }
+            ChildRef::Hash(h) => match self.nodes.get(&h).copied() {
+                Some(raw) => self.emit_node(walked, raw, kind)?,
                 None => {
                     // Subtree the witness only references by hash → opaque.
                     self.n_nodes += 1;
@@ -245,11 +243,8 @@ impl<'a> Encoder<'a> {
             ChildRef::Empty => self.n_nodes += 1,
             ChildRef::Inline(bytes) => self.emit_node(walked, &bytes, kind)?,
             ChildRef::Hash(h) if h == EMPTY_TRIE_ROOT => self.n_nodes += 1,
-            ChildRef::Hash(h) => match self.nodes.get(&h) {
-                Some(raw) => {
-                    let raw = raw.clone();
-                    self.emit_node(walked, &raw, kind)?;
-                }
+            ChildRef::Hash(h) => match self.nodes.get(&h).copied() {
+                Some(raw) => self.emit_node(walked, raw, kind)?,
                 None => {
                     self.n_nodes += 1;
                     self.out.extend_from_slice(&h);
