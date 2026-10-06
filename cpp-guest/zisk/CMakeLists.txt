@@ -98,6 +98,19 @@ set(EVM_BACKEND "evmone" CACHE STRING "EVM implementation: evmone | zevm")
 if(EVM_BACKEND STREQUAL "zevm")
   list(FILTER GUEST_SRC EXCLUDE REGEX "/evmc2_evmone\\.cpp$")
   file(GLOB ZEVM_SRC ${GUEST_ROOT}/src/zevm/*.cpp ${GUEST_ROOT}/src/zevm/instructions/*.cpp)
+
+  # zevm dispatches with a 140-case switch, so -fno-jump-tables (in
+  # ZEG_GUEST_OPT, where it is worth -1.58% area to evmone) turns it into a
+  # binary tree of comparisons: 7-8 branches per opcode instead of one indexed
+  # jump. Measured on block 25701329, that tree costs 47% of the dispatch loop —
+  # `bne`+`bltu`+`bgeu`+`li` alone are 89.6M of its 189M steps — and the whole
+  # backend +3.42% area. evmone never notices the flag because its computed goto
+  # is a hand-written label table, not a switch GCC has to lower.
+  #
+  # So the flag is right globally and wrong for this one file: put the jump
+  # table back where the switch lives.
+  set_source_files_properties(${GUEST_ROOT}/src/zevm/zevm.cpp
+                              PROPERTIES COMPILE_OPTIONS "-fjump-tables")
   list(APPEND GUEST_SRC ${ZEVM_SRC})
 endif()
 message(STATUS "EVM backend: ${EVM_BACKEND}")
