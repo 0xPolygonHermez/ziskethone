@@ -99,10 +99,10 @@ public:
     // `nib`; `update_value` (new-root pass) recomputes it ONLY if the slot
     // value changed. Both return a pointer to the row's cached union.
     const NodeR* build_value(size_t idx,
-                             std::span<const uint8_t> nib,
+                             const PackedPath& nib,
                              const evmc::bytes32& pos_hash);
     const NodeR* update_value(size_t idx,
-                              std::span<const uint8_t> nib);
+                              const PackedPath& nib);
 
     const NodeR* cached_at(size_t idx) const noexcept { return &leaf_[idx].cached; }
     const evmc::bytes32& pos_hash_at(size_t idx) const noexcept { return leaf_[idx].pos_hash; }
