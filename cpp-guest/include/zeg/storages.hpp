@@ -26,6 +26,7 @@
 
 #include <evmc/evmc.hpp>
 
+#include "zeg/zisk_dma.hpp"
 #include "zeg/trie_node.hpp"
 
 namespace zeg {
@@ -98,10 +99,10 @@ public:
     // `nib`; `update_value` (new-root pass) recomputes it ONLY if the slot
     // value changed. Both return a pointer to the row's cached union.
     const NodeR* build_value(size_t idx,
-                             std::span<const uint8_t> nib,
+                             const PackedPath& nib,
                              const evmc::bytes32& pos_hash);
     const NodeR* update_value(size_t idx,
-                              std::span<const uint8_t> nib);
+                              const PackedPath& nib);
 
     const NodeR* cached_at(size_t idx) const noexcept { return &leaf_[idx].cached; }
     const evmc::bytes32& pos_hash_at(size_t idx) const noexcept { return leaf_[idx].pos_hash; }
@@ -114,6 +115,18 @@ public:
     bool value_unchanged_at(size_t idx) const noexcept {
         return value_orig_at(idx) == value_at(idx);
     }
+
+    // Sentinel returned by `find` for a slot that is not in the table.
+    static constexpr size_t npos = static_cast<size_t>(-1);
+
+    // Single-probe lookup: the array index of (addr, position), or `npos`.
+    //
+    // Prefer this over `contains` followed by `index_of`: each of those is a
+    // full probe — build a 56-byte Key on the stack, hash it, take the bucket
+    // modulo, walk the chain, compare 56 bytes — so asking both questions
+    // about one slot pays for the same work twice.
+    size_t find(const evmc::address& addr,
+                const evmc::bytes32& position) const noexcept;
 
     // Look up the array index of (addr, position). Aborts the guest via
     // zeg::fatal if the slot isn't in the table — the guest is supposed
@@ -241,7 +254,8 @@ private:
     };
     struct KeyEq {
         bool operator()(const Key& x, const Key& y) const noexcept {
-            return std::memcmp(&x, &y, sizeof(x)) == 0;
+            // 56 bytes, constant: one precompile op instead of a call.
+            return zeg::zisk::zisk_xmemcmp<sizeof(x)>(&x, &y) == 0;
         }
     };
 
