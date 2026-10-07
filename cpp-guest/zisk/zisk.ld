@@ -3,8 +3,13 @@
  * upstream instead of hand-maintained, so it can be re-diffed against the
  * pinned zisk repo on any future toolchain bump.
  *
- * ONE deviation from upstream: the `text` segment is FLAGS(1) (execute-only),
- * not FLAGS(5) (execute-and-read) — see the PHDRS block below. */
+ * Two deviations from upstream:
+ *  - the `text` segment is FLAGS(1) (execute-only), not FLAGS(5)
+ *    (execute-and-read) — see the PHDRS block below;
+ *  - each output section also gathers its .gnu.linkonce.* counterpart. A GCC
+ *    configured without COMDAT support emits those in place of COMDAT
+ *    .text.* and .bss.* groups, and an uncollected linkonce .bss became an
+ *    orphan placed at _heap_bottom, overlapping the heap. */
 
 OUTPUT_FORMAT("elf64-littleriscv")
 OUTPUT_ARCH("riscv")
@@ -86,11 +91,11 @@ _float_ram_data_size         = 0x10000;   /* 64 KB reserved */
 
 SECTIONS
 {
-  .text : { *(.text.init) *(.text .text.*)} >rom AT>rom :text
+  .text : { *(.text.init) *(.text .text.* .gnu.linkonce.t.*)} >rom AT>rom :text
 
   . = ALIGN(8);
   PROVIDE(_global_pointer = .);
-  .rodata : { *(.rodata .rodata.*)} >rom AT>rom :rodata
+  .rodata : { *(.rodata .rodata.* .gnu.linkonce.r.*)} >rom AT>rom :rodata
 
   /* C++ static constructors / destructors (run by _start before/after main),
      placed in ROM: the entries are link-time-constant function pointers, never
@@ -148,11 +153,11 @@ SECTIONS
     PROVIDE(_output_data_end = .);
   } >ram AT>ram :output_data
 
-  .data : { *(.data .data.* .sdata .sdata.*) } >ram AT>ram :data
+  .data : { *(.data .data.* .sdata .sdata.* .gnu.linkonce.d.* .gnu.linkonce.s.*) } >ram AT>ram :data
 
   .bss : {
     PROVIDE(_bss_start = .);
-    *(.bss .bss.* .sbss .sbss.*);
+    *(.bss .bss.* .sbss .sbss.* .gnu.linkonce.b.* .gnu.linkonce.sb.*);
     PROVIDE(_bss_end = .); # ... and one at the end
   } >ram AT>ram :bss
 
