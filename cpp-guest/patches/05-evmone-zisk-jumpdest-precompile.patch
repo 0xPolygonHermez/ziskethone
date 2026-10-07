@@ -1,0 +1,75 @@
+diff --git a/lib/evmone/baseline_analysis.cpp b/lib/evmone/baseline_analysis.cpp
+index 13d0dbc1..4863a658 100644
+--- a/lib/evmone/baseline_analysis.cpp
++++ b/lib/evmone/baseline_analysis.cpp
+@@ -6,6 +6,10 @@
+ #include "instructions.hpp"
+ #include <memory>
+ 
++#if defined(ZEG_ZISK)
++#include <evm/jump_dest_bitmap.hpp>  // zeg::evm::jump_dest_bitmap (CSR 0x81C)
++#endif
++
+ namespace evmone::baseline
+ {
+ static_assert(std::is_move_constructible_v<CodeAnalysis>);
+@@ -15,7 +19,7 @@ static_assert(!std::is_copy_assignable_v<CodeAnalysis>);
+ 
+ namespace
+ {
+-void analyze_jumpdests(BitsetSpan map, bytes_view code) noexcept
++void analyze_jumpdests_sw(BitsetSpan map, bytes_view code) noexcept
+ {
+     // To find if op is any PUSH opcode (OP_PUSH1 <= op <= OP_PUSH32)
+     // it can be noticed that OP_PUSH32 is INT8_MAX (0x7f) therefore,
+@@ -45,6 +49,32 @@ void analyze_jumpdests(BitsetSpan map, bytes_view code) noexcept
+     }
+ }
+ 
++#if defined(ZEG_JUMPDEST_PRECOMPILE)
++void analyze_jumpdests(BitsetSpan map, bytes_view code) noexcept
++{
++    // ZisK: the walk above collapses into one jump_dest_bitmap op (CSR 0x81C),
++    // which writes ceil(size/64) words in the very layout BitsetSpan reads — same
++    // bits, same PUSH-data skipping — so check_jumpdest is unchanged.
++    if (code.empty())
++        return;  // no bitmap word to fill, and nothing to scan
++
++    // The precompile reads and writes whole aligned 64-bit words, so it is only
++    // provable when both pointers are 8-byte aligned. Here they are, by
++    // construction: `map` sits at an alignof(word_type) offset into the analysis
++    // buffer, and `code` is the padded copy rather than the caller's bytecode (see
++    // analyze_legacy). The check stays anyway — it costs two instructions against
++    // a whole-contract walk, and the alternative to catching a stray unaligned
++    // call here is an ELF that emulates fine and cannot be proven.
++    if (!zeg::evm::jump_dest_bitmap_usable(map.m_array, code.data(), code.size()))
++    {
++        analyze_jumpdests_sw(map, code);
++        return;
++    }
++
++    zeg::evm::jump_dest_bitmap(map.m_array, code.data(), code.size());
++}
++#endif
++
+ CodeAnalysis analyze_legacy(bytes_view code)
+ {
+     // We need at most 33 bytes of code padding: 32 for possible missing all data bytes of
+@@ -67,7 +97,16 @@ CodeAnalysis analyze_legacy(bytes_view code)
+     const auto bitset_storage =
+         new (&storage[aligned_code_size]) BitsetSpan::word_type[bitset_words];
+     const BitsetSpan jumpdest_bitset{bitset_storage};
+-    analyze_jumpdests(jumpdest_bitset, code);
++#if defined(ZEG_JUMPDEST_PRECOMPILE)
++    // Analyze the copy just made above, not the caller's buffer: it is identical
++    // byte for byte, but 8-byte aligned and followed by >= PADDING zero bytes, so
++    // the precompile's word-granular reads are both in bounds and provable.
++    // Contract bytecode itself points straight into the private input buffer at
++    // whatever offset the witness put it, so its alignment is not guaranteed.
++    analyze_jumpdests(jumpdest_bitset, bytes_view{storage.get(), code.size()});
++#else
++    analyze_jumpdests_sw(jumpdest_bitset, code);
++#endif
+ 
+     return {std::move(storage), code.size(), jumpdest_bitset};
+ }

@@ -35,26 +35,105 @@ namespace zeg {
 
 // ----- node-result variant --------------------------------------------------
 
+// A trie path stored the way the encoder consumes it: packed two nibbles per
+// byte, plus which half of the first byte the path starts at.
+//
+// The one-nibble-per-byte form this replaces existed for a single operation —
+// the fold prepends the branch nibble to its only child's path on the way up —
+// and that operation costs 0.02% of a block while unpacking and repacking
+// around it cost 3.8%. Packed, the prepend is still O(1): with the first nibble
+// in the low half there is already room above it, and otherwise the path grows
+// one byte towards the front, which is why the bytes sit at the END of the
+// buffer and `start` walks backwards.
+//
+// `off` and the nibble count keep the parity the hex-prefix encoder wants,
+// for free: a leaf path is the last 64-depth nibbles of a key, so it starts at
+// half `depth % 2` and has `64 - depth` nibbles — same parity, 64 being even —
+// and each prepend flips both. When they do match, encoding is a copy; when
+// they do not (an extension path read from the witness at an arbitrary length)
+// the encoder shifts, which is what the old representation did for every path.
+struct PackedPath {
+    static constexpr std::size_t kMaxNibbles = 64;
+    // 33 bytes is the widest a 64-nibble path can span (an odd start adds one),
+    // and the tail never moves, so growing to the front can never reach byte 0.
+    static constexpr std::size_t kCap = 34;
+
+    uint8_t buf[kCap];
+    uint8_t start = kCap;  // first byte in use
+    uint8_t off   = 0;     // 0: first nibble in the high half of buf[start], 1: low
+    uint8_t len   = 0;     // nibbles
+
+    std::size_t size()  const noexcept { return len; }
+    bool        empty() const noexcept { return len == 0; }
+    // Bytes the packed nibbles span, including a half-used first byte.
+    std::size_t bytes() const noexcept { return (std::size_t{off} + len + 1) / 2; }
+    const uint8_t* data() const noexcept { return buf + start; }
+    // True when the packing already has the parity hex_prefix wants.
+    bool aligned_for_hp() const noexcept { return off == (len & 1U); }
+
+    uint8_t at(std::size_t i) const noexcept {
+        const std::size_t p = std::size_t{off} + i;
+        const uint8_t b = buf[start + p / 2];
+        return static_cast<uint8_t>((p & 1U) ? (b & 0x0f) : (b >> 4));
+    }
+
+    void prepend(uint8_t nib) {
+        if (off) {  // room in the high half of the leading byte
+            buf[start] = static_cast<uint8_t>((nib << 4) | (buf[start] & 0x0f));
+            off = 0;
+        } else {    // take one more byte at the front
+            if (start == 0) {
+                fatal("PackedPath: prepend past the 64-nibble capacity");
+            }
+            --start;
+            buf[start] = static_cast<uint8_t>(nib & 0x0f);
+            off = 1;
+        }
+        ++len;
+    }
+
+    // Drop the first `k` nibbles — the phantom-leaf shortening in split_leaf.
+    void drop_front(std::size_t k) noexcept {
+        const std::size_t p = std::size_t{off} + k;
+        start = static_cast<uint8_t>(start + p / 2);
+        off   = static_cast<uint8_t>(p & 1U);
+        len   = static_cast<uint8_t>(len - k);
+    }
+
+    // Anchor `n` nibbles starting at half `first_off` of `src` at the end of the
+    // buffer, so every later prepend fits in front.
+    void assign(const uint8_t* src, std::size_t first_off, std::size_t n) {
+        if (n > kMaxNibbles) {
+            fatal("PackedPath: path longer than 64 nibbles");
+        }
+        const std::size_t nbytes = (first_off + n + 1) / 2;
+        start = static_cast<uint8_t>(kCap - nbytes);
+        off   = static_cast<uint8_t>(first_off);
+        len   = static_cast<uint8_t>(n);
+        std::memcpy(buf + start, src, nbytes);
+    }
+};
+
 struct EmptyR {};
 struct HashR  { evmc::bytes32 hash; };
 struct ExtR   {
-    std::vector<uint8_t> ext_nibbles;  // one nibble per byte
-    evmc::bytes32        hash;
+    PackedPath    ext_nibbles;
+    evmc::bytes32 hash;
 };
 struct AccountLeafR {
-    std::vector<uint8_t> path_nibbles;
+    PackedPath           path_nibbles;
     std::size_t          account_idx;
     evmc::bytes32        storage_root;
 };
 struct StorageLeafR {
-    std::vector<uint8_t> path_nibbles;
+    PackedPath           path_nibbles;
     std::size_t          storage_idx;
 };
 /// Keyless sibling leaf carried inline via `Op::PhantomLeaf` (Reth omitted
 /// its keccak preimage). `value_rlp` is the leaf's raw inner value bytes;
 /// it is wrapped in HP + RLP at pack time.
 struct PhantomLeafR {
-    std::vector<uint8_t> path_nibbles;
+    PackedPath           path_nibbles;
     std::vector<uint8_t> value_rlp;
 };
 
@@ -132,46 +211,19 @@ inline uint8_t nibble_at(const evmc::bytes32& key_hash, std::size_t i) {
     return static_cast<uint8_t>((i % 2 == 0) ? (b >> 4) : (b & 0x0f));
 }
 
-// Build the leaf path: the remaining nibbles of `key_hash` from `depth`.
-// A trie path is at most 64 nibbles, so it is expanded into an inline buffer
-// (same reasoning as HpBytes) rather than a heap vector: this runs once per leaf
-// in both trie passes, and the result is copied into the node's own storage
-// immediately afterwards.
-struct NibblePath {
-    static constexpr std::size_t kMax = 64;
-
-    uint8_t buf[kMax];
-    uint8_t len = 0;
-
-    const uint8_t* data()  const noexcept { return buf; }
-    std::size_t    size()  const noexcept { return len; }
-    const uint8_t* begin() const noexcept { return buf; }
-    const uint8_t* end()   const noexcept { return buf + len; }
-};
-
-inline NibblePath nibbles_from(const evmc::bytes32& key_hash, std::size_t depth) {
-    // Not a caller precondition: `64 - depth` would wrap and leave `len` past
-    // the buffer, and the walk that bounds `depth` is in another file.
-    if (depth > NibblePath::kMax) {
-        fatal("nibbles_from: trie depth beyond the 64-nibble key");
+// The leaf path at `depth`: the key's remaining nibbles, packed. No unpacking
+// at all — the tail of the key is already the packed form, so this is a copy of
+// at most 32 bytes where the nibble-per-byte version wrote 64 bytes one at a
+// time. `depth % 2` is where the first nibble sits inside the first byte.
+inline PackedPath path_from_key(const evmc::bytes32& key_hash, std::size_t depth) {
+    if (depth > PackedPath::kMaxNibbles) {
+        fatal("path_from_key: trie depth beyond the 64-nibble key");
     }
-
-    NibblePath out;
-    out.len = static_cast<uint8_t>(NibblePath::kMax - depth);
-
-    uint8_t* p = out.buf;
-    std::size_t i = depth;
-    if (i & 1) {  // an odd depth starts mid-byte
-        *p++ = static_cast<uint8_t>(key_hash.bytes[i >> 1] & 0x0f);
-        ++i;
-    }
-    for (; i < NibblePath::kMax; i += 2) {  // then two nibbles per byte
-        const uint8_t b = key_hash.bytes[i >> 1];
-        p[0] = static_cast<uint8_t>(b >> 4);
-        p[1] = static_cast<uint8_t>(b & 0x0f);
-        p += 2;
-    }
+    PackedPath out;
+    out.assign(key_hash.bytes + depth / 2, depth & 1U,
+               PackedPath::kMaxNibbles - depth);
     return out;
 }
+
 
 } // namespace zeg

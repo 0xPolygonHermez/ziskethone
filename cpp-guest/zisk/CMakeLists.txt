@@ -98,6 +98,19 @@ set(EVM_BACKEND "evmone" CACHE STRING "EVM implementation: evmone | zevm")
 if(EVM_BACKEND STREQUAL "zevm")
   list(FILTER GUEST_SRC EXCLUDE REGEX "/evmc2_evmone\\.cpp$")
   file(GLOB ZEVM_SRC ${GUEST_ROOT}/src/zevm/*.cpp ${GUEST_ROOT}/src/zevm/instructions/*.cpp)
+
+  # zevm dispatches with a 140-case switch, so -fno-jump-tables (in
+  # ZEG_GUEST_OPT, where it is worth -1.58% area to evmone) turns it into a
+  # binary tree of comparisons: 7-8 branches per opcode instead of one indexed
+  # jump. Measured on block 25701329, that tree costs 47% of the dispatch loop —
+  # `bne`+`bltu`+`bgeu`+`li` alone are 89.6M of its 189M steps — and the whole
+  # backend +3.42% area. evmone never notices the flag because its computed goto
+  # is a hand-written label table, not a switch GCC has to lower.
+  #
+  # So the flag is right globally and wrong for this one file: put the jump
+  # table back where the switch lives.
+  set_source_files_properties(${GUEST_ROOT}/src/zevm/zevm.cpp
+                              PROPERTIES COMPILE_OPTIONS "-fjump-tables")
   list(APPEND GUEST_SRC ${ZEVM_SRC})
 endif()
 message(STATUS "EVM backend: ${EVM_BACKEND}")
@@ -211,11 +224,19 @@ if(ZEG_ZISK_DMA)
   message(STATUS "ZisK DMA lowering: ON (-mzisk-dma)")
 endif()
 
+# JUMPDEST analysis: by default both backends offload it to the jump_dest_bitmap
+# precompile (CSR 0x81C, one op per contract — see evm/jump_dest_bitmap.hpp,
+# evmone patch 05 and zevm's build_jumpdest_bitset). ON restores the software
+# byte walk in both, for A/B step counts and as a fallback if the precompile is
+# unavailable in the pinned toolchain.
+option(ZEG_JUMPDEST_SW "Use the software JUMPDEST analysis (no jump_dest_bitmap precompile)" OFF)
+
 target_compile_definitions(zisk_eth_guest.elf PRIVATE
   ZEG_ZISK
   $<$<STREQUAL:${EVM_BACKEND},zevm>:USE_ZEVM>
   $<$<BOOL:${ZEG_SECP256K1_SW}>:ZEG_SECP256K1_SW>
   $<$<BOOL:${ZEG_BSWAP_BUILTIN}>:ZEG_BSWAP_BUILTIN>
+  $<$<BOOL:${ZEG_JUMPDEST_SW}>:ZEG_JUMPDEST_SW>
   PROJECT_VERSION="0.21.0")          # normally injected by evmone's CMake
 target_compile_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
 target_link_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
