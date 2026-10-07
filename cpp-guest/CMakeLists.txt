@@ -46,6 +46,12 @@ endif()
 #       precompiles instead of intx's software bigint (the analogue of reth's
 #       ruint patch). Gated on ZEG_ZISK, so the host build keeps intx and
 #       stays the independent reference for the host-vs-guest comparison.
+#   04: Walk a pointer, not an index, in analyze_jumpdests — the software
+#       JUMPDEST analysis both builds still use (host always; ZisK when 05 is
+#       compiled out via -DZEG_JUMPDEST_SW=ON).
+#   05: Replace that walk with the ZisK jump_dest_bitmap precompile (CSR 0x81C),
+#       one op per contract instead of a byte walk. Applies on top of 04 and is
+#       likewise gated on ZEG_ZISK, so the host keeps the software reference.
 # Each patch is checked with `git apply --reverse --check` first; if it
 # is already applied we skip — that keeps the configure step idempotent
 # across rebuilds.
@@ -54,6 +60,7 @@ set(_evmone_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/02-evmone-delegation-eoa-fastpath.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/03-evmone-zisk-arith256-mulmod.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/04-evmone-zisk-jumpdest-pointer-walk.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/05-evmone-zisk-jumpdest-precompile.patch"
 )
 find_program(GIT_EXECUTABLE git REQUIRED)
 foreach(_patch IN LISTS _evmone_patches)

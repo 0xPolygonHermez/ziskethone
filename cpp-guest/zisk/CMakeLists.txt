@@ -188,11 +188,19 @@ option(ZEG_SECP256K1_SW "Use the software secp256k1 baseline (no accelerators)" 
 # shortcut-preserving default — expect it to lose on zero-heavy blocks.
 option(ZEG_BSWAP_BUILTIN "Use plain __builtin_bswap64 (no zero-shortcut) instead of the default shortcut-preserving rev8" OFF)
 
+# JUMPDEST analysis: by default both backends offload it to the jump_dest_bitmap
+# precompile (CSR 0x81C, one op per contract — see evm/jump_dest_bitmap.hpp,
+# evmone patch 05 and zevm's build_jumpdest_bitset). ON restores the software
+# byte walk in both, for A/B step counts and as a fallback if the precompile is
+# unavailable in the pinned toolchain.
+option(ZEG_JUMPDEST_SW "Use the software JUMPDEST analysis (no jump_dest_bitmap precompile)" OFF)
+
 target_compile_definitions(zisk_eth_guest.elf PRIVATE
   ZEG_ZISK
   $<$<STREQUAL:${EVM_BACKEND},zevm>:USE_ZEVM>
   $<$<BOOL:${ZEG_SECP256K1_SW}>:ZEG_SECP256K1_SW>
   $<$<BOOL:${ZEG_BSWAP_BUILTIN}>:ZEG_BSWAP_BUILTIN>
+  $<$<BOOL:${ZEG_JUMPDEST_SW}>:ZEG_JUMPDEST_SW>
   PROJECT_VERSION="0.21.0")          # normally injected by evmone's CMake
 target_compile_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
 target_link_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
