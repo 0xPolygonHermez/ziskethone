@@ -10,8 +10,8 @@ use crate::offline::OfflineSources;
 use crate::rpc;
 
 /// Live-RPC adapter: fetch everything `OfflineSources` needs from
-/// the node, with all the reorg-safety guarantees (hash pinning, the
-/// witness's own post-fetch canonical recheck). Ancestors come solely
+/// the node: the block, then its execution witness, the same two
+/// calls reth's input makes. Ancestors come solely
 /// from `witness.headers` — no RPC ancestor walk. Returns a fully
 /// resolved bundle that `offline::build_binary` can encode without
 /// further network access.
@@ -25,11 +25,10 @@ pub(crate) async fn fetch_offline_sources_online(
 ) -> Result<OfflineSources> {
     // ---- (1) Discover the canonical anchor hash ----
     //
-    // Single by-number call in the whole run. From this point on,
-    // every subsequent RPC is pinned to `block_hash` or `parent_hash`,
-    // so a mid-run reorg cannot silently corrupt our data — it shows
-    // up either as an RPC error (hash no longer canonical & pruned)
-    // or as the end-of-run reverify catching a hash drift.
+    // The parent is then recovered from the witness by `parent_hash`.
+    // Nothing rechecks the anchor after the witness call; see
+    // `rpc::Client::execution_witness` for why a reorg in between is
+    // tolerated.
     let current = client.block_by_number_full(block).await?;
     let block_hash: B256 = current.header.hash;
     let parent_hash: B256 = current.header.parent_hash;
@@ -41,7 +40,9 @@ pub(crate) async fn fetch_offline_sources_online(
 
     // Witness first (a non-archive node prunes trie state within a few blocks
     // of head, so grab it before anything else). Sequential — no concurrency.
-    let witness = client.execution_witness_by_hash(block_hash).await?;
+    let witness = client
+        .execution_witness(current.header.number, block_hash)
+        .await?;
     info!(
         state_nodes = witness.state.len(),
         codes = witness.codes.len(),
@@ -122,15 +123,6 @@ pub(crate) async fn fetch_offline_sources_online(
         count = ancestors.len(),
         "built ancestor set (block+witness only)"
     );
-
-    // No separate end-of-run reorg reverify: with the block+witness-only
-    // path, the only RPC after the anchor is `execution_witness_by_hash`,
-    // which ALREADY re-confirms (step c) that the canonical block at
-    // `number` still hashes to `block_hash` after fetching the witness —
-    // covering the full reorg window. Nothing but a no-RPC ancestor build
-    // happens afterward, so a second `block_by_number_full` here would be
-    // redundant (it duplicated the witness call's recheck) and only added a
-    // round-trip. The anchor pin + the witness recheck are the guarantees.
 
     Ok(OfflineSources {
         current,

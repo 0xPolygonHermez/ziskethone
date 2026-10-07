@@ -11,6 +11,7 @@ use alloy::eips::eip2718::Encodable2718;
 use alloy::primitives::{Address, B256, U256};
 use alloy::rpc::types::{Block, BlockTransactions};
 use anyhow::Result;
+use rayon::prelude::*;
 use sha3::{Digest, Keccak256};
 
 use crate::rpc::{ExecutionWitness, Prestate, PrestateDiff};
@@ -324,8 +325,18 @@ pub fn write_contracts(
         dst.entry(h).or_insert(code);
     };
 
-    for code in &witness.codes {
-        insert(&mut by_hash, code.clone());
+    // The witness carries every contract the block touched; hash them in
+    // parallel, then dedup in order.
+    let hashed: Vec<(B256, &Bytes)> = witness
+        .codes
+        .par_iter()
+        .filter(|code| !code.is_empty())
+        .map(|code| (keccak256(code), code))
+        .collect();
+    for (h, code) in hashed {
+        if h != EMPTY_CODE_HASH {
+            by_hash.entry(h).or_insert_with(|| code.clone());
+        }
     }
     for ps in prestate.values() {
         if let Some(c) = &ps.code {
