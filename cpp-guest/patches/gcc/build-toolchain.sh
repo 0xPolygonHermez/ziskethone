@@ -53,7 +53,20 @@ supports_flag() {
              -mzisk-dma -fsyntax-only - 2>/dev/null
 }
 
-if [ "${1:-}" != "--force" ] && supports_flag "$PREFIX/bin/riscv-none-elf-g++"; then
+# A compiler configured without seeing the assembler parses the flag just as
+# well, but puts inline-function statics in .gnu.linkonce.* instead of COMDAT
+# groups (see configure below), so an install from before that fix does not
+# count as up to date either.
+uses_comdat() {
+    [ -x "$1" ] || return 1
+    local s
+    s=$(echo 'inline int* f() { static int b[4]; return b; } int* g() { return f(); }' |
+        "$1" -x c++ -O2 -march=rv64ima_zicsr -mabi=lp64 -S -o - - 2>/dev/null) || return 1
+    ! grep -q 'linkonce' <<<"$s" && grep -q '\.section.*,comdat' <<<"$s"
+}
+
+if [ "${1:-}" != "--force" ] && supports_flag "$PREFIX/bin/riscv-none-elf-g++" &&
+   uses_comdat "$PREFIX/bin/riscv-none-elf-g++"; then
     say "already installed: $PREFIX"
     "$PREFIX/bin/riscv-none-elf-g++" --version | head -1
     echo
@@ -118,9 +131,19 @@ done
 say "configuring (compiler only)"
 rm -rf "$BUILD_DIR/build" && mkdir -p "$BUILD_DIR/build"
 cd "$BUILD_DIR/build"
+# --with-as/--with-ld are not optional. GCC probes the assembler at configure
+# time for the features it may use, and with no riscv-none-elf-as to probe (the
+# xPack one is only grafted in after the build) it assumes none: among them
+# HAVE_COMDAT_GROUP, so it falls back to .gnu.linkonce.* sections. zisk.ld only
+# gathers .bss*, so a linkonce .bss (an inline function's static, e.g. modexp's
+# 64 KB exp_bits_buf) became an orphan placed at _heap_bottom, and the first
+# heap allocation overlapped it. The build still worked wherever an assembler
+# happened to be on PATH, which is why it looked fine.
 CC="$HOST_CC" CXX="$HOST_CXX" "$SRC/configure" \
     --target=riscv-none-elf \
     --prefix="$PREFIX" \
+    --with-as="$XPACK/bin/riscv-none-elf-as" \
+    --with-ld="$XPACK/bin/riscv-none-elf-ld" \
     --with-arch=rv64ima_zicsr --with-abi=lp64 \
     --disable-multilib --disable-nls --disable-shared --disable-threads \
     --disable-libssp --disable-libquadmath --disable-libgomp --disable-libatomic \
@@ -146,6 +169,8 @@ done
 # -------------------------------------------------------------------- check --
 supports_flag "$PREFIX/bin/riscv-none-elf-g++" ||
     die "built compiler does not accept the flags the patch set adds"
+uses_comdat "$PREFIX/bin/riscv-none-elf-g++" ||
+    die "built compiler emits .gnu.linkonce sections instead of COMDAT groups (configure did not see the assembler)"
 
 # And that the flag actually lowers something, not just parses.
 tmp=$(mktemp -d)
