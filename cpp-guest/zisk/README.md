@@ -30,6 +30,9 @@ cmake --build cpp-guest/zisk/build -j8
 # -> cpp-guest/zisk/build/zisk_eth_guest.elf
 ```
 
+To build with the patched GCC's `-mzisk-dma` (about −12% steps), see
+[`README-zisk-dma.md`](README-zisk-dma.md).
+
 ## Run / benchmark
 
 The guest reads its input from the ZisK memory-mapped region, which expects the
