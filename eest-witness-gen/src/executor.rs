@@ -8,7 +8,9 @@
 //! over JSON-RPC. The chain-state seeding + per-block commit loop
 //! mirrors `testing/ef-tests/src/cases/blockchain_test.rs::run_case`.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use alloy_consensus::BlockHeader as _;
@@ -35,7 +37,10 @@ use reth_trie::{HashedPostState, KeccakKeyHasher, StateRoot};
 use reth_trie_db::{DatabaseProof, DatabaseStateRoot};
 use reth_revm::{database::StateProviderDatabase, witness::ExecutionWitnessRecord};
 use reth_trie::ExecutionWitnessMode;
+use revm::bytecode::Bytecode;
 use revm::database::BundleState;
+use revm::state::AccountInfo;
+use revm::Database;
 
 use crate::fixture::BlockchainTest;
 
@@ -61,6 +66,40 @@ pub struct ExecutedBlock {
     /// SLOAD of an untouched-but-read slot. Recovered by reverse-
     /// hashing `hashed_state.storages` via `keys` preimages.
     pub touched_slot_pairs: std::collections::BTreeSet<(Address, B256)>,
+}
+
+/// `Database` wrapper recording every (addr, slot) `State` loads from
+/// the parent state. `State` only reaches the DB for an uncached slot
+/// of an account that exists there, so this is exactly the parent
+/// storage the block reads (incl. each SSTORE's original-value load),
+/// independent of how the account ends the block. Unlike `BundleState`
+/// and the witness recorder, it keeps the slots of an account that
+/// SELFDESTRUCTs (pre-Cancun destroy), which both drop.
+#[derive(Debug)]
+struct RecordingDb<DB> {
+    inner: DB,
+    reads: Rc<RefCell<BTreeSet<(Address, B256)>>>,
+}
+
+impl<DB: Database> Database for RecordingDb<DB> {
+    type Error = DB::Error;
+
+    fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+        self.inner.basic(address)
+    }
+
+    fn code_by_hash(&mut self, code_hash: B256) -> Result<Bytecode, Self::Error> {
+        self.inner.code_by_hash(code_hash)
+    }
+
+    fn storage(&mut self, address: Address, index: U256) -> Result<U256, Self::Error> {
+        self.reads.borrow_mut().insert((address, B256::from(index.to_be_bytes::<32>())));
+        self.inner.storage(address, index)
+    }
+
+    fn block_hash(&mut self, number: u64) -> Result<B256, Self::Error> {
+        self.inner.block_hash(number)
+    }
 }
 
 /// Execute the full fixture and return one `ExecutedBlock` per
@@ -319,7 +358,11 @@ pub fn run_fixture(
 
         // ---- (3) Execute with witness closure ----
         let state_provider = provider.latest();
-        let state_db = StateProviderDatabase(&state_provider);
+        let storage_reads: Rc<RefCell<BTreeSet<(Address, B256)>>> = Rc::default();
+        let state_db = RecordingDb {
+            inner: StateProviderDatabase(&state_provider),
+            reads: storage_reads.clone(),
+        };
         let mut state = reth_revm::db::State::builder()
             .with_database(state_db)
             .with_bundle_update()
@@ -378,26 +421,27 @@ pub fn run_fixture(
                 }
             }
             // ALSO add (addr, slot) pairs straight from BundleState.
-            // For accounts destroyed during the block, the recorder's
+            // For accounts that end the block as None, the recorder's
             // hashed_state.storages drops their slots (`account.account`
-            // is None → outer iteration skips the inner storage loop),
-            // but BundleAccount.storage retains every touched slot
-            // regardless of final account status. EIP-7702 tests that
-            // SSTORE then RESET delegation on an EOA, or that
-            // SELFDESTRUCT a delegation target in the same tx, fall
-            // here.
+            // is None → outer iteration skips the inner storage loop).
+            // BundleAccount.storage keeps the slots of e.g. an EIP-7702
+            // EOA that SSTOREs then RESETs its delegation, but NOT of a
+            // SELFDESTRUCTed account (revm's `apply_account_state`
+            // returns before collecting its storage) — hence also the
+            // parent-state reads `RecordingDb` saw.
             for (addr, bundle_acc) in &output.state.state {
                 for slot_u256 in bundle_acc.storage.keys() {
                     let slot = B256::from(slot_u256.to_be_bytes::<32>());
                     s.insert((*addr, slot));
                 }
             }
+            s.extend(storage_reads.borrow().iter().copied());
             s
         };
 
         // ---- (4) Materialize the witness in RPC shape ----
         let mut exec_witness = witness_record
-            .into_execution_witness(&state.database.0, &provider, block_number, mode)
+            .into_execution_witness(&state.database.inner.0, &provider, block_number, mode)
             .with_context(|| format!("into_execution_witness {idx}"))?;
 
         // ---- (4') Inject the INPUT (parent) state-root node ----
@@ -452,12 +496,18 @@ pub fn run_fixture(
             .filter(|k| k.len() == 32)
             .map(|k| B256::from_slice(k))
             .collect();
-        for (_addr, bundle_acc) in &output.state.state {
-            for slot_u256 in bundle_acc.storage.keys() {
-                let slot = B256::from(slot_u256.to_be_bytes::<32>());
-                if !existing_slots.contains(&slot) {
-                    exec_witness.keys.push(Bytes::from(slot.as_slice().to_vec()));
-                }
+        // Same for the parent-state reads (a SELFDESTRUCTed account's
+        // slots are in neither the recorder nor BundleState).
+        let mut existing_slots = existing_slots;
+        let bundle_slots = output
+            .state
+            .state
+            .values()
+            .flat_map(|acc| acc.storage.keys().map(|k| B256::from(k.to_be_bytes::<32>())));
+        let read_slots: Vec<B256> = storage_reads.borrow().iter().map(|(_, s)| *s).collect();
+        for slot in bundle_slots.chain(read_slots) {
+            if existing_slots.insert(slot) {
+                exec_witness.keys.push(Bytes::from(slot.as_slice().to_vec()));
             }
         }
         let mut touched_addrs: std::collections::BTreeSet<Address> = exec_witness
@@ -539,7 +589,7 @@ pub fn run_fixture(
             hps.storages.insert(hashed_addr, hs);
         }
         let trie_input = TrieInput::from_state(hps.clone());
-        match state.database.0.witness(trie_input, hps, mode) {
+        match state.database.inner.0.witness(trie_input, hps, mode) {
             Ok(nodes) => {
                 let mut added = 0;
                 for node in nodes {
@@ -598,7 +648,7 @@ pub fn run_fixture(
             target_hps.accounts.insert(ha, None);
         }
         let mp_input = TrieInput::from_state(target_hps);
-        match state.database.0.multiproof(mp_input, targets.clone()) {
+        match state.database.inner.0.multiproof(mp_input, targets.clone()) {
             Ok(mp) => {
                 let mut a = 0;
                 let mut s = 0;
