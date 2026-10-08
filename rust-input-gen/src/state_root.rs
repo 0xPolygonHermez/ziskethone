@@ -13,10 +13,10 @@
 //! the guest inserts them into the revealed structure during the new-root
 //! pass. Leaf values come straight from the witness leaf RLP.
 
-use std::collections::HashMap;
-
+use alloy::primitives::map::B256Map;
 use alloy::primitives::{Address, Bytes, B256, U256};
 use anyhow::{bail, Context, Result};
+use rayon::prelude::*;
 
 use crate::mpt::{self, hp_decode, keccak256, Rlp};
 use crate::writer::Writer;
@@ -61,11 +61,11 @@ enum ChildRef {
 /// accumulates the opcode stream and the leaf counts (which become the
 /// section header).
 struct Encoder<'a> {
-    nodes: &'a HashMap<[u8; 32], Vec<u8>>,
+    nodes: &'a B256Map<&'a [u8]>,
     /// keccak(preimage) → preimage (addresses for the state trie, slots for
     /// storage tries). Only accessed keys have a preimage; keyless siblings
     /// stay `Op::PhantomLeaf`.
-    preimages: &'a HashMap<[u8; 32], Vec<u8>>,
+    preimages: &'a B256Map<Vec<u8>>,
     out: Vec<u8>,
     n_accounts: u64,
     n_storages: u64,
@@ -83,16 +83,20 @@ pub fn write(
     witness_nodes: &[Bytes],
     witness_keys: &[Bytes],
 ) -> Result<()> {
-    let mut nodes: HashMap<[u8; 32], Vec<u8>> = HashMap::with_capacity(witness_nodes.len());
-    for raw in witness_nodes {
-        if raw.len() < 32 {
-            continue;
-        }
-        nodes.insert(keccak256(raw), raw.to_vec());
-    }
-    let mut preimages: HashMap<[u8; 32], Vec<u8>> = HashMap::with_capacity(witness_keys.len());
+    // Hashing every witness node is most of this function's time and each
+    // hash is independent, so spread it over the cores.
+    let hashed: Vec<(B256, &[u8])> = witness_nodes
+        .par_iter()
+        .filter(|raw| raw.len() >= 32)
+        .map(|raw| (B256::from(keccak256(raw)), raw.as_ref()))
+        .collect();
+    let mut nodes: B256Map<&[u8]> =
+        B256Map::with_capacity_and_hasher(hashed.len(), Default::default());
+    nodes.extend(hashed);
+    let mut preimages: B256Map<Vec<u8>> =
+        B256Map::with_capacity_and_hasher(witness_keys.len(), Default::default());
     for key in witness_keys {
-        preimages.insert(keccak256(key), key.to_vec());
+        preimages.insert(B256::from(keccak256(key)), key.to_vec());
     }
 
     let mut enc = Encoder {
@@ -109,9 +113,7 @@ pub fn write(
     w.u64_le(enc.n_nodes);
     w.u64_le(enc.n_accounts);
     w.u64_le(enc.n_storages);
-    for byte in &enc.out {
-        w.u8(*byte);
-    }
+    w.bytes(&enc.out);
     w.assert_aligned();
     Ok(())
 }
@@ -209,11 +211,8 @@ impl<'a> Encoder<'a> {
                 self.n_nodes += 1;
                 put_op(&mut self.out, Op::Empty);
             }
-            ChildRef::Hash(h) => match self.nodes.get(&h) {
-                Some(raw) => {
-                    let raw = raw.clone();
-                    self.emit_node(walked, &raw, kind)?;
-                }
+            ChildRef::Hash(h) => match self.nodes.get(&B256::from(h)).copied() {
+                Some(raw) => self.emit_node(walked, raw, kind)?,
                 None => {
                     // Subtree the witness only references by hash → opaque.
                     self.n_nodes += 1;
@@ -233,7 +232,7 @@ impl<'a> Encoder<'a> {
             ChildRef::Inline(_) => TAG_NODE,
             ChildRef::Hash(h) if *h == EMPTY_TRIE_ROOT => TAG_EMPTY,
             ChildRef::Hash(h) => {
-                if self.nodes.contains_key(h) { TAG_NODE } else { TAG_HASH }
+                if self.nodes.contains_key(&B256::from(*h)) { TAG_NODE } else { TAG_HASH }
             }
         }
     }
@@ -245,11 +244,8 @@ impl<'a> Encoder<'a> {
             ChildRef::Empty => self.n_nodes += 1,
             ChildRef::Inline(bytes) => self.emit_node(walked, &bytes, kind)?,
             ChildRef::Hash(h) if h == EMPTY_TRIE_ROOT => self.n_nodes += 1,
-            ChildRef::Hash(h) => match self.nodes.get(&h) {
-                Some(raw) => {
-                    let raw = raw.clone();
-                    self.emit_node(walked, &raw, kind)?;
-                }
+            ChildRef::Hash(h) => match self.nodes.get(&B256::from(h)).copied() {
+                Some(raw) => self.emit_node(walked, raw, kind)?,
                 None => {
                     self.n_nodes += 1;
                     self.out.extend_from_slice(&h);
@@ -276,9 +272,12 @@ impl<'a> Encoder<'a> {
                     refs.push(cr);
                 }
                 put_u64(&mut self.out, tags);
+                // One path buffer for all 16 children; only the last nibble changes.
+                let mut w = Vec::with_capacity(walked.len() + 1);
+                w.extend_from_slice(walked);
+                w.push(0);
                 for (k, cr) in refs.into_iter().enumerate() {
-                    let mut w = walked.to_vec();
-                    w.push(k as u8);
+                    *w.last_mut().unwrap() = k as u8;
                     self.emit_tagged_child(&w, cr, kind)?;
                 }
                 // items[16] (the branch value) is always empty for the
@@ -378,8 +377,8 @@ impl<'a> Encoder<'a> {
         full.extend_from_slice(leaf_nibs);
         let key_hash = nibbles_to_bytes(&full)?;
 
-        let preimage = self.preimages.get(&key_hash).cloned();
-        match preimage {
+        let preimages = self.preimages;
+        match preimages.get(&B256::from(key_hash)) {
             Some(pre) => {
                 put_op(&mut self.out, Op::Leaf);
                 put_nibbles(&mut self.out, leaf_nibs);
@@ -388,7 +387,7 @@ impl<'a> Encoder<'a> {
                         self.n_accounts += 1;
                         let (nonce, balance_be, storage_root, code_hash) =
                             mpt::decode_account(value).context("state leaf RLP")?;
-                        let addr = Address::from_slice(&pre);
+                        let addr = Address::from_slice(pre);
                         put_state_leaf_payload(
                             &mut self.out,
                             &addr,
@@ -401,7 +400,7 @@ impl<'a> Encoder<'a> {
                     }
                     TreeKind::Storage => {
                         self.n_storages += 1;
-                        let slot = B256::from_slice(&pre);
+                        let slot = B256::from_slice(pre);
                         let val = mpt::decode_storage_value(value).context("storage leaf RLP")?;
                         put_storage_leaf_payload(&mut self.out, &slot, &B256::from(val));
                     }

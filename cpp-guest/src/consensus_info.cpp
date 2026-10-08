@@ -55,7 +55,10 @@ uint64_t ConsensusInfo::gas_limit() const noexcept { return u64_at(header_ + kGa
 uint64_t ConsensusInfo::timestamp() const noexcept { return u64_at(header_ + kTimestampOffset); }
 
 ForkId ConsensusInfo::fork_id() const noexcept {
-    return static_cast<ForkId>(u64_at(header_ + kForkIdOffset));
+    // Resolve Unknown here, once, so header checks and the EVM revision
+    // (fork_to_revision) always agree on the fork.
+    const auto f = static_cast<ForkId>(u64_at(header_ + kForkIdOffset));
+    return f == ForkId::Unknown ? ForkId::Prague : f;
 }
 
 std::span<const uint8_t> ConsensusInfo::extra_data() const noexcept {
@@ -110,6 +113,9 @@ ConsensusInfo::ConsensusInfo(const uint8_t*& cursor) {
     // Yellow-paper rule: extra_data is at most 32 bytes.
     if (u64_at(header_ + kExtraDataLenOffset) > 32) {
         fatal("ConsensusInfo: extra_data_len > 32");
+    }
+    if (u64_at(header_ + kForkIdOffset) > static_cast<uint64_t>(ForkId::Osaka)) {
+        fatal("ConsensusInfo: unknown fork_id");
     }
 
     const uint64_t n = u64_at(header_ + kWithdrawalsCountOffset);

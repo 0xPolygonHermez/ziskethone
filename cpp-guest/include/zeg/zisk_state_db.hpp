@@ -180,6 +180,11 @@ public:
     // well-known empty-trie root.
     const evmc::bytes32& withdrawals_root() const noexcept { return withdrawals_root_; }
 
+    // Payload size of the block body's RLP withdrawals list (EIP-7934).
+    std::size_t withdrawals_rlp_list_payload_size() const noexcept {
+        return withdrawals_rlp_list_payload_size_;
+    }
+
     // Total blob gas used by every Type-3 (Blob) tx in the block:
     // num_blobs × GAS_PER_BLOB. Matches the block header's EIP-4844
     // `blobGasUsed` field.
@@ -336,6 +341,12 @@ private:
         return active_revision() >= EVMC_PRAGUE;
     }
 
+    // Osaka added tx-validity rules: EIP-7825 (tx gas limit cap) and
+    // EIP-7594 (blob count per tx), both in check_transaction.
+    bool is_osaka_or_later() const noexcept {
+        return active_revision() >= EVMC_OSAKA;
+    }
+
     // Cancun added the EIP-4788 beacon-roots predeploy system call in
     // pre_execute_block. Pre-Cancun blocks must skip it — the predeploy
     // address isn't installed in the prestate, so the unconditional
@@ -395,11 +406,17 @@ private:
         std::vector<evmc::bytes32>&      blob_hashes,
         std::vector<evmc_tx_initcode>&   initcodes_vec) noexcept;
 
-    // Bump sender nonce, debit upfront gas + blob fee, fatal on
-    // insufficient balance. Returns the tx's intrinsic gas (also used
-    // as the EVM frame's starting gas budget).
+    // check_transaction, then bump sender nonce and debit upfront gas
+    // + blob fee. Returns the tx's intrinsic gas (also used as the EVM
+    // frame's starting gas budget).
     int64_t apply_pre_evm_accounting(const Transactions::View& tx,
                                      size_t sender_idx) noexcept;
+
+    // Tx validity per execution-specs `validate_transaction` +
+    // `check_transaction`. Fatal on an invalid tx: the block containing
+    // it is invalid. Returns the tx's intrinsic gas.
+    int64_t check_transaction(const Transactions::View& tx,
+                              size_t sender_idx) noexcept;
 
     // Walk the EIP-7702 authorization_list (no-op for non-SetCode
     // txs). For each valid auth, bumps the signer's nonce and writes
@@ -542,10 +559,14 @@ private:
     // keccak256 of the withdrawals trie's root RLP. Computed at the
     // end of execute_block from consensus_.withdrawals().
     evmc::bytes32 withdrawals_root_{};
+    std::size_t   withdrawals_rlp_list_payload_size_{0};
 
     // EIP-4844 blobGasUsed: sum of (num_blobs × GAS_PER_BLOB) across
     // every Type-3 tx processed in this block.
     uint64_t blob_gas_used_{0};
+    // Current tx's EIP-7623 calldata floor, from check_transaction
+    // (one calldata scan per tx); settle_tx_gas charges at least it.
+    int64_t  tx_floor_gas_{0};
 
     // EIP-7685 requests collected from the Pectra predeploys (one
     // entry per non-empty request type; entries are type-prefixed).

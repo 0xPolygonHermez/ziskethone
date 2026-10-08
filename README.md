@@ -232,9 +232,9 @@ OUT="/tmp/sweep/work/fix.$ID"
 LOG="/tmp/sweep/results/$ID.log"
 rm -rf "$OUT"; mkdir -p "$OUT"
 
-timeout 300 "$REPO/eest-witness-gen/target/release/eest-witness-gen" \
+"$REPO/eest-witness-gen/target/release/eest-witness-gen" \
     --fixture "$FIX" --output-dir "$OUT" >/dev/null 2>&1
-[ $? -ne 0 ] && { echo "BRIDGE_FAIL $FIX" >> "$LOG"; rm -rf "$OUT"; exit 0; }
+[ $? -ne 0 ] && echo "BRIDGE_FAIL $FIX" >> "$LOG"   # other tests' manifests still run
 
 for m in $(find "$OUT" -name "block-*.json" | sort); do
     base="${m%.json}"
@@ -245,20 +245,25 @@ for m in $(find "$OUT" -name "block-*.json" | sort); do
     expected=$(jq -r '.current.hash // empty' "$m" 2>/dev/null)
     is_neg=0; [ -s "${base}.expect" ] && is_neg=1   # EEST negative test (expect_exception)
 
-    if [ $ig_rc -ne 0 ]; then
-        [ $is_neg -eq 1 ] && echo "PASS_NEG(inputgen) $FIX $m" >> "$LOG" \
-                          || echo "FAIL(inputgen) $FIX $m" >> "$LOG"
+    if [ $ig_rc -ne 0 ]; then   # the guest never ran: not a rejection either
+        echo "FAIL(inputgen) $FIX $m" >> "$LOG"
         rm -f "$bin"; continue
     fi
 
-    actual=$(timeout 60 "$REPO/cpp-guest/build/zisk_eth_guest" "$bin" 2>/dev/null | tail -1)
-    guest_rc=$?
-    rm -f "$bin"
+    actual=$(timeout 60 "$REPO/cpp-guest/build/zisk_eth_guest" "$bin" 2>"$bin.err" | tail -1)
+    guest_rc=${PIPESTATUS[0]}
+    fatal=$(grep -m1 '^guest: ' "$bin.err")   # the guest's own rejection
+    rm -f "$bin" "$bin.err"
 
     if [ $is_neg -eq 1 ]; then
-        # a fatal / wrong-hash on a negative test means we correctly rejected it
-        if [ $guest_rc -ne 0 ] || [ "$actual" != "$expected" ]; then
+        # a fatal rejects it; a wrong hash only counts for block-level exceptions
+        # (on a tx-level one the hash commits to the bad tx, the prover picks the header)
+        tx_level=0
+        tr '|' '\n' < "${base}.expect" | grep -qv '^TransactionException\.' || tx_level=1
+        if [ -n "$fatal" ] || { [ $guest_rc -eq 0 ] && [ $tx_level -eq 0 ] && [ "$actual" != "$expected" ]; }; then
             echo "PASS_NEG(guest) $FIX $m" >> "$LOG"
+        elif [ $guest_rc -ne 0 ]; then   # crash / timeout, not a fatal
+            echo "FAIL(guest_crash) $FIX $m" >> "$LOG"
         else
             echo "FAIL_NEG(guest_accepted_bad_block) $FIX $m" >> "$LOG"
         fi
@@ -272,30 +277,48 @@ for m in $(find "$OUT" -name "block-*.json" | sort); do
     fi
 done
 rm -rf "$OUT"
+
+# Blocks that got no result (unsupported network, invalid block reth can't
+# decode, bridge failure) — counted, so nothing is dropped silently.
+touch "$LOG"
+want=$(jq '[.[].blocks | length] | add // 0' "$FIX")
+got=$(grep -vc '^BRIDGE_FAIL' "$LOG")
+if [ "$got" -lt "$want" ]; then
+    echo "MISSING $((want - got)) $FIX" >> "$LOG"
+fi
 SCRIPT
 chmod +x /tmp/sweep/run.sh
 
-find /tmp/eest/fixtures/blockchain_tests -name "*.json" \
-    | xargs -P "$(nproc)" -I {} /tmp/sweep/run.sh {}
+# EEST blockchain_tests, plus the legacy ethereum/tests invalid-block suites
+# (header rules EEST doesn't cover: gas-limit bounds, block number, uncles, ...):
+# BlockchainTests/InvalidBlocks of https://github.com/ethereum/tests (v17.2+).
+find /tmp/eest/fixtures/blockchain_tests /tmp/ethereum-tests/BlockchainTests/InvalidBlocks \
+    -name "*.json" | xargs -P "$(nproc)" -I {} /tmp/sweep/run.sh {}
 
-# Tally
+# Tally (MISSING: number of fixtures; the second line sums their blocks)
 cat /tmp/sweep/results/*.log | awk '{print $1}' | sort | uniq -c
+cat /tmp/sweep/results/*.log | awk '$1=="MISSING"{s+=$2} END{print s+0, "blocks MISSING"}'
 ```
 
 `PASS_NEG(...)` = an EEST negative test (`expect_exception`) that we correctly
-rejected (input-gen or guest fatal, or a wrong hash — all count as PASS since
-the point of the test is that the bad block must NOT be accepted).
+rejected (a guest `fatal`, or — for block-level exceptions only — a wrong
+hash; a crash or timeout is `FAIL(guest_crash)`, not a rejection). reth
+refuses to execute such a block, so the bridge doesn't: it gives the guest the
+block with a witness of the whole parent state.
 `FAIL_NEG` would mean the guest wrongly *accepted* an invalid block — a
 soundness bug, more serious than a plain `FAIL` (a completeness gap: a valid
 block computed with the wrong hash).
 
-Fixtures not covered by `eest-witness-gen`'s supported-network list (pre-Berlin
-forks, and the `ShanghaiToCancunAtTime…`-style transition variants — see
-[`eest-witness-gen/src/chain_spec.rs`](eest-witness-gen/src/chain_spec.rs))
-produce zero block manifests and are silently absent from `results/`; this is
-expected, not a bug.
+Blocks that get no result are counted as `MISSING`: tests on networks
+`eest-witness-gen` doesn't support (pre-Berlin forks — see
+[`eest-witness-gen/src/chain_spec.rs`](eest-witness-gen/src/chain_spec.rs)),
+invalid blocks reth can't decode (so there is no guest input to build), and
+fixtures whose bridge run failed (`BRIDGE_FAIL`).
 
 #### Current results (full corpus, all forks, ~53k blocks)
+
+These predate negative-test coverage (blocks with a tx-level exception never
+reached the guest), so `FAIL_NEG 0` below is not meaningful; re-run the sweep.
 
 | | |
 |---|---|

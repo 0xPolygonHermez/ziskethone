@@ -62,8 +62,8 @@ The evmone source is found in `cpp-guest/build*/_deps/evmone-src`; pass
 |---|---|---|
 | `EVM_BACKEND` | `evmone` | `evmone` or `zevm` (the hand-written interpreter); use a separate build directory per backend |
 | `ZEG_JUMPDEST_SW` | `OFF` | `ON` runs the software JUMPDEST walk instead of the precompile, for A/B step counts |
-| `ZEG_BSWAP_BUILTIN` | `ON` | `OFF` selects the legacy zero-shortcut `rev8` inline asm (see `include/zeg/bswap.hpp`) |
-| `ZEG_ZISK_DMA` | `OFF` | `ON` passes `-mzisk-dma` to a patched GCC (`../patches/gcc/`), which lowers block `mem*`, including the copies it synthesizes itself, to the same DMA markers `zkvm_mem.h` inlines; -5% to -6% area on the perf branch (`docs/perf-notes.md`) |
+| `ZEG_BSWAP_BUILTIN` | `OFF` | `ON` uses plain `__builtin_bswap64` instead of the zero-shortcut `rev8` inline asm, for A/B step counts (see `include/zeg/bswap.hpp`) |
+| `ZEG_ZISK_DMA` | `OFF` | `ON` passes `-mzisk-dma` to a patched GCC (`../patches/gcc/`), which lowers block `mem*`, including the copies it synthesizes itself, to the same DMA markers `zkvm_mem.h` inlines; see [`README-zisk-dma.md`](README-zisk-dma.md) |
 
 ## Run / benchmark
 

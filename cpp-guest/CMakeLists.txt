@@ -52,14 +52,8 @@ endif()
 #   05: Replace that walk with the ZisK jump_dest_bitmap precompile (CSR 0x81C),
 #       one op per contract instead of a byte walk. Applies on top of 04 and is
 #       likewise gated on ZEG_ZISK, so the host keeps the software reference.
-#   06: Fused superinstructions in evmone's cgoto dispatch, gated on
-#       ZEG_ZISK. The patch is only a hook (a guarded #include plus one line
-#       in the dispatch macro); the fusions themselves live in the guest tree
-#       at zisk/evm/fused_dispatch.inl. Hot dynamic opcode sequences execute
-#       as one fused step; every edge case falls back to the generic handlers
-#       so semantics stay bit-identical. Each fusion is individually measured
-#       on mainnet blocks — the .inl documents the method, the numbers and
-#       the rejected candidates.
+#   06: Hook for fused jump sequences in the cgoto dispatch, gated on ZEG_ZISK.
+#       The fusions live in zisk/evm/fused_dispatch.inl.
 # Each patch is checked with `git apply --reverse --check` first; if it
 # is already applied we skip — that keeps the configure step idempotent
 # across rebuilds.

@@ -174,13 +174,13 @@ add_executable(zisk_eth_guest.elf
   ${GUEST_SRC} ${EVMONE_CORE} ${EVMMAX_SRC} ${PRECOMP_SRC} ${PAIRING_SRC}
   ${PRECOMP_C} ${STATE_SRC} ${ZISK_SUPPORT})
 
-# zeg::bswap64 defaults to plain __builtin_bswap64, which the guest march's Zbb
-# lowers to a single unconditional `rev8`. Turning this OFF selects the older
-# inline-asm variant that guards `rev8` with a zero shortcut; that only paid back
-# when `rev8` cost 13 zisk ops, and it now loses on both counts — see
-# include/zeg/bswap.hpp for the measurement. Kept as an A/B knob, not a tuning
-# recommendation.
-option(ZEG_BSWAP_BUILTIN "Use plain __builtin_bswap64 (Zbb lowers it to one rev8); OFF selects the legacy zero-shortcut inline asm" ON)
+# zeg::bswap64 defaults to a zero-shortcut swap that uses inline-asm `rev8`
+# (now that the guest march includes Zbb) for the nonzero path, keeping the
+# branch GCC would otherwise silently fold away (see include/zeg/bswap.hpp for
+# why plain __builtin_bswap64 loses that shortcut). ZEG_BSWAP_BUILTIN swaps in
+# the plain builtin instead, purely for A/B step-count comparison against the
+# shortcut-preserving default — expect it to lose on zero-heavy blocks.
+option(ZEG_BSWAP_BUILTIN "Use plain __builtin_bswap64 (no zero-shortcut) instead of the default shortcut-preserving rev8" OFF)
 
 # Lower block memcpy/memset/memcmp to the DMA precompile markers inline, including
 # the copies GCC synthesizes itself (struct assignments), which no header can see:

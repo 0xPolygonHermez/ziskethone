@@ -1,29 +1,23 @@
-// fused_dispatch_difffuzz.cpp — differential fuzzer for the fused superinstructions.
+// fused_dispatch_difffuzz.cpp — differential fuzzer for the fused jump sequences.
 //
-// Build (host, needs an evmone built with -DZEG_FUSE_TEST so the fusions are
-// actually compiled in — a plain host evmone has them #ifdef'd out and the
-// fuzzer would silently compare unfused against unfused):
+// Patch 06 hooks only evmone's cgoto dispatch, so its plain switch dispatch
+// (set_option("cgoto", "no")) is an untouched reference in the same binary.
+// Random bytecode, biased toward the fused patterns and the conditions that must
+// make them bail (bad targets, tight gas, a full stack), runs through both, and
+// status / gas_left / output must match.
 //
-//   cmake -S <evmone-src> -B /tmp/ut -DEVMONE_TESTING=ON -DCMAKE_BUILD_TYPE=Release \
+// Build against an evmone compiled with -DZEG_FUSE_TEST (without it the fusions
+// are #ifdef'd out and both sides run unfused):
+//   cmake -S <evmone-src> -B /tmp/ut -DEVMONE_TESTING=ON -DCMAKE_BUILD_TYPE=Release
 //         -DCMAKE_CXX_FLAGS="-DZEG_FUSE_TEST -I$PWD/cpp-guest/zisk"
 //   cmake --build /tmp/ut --target evmone -j$(nproc)
-//   g++ -std=c++20 -O2 -o difffuzz cpp-guest/test/fused_dispatch_difffuzz.cpp \
-//       -I<evmone-src>/include -I<evmone-src>/evmc/include -I<evmone-src>/lib -I<intx> \
+//   g++ -std=c++20 -O2 -o difffuzz cpp-guest/test/fused_dispatch_difffuzz.cpp
+//       -I<evmone-src>/include -I<evmone-src>/evmc/include -I<evmone-src>/lib -I<intx>
 //       $(find /tmp/ut -path "*evmone.dir*" -name "*.o") $(find /tmp/ut -name keccak.c.o)
-//   ./difffuzz 150000 <seed>            # exit 0 == no divergence
+//   ./difffuzz 1000000 <seed>            # exit 0 == no divergence
 //
-// Sanity-check the harness before trusting a clean run: break one fusion (e.g.
-// charge 2+1 instead of 2+2 for POP+POP) and confirm mismatches appear. A
-// generator that dies on the first bad jump reports zero either way.
-//
-// Patch 06 hooks ONLY evmone's dispatch_cgoto, so the plain switch dispatch in
-// the same binary is an untouched reference implementation. evmone exposes the
-// choice at runtime (set_option("cgoto","no")), so we can run identical random
-// bytecode through fused and unfused interpreters in one process, on identical
-// host state, and compare status / gas_left / output byte-for-byte.
-//
-// The generator is biased toward the fused patterns and toward the conditions
-// that must make them bail: invalid jump targets, tight gas, deep stacks.
+// Before trusting a clean run, break one fusion (e.g. charge 3+3+9 instead of
+// 3+3+10 for ISZERO+PUSH2+JUMPI) and check that mismatches appear.
 
 #include <evmc/evmc.hpp>
 #include <evmc/mocked_host.hpp>
@@ -31,8 +25,8 @@
 
 #include <cstdio>
 #include <cstdint>
-#include <cstring>
 #include <random>
+#include <utility>
 #include <vector>
 
 namespace
@@ -41,15 +35,13 @@ using Bytes = std::vector<uint8_t>;
 
 enum : uint8_t
 {
-    OP_STOP = 0x00, OP_ADD = 0x01, OP_MUL = 0x02, OP_SUB = 0x03,
-    OP_LT = 0x10, OP_GT = 0x11, OP_SGT = 0x13, OP_EQ = 0x14, OP_ISZERO = 0x15,
-    OP_AND = 0x16, OP_OR = 0x17, OP_SHL = 0x1b, OP_SHR = 0x1c, OP_SAR = 0x1d,
-    OP_POP = 0x50, OP_MLOAD = 0x51, OP_MSTORE = 0x52,
-    OP_JUMP = 0x56, OP_JUMPI = 0x57, OP_PC = 0x58, OP_GAS = 0x5a, OP_JUMPDEST = 0x5b,
-    OP_PUSH1 = 0x60, OP_PUSH2 = 0x61, OP_PUSH32 = 0x7f,
-    OP_DUP1 = 0x80, OP_DUP2 = 0x81, OP_DUP3 = 0x82,
-    OP_SWAP1 = 0x90, OP_SWAP2 = 0x91,
-    OP_RETURN = 0xf3, OP_REVERT = 0xfd,
+    OP_ADD = 0x01, OP_MUL = 0x02,
+    OP_EQ = 0x14, OP_ISZERO = 0x15,
+    OP_POP = 0x50, OP_MSTORE = 0x52,
+    OP_JUMP = 0x56, OP_JUMPI = 0x57, OP_GAS = 0x5a, OP_JUMPDEST = 0x5b,
+    OP_PUSH1 = 0x60, OP_PUSH2 = 0x61, OP_PUSH4 = 0x63, OP_PUSH32 = 0x7f,
+    OP_DUP1 = 0x80, OP_SWAP1 = 0x90,
+    OP_RETURN = 0xf3,
 };
 
 // Emit a run that heavily favours the fused sequences. The generator tracks an
@@ -78,47 +70,63 @@ Bytes gen(std::mt19937_64& rng)
         for (int i = 0; i < n; ++i) { c.push_back(OP_PUSH1); c.push_back((uint8_t)byte(rng)); ++sp; }
     }
 
+    // A jump target: mostly an emitted JUMPDEST, sometimes junk.
+    auto target = [&]() -> int {
+        return (!dests.empty() && pick(rng) < 75) ? dests[rng() % dests.size()]
+                                                  : (int)(rng() % 300);
+    };
+    auto push2 = [&](int t) {
+        c.push_back(OP_PUSH2); c.push_back((uint8_t)(t >> 8)); c.push_back((uint8_t)t); ++sp;
+    };
+
     for (int i = 0; i < len; ++i)
     {
         const int r = pick(rng);
         if (r < 18) { c.push_back(OP_PUSH1); c.push_back((uint8_t)byte(rng)); ++sp; }
-        else if (r < 24) { c.push_back(OP_JUMPDEST); dests.push_back((int)c.size() - 1); }
-        else if (r < 32)
-        {   // PUSH2 <target> JUMP/JUMPI — mostly a real JUMPDEST, sometimes junk
-            int t;
-            if (!dests.empty() && pick(rng) < 75) t = dests[rng() % dests.size()];
-            else t = (int)(rng() % 300);
-            c.push_back(OP_PUSH2); c.push_back((uint8_t)(t >> 8)); c.push_back((uint8_t)t);
-            ++sp;
+        else if (r < 26) { c.push_back(OP_JUMPDEST); dests.push_back((int)c.size() - 1); }
+        else if (r < 34)
+        {   // PUSH2 <target> JUMP/JUMPI
+            push2(target());
             if (pick(rng) < 50) { need(2); c.push_back(OP_JUMPI); sp -= 2; }
             else { c.push_back(OP_JUMP); --sp; }
         }
-        else if (r < 40)
-        {   // ISZERO/EQ + PUSH2 + JUMPI triples, the shape Solidity emits
-            if (pick(rng) < 50) { un(OP_ISZERO); } else { bin(OP_EQ); }
-            int t = (!dests.empty() && pick(rng) < 75) ? dests[rng() % dests.size()]
-                                                      : (int)(rng() % 300);
-            c.push_back(OP_PUSH2); c.push_back((uint8_t)(t >> 8)); c.push_back((uint8_t)t);
+        else if (r < 46)
+        {   // <test> PUSH2 JUMPI, the shape Solidity emits for conditionals
+            if (pick(rng) < 50) un(OP_ISZERO); else bin(OP_EQ);
+            push2(target());
             need(2); c.push_back(OP_JUMPI); sp -= 2;
         }
-        else if (r < 46) { need(2); c.push_back(OP_POP); c.push_back(OP_POP); sp -= 2; }
-        else if (r < 52) { need(1); c.push_back(OP_DUP1); ++sp; c.push_back(OP_MUL); --sp; }
-        else if (r < 58) { need(2); c.push_back(OP_DUP2); ++sp; c.push_back(OP_MUL); --sp; }
-        else if (r < 64) { need(1); c.push_back(OP_PUSH1); c.push_back((uint8_t)byte(rng)); ++sp;
-                           c.push_back(OP_ADD); --sp; }
-        else if (r < 70) { need(1); c.push_back(OP_PUSH1); c.push_back((uint8_t)byte(rng)); ++sp;
-                           const uint8_t sh[3]={OP_SHL,OP_SHR,OP_SAR};
-                           c.push_back(sh[rng()%3]); --sp; }
-        else if (r < 74) { need(1); c.push_back(OP_PUSH1); c.push_back((uint8_t)byte(rng)); ++sp;
-                           c.push_back(OP_DUP2); ++sp; }
-        else if (r < 78) bin(OP_ADD);
-        else if (r < 82) bin(OP_MUL);
-        else if (r < 85) bin(OP_SGT);
-        else if (r < 88) { need(2); c.push_back(OP_SWAP1); }
-        else if (r < 91) { need(1); c.push_back(OP_POP); --sp; }
-        else if (r < 94) { need(2); c.push_back(OP_MSTORE); sp -= 2; }
-        else if (r < 96) { c.push_back(OP_GAS); ++sp; }
-        else if (r < 98) { c.push_back(OP_PUSH32); for (int k = 0; k < 32; ++k) c.push_back((uint8_t)byte(rng)); ++sp; }
+        else if (r < 54)
+        {   // PUSH4 <sel> EQ PUSH2 JUMPI, Solidity's selector dispatch; half the
+            // time the compared word is that same selector, so the jump is taken
+            const uint32_t sel = (uint32_t)rng();
+            auto push4 = [&] {
+                c.push_back(OP_PUSH4);
+                for (int k = 3; k >= 0; --k) c.push_back((uint8_t)(sel >> (8 * k)));
+                ++sp;
+            };
+            if (pick(rng) < 50) push4(); else need(1);
+            push4();
+            c.push_back(OP_EQ); --sp;
+            push2(target());
+            c.push_back(OP_JUMPI); sp -= 2;
+        }
+        else if (r < 58)
+        {   // JUMP with its target already on the stack (not right after a PUSH2)
+            const int t = target();
+            if (t < 256) { c.push_back(OP_PUSH1); c.push_back((uint8_t)t); ++sp; }
+            else { push2(t); c.push_back(OP_DUP1); ++sp; }   // leaves a copy behind
+            c.push_back(OP_JUMP); --sp;
+        }
+        // Generic opcodes between the patterns: none of them is fused.
+        else if (r < 66) bin(OP_ADD);
+        else if (r < 70) bin(OP_MUL);
+        else if (r < 76) { need(1); c.push_back(OP_DUP1); ++sp; }
+        else if (r < 82) { need(2); c.push_back(OP_SWAP1); }
+        else if (r < 88) { need(1); c.push_back(OP_POP); --sp; }
+        else if (r < 92) { need(2); c.push_back(OP_MSTORE); sp -= 2; }
+        else if (r < 95) { c.push_back(OP_GAS); ++sp; }
+        else if (r < 97) { c.push_back(OP_PUSH32); for (int k = 0; k < 32; ++k) c.push_back((uint8_t)byte(rng)); ++sp; }
         else { c.push_back((uint8_t)byte(rng)); }   // raw noise / undefined opcode
     }
     c.push_back(OP_PUSH1); c.push_back(0x20);
@@ -143,8 +151,12 @@ Out run(evmc::VM& vm, const Bytes& code, int64_t gas, evmc_revision rev)
     msg.recipient = evmc_address{{0x01}};
     msg.sender = evmc_address{{0x02}};
     const auto r = vm.execute(host, rev, msg, code.data(), code.size());
-    return {r.status_code, r.gas_left,
-        Bytes(r.output_data, r.output_data + r.output_size)};
+    // Most generated programs halt without output, and EVMC then hands back
+    // output_data == nullptr; build the empty Bytes explicitly.
+    Bytes output;
+    if (r.output_size != 0)
+        output.assign(r.output_data, r.output_data + r.output_size);
+    return {r.status_code, r.gas_left, std::move(output)};
 }
 }  // namespace
 
@@ -155,12 +167,16 @@ int main(int argc, char** argv)
 
     evmc::VM fused{evmc_create_evmone()};                 // dispatch_cgoto (patched)
     evmc::VM plain{evmc_create_evmone()};                 // plain switch dispatch
-    plain.set_option("cgoto", "no");
+    // Without cgoto support both VMs would run the switch dispatch, the
+    // fusions would never execute, and a clean run would prove nothing.
+    if (plain.set_option("cgoto", "no") != EVMC_SET_OPTION_SUCCESS)
+    {
+        std::fprintf(stderr, "evmone built without cgoto dispatch; nothing to compare\n");
+        return 2;
+    }
 
-    const evmc_revision revs[] = {
-        EVMC_BERLIN, EVMC_LONDON, EVMC_PARIS, EVMC_SHANGHAI, EVMC_CANCUN, EVMC_PRAGUE,
-        EVMC_HOMESTEAD, EVMC_BYZANTIUM,  // pre-Constantinople: shifts undefined
-    };
+    const evmc_revision revs[] = {EVMC_HOMESTEAD, EVMC_BYZANTIUM, EVMC_BERLIN, EVMC_LONDON,
+        EVMC_PARIS, EVMC_SHANGHAI, EVMC_CANCUN, EVMC_PRAGUE};
     const int nrevs = (int)(sizeof(revs) / sizeof(revs[0]));
 
     std::mt19937_64 rng(seed);

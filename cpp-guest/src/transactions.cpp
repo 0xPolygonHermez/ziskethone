@@ -477,6 +477,9 @@ Transactions::Transactions(const uint8_t*& cursor) {
         v.transaction_hash_ = keccak256_bytes32(env, env_size);
         v.sender_           = recover_sender(v);
 
+        rlp_list_payload_size_ +=
+            v.type_ == Type::Legacy ? env_size : rlp::item_size(env_size);
+
         // MPT leaf: RLP(tx_index) → wire envelope verbatim.
         trie.insert(rlp::encode_u64(i),
                     std::vector<uint8_t>(env, env + env_size));

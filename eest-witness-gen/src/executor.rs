@@ -8,6 +8,7 @@
 //! over JSON-RPC. The chain-state seeding + per-block commit loop
 //! mirrors `testing/ef-tests/src/cases/blockchain_test.rs::run_case`.
 
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
 use alloy_consensus::BlockHeader as _;
@@ -27,11 +28,11 @@ use reth_provider::{
     test_utils::create_test_provider_factory_with_chain_spec, BlockWriter,
     DatabaseProviderFactory, ExecutionOutcome, HistoryWriter, OriginalValuesKnown,
     StateProofProvider, StateProviderFactory, StateWriteConfig, StateWriter,
-    StaticFileProviderFactory, StaticFileSegment, StaticFileWriter, StorageSettingsCache,
+    BytecodeReader, StaticFileProviderFactory, StaticFileSegment, StaticFileWriter, StorageSettingsCache,
     TrieWriter,
 };
 use reth_trie::{HashedPostState, KeccakKeyHasher, StateRoot};
-use reth_trie_db::DatabaseStateRoot;
+use reth_trie_db::{DatabaseProof, DatabaseStateRoot};
 use reth_revm::{database::StateProviderDatabase, witness::ExecutionWitnessRecord};
 use reth_trie::ExecutionWitnessMode;
 use revm::database::BundleState;
@@ -63,13 +64,12 @@ pub struct ExecutedBlock {
 }
 
 /// Execute the full fixture and return one `ExecutedBlock` per
-/// block. Errors abort the whole fixture (a downstream classifier
-/// can split on `block.expect_exception` to distinguish positive
-/// vs negative tests).
+/// block (`None` for an invalid block that doesn't decode).
+/// Errors abort the whole fixture.
 pub fn run_fixture(
     chain_spec: Arc<ChainSpec>,
     test: &BlockchainTest,
-) -> Result<Vec<ExecutedBlock>> {
+) -> Result<Vec<Option<ExecutedBlock>>> {
     // ---- (1) Fresh in-memory provider seeded with genesis ----
     let factory = create_test_provider_factory_with_chain_spec(chain_spec.clone());
     let provider = factory
@@ -182,6 +182,36 @@ pub fn run_fixture(
     }
 
     let executor_provider = EthEvmConfig::ethereum(chain_spec.clone());
+
+    // Proof of one account (+ `slots`) against the DB trie, i.e.
+    // the parent state of the block being processed. Uses reth's
+    // with_adapter macro so the DatabaseTrieCursorFactory's `A`
+    // table-adapter type is selected automatically. Empty
+    // TrieInput: the DB already has the post-block-(N-1) trie via
+    // prior write_trie_updates calls, so walking it directly yields
+    // proofs rooted at recovered.parent_hash() — exactly what
+    // cpp-guest needs. Earlier we passed `cumulative_hps` as
+    // overlay; this double-counted genesis accounts already in the
+    // DB and produced proofs at a different root.
+    let account_proof = |addr: Address, slots: &[B256]| {
+        reth_trie_db::with_adapter!(provider, |A| {
+            reth_trie::proof::Proof::<
+                reth_trie_db::DatabaseTrieCursorFactory<_, A>,
+                reth_trie_db::DatabaseHashedCursorFactory<_>,
+            >::from_tx(provider.tx_ref())
+            .overlay_account_proof(reth_trie::TrieInput::default(), addr, slots)
+        })
+    };
+
+    // Every account / storage slot that may exist in the parent
+    // state: EEST `pre` plus everything executed blocks wrote.
+    let mut known: BTreeMap<Address, BTreeSet<B256>> = test
+        .pre
+        .iter()
+        .map(|(addr, acc)| {
+            (*addr, acc.storage.keys().map(|k| B256::from(k.to_be_bytes::<32>())).collect())
+        })
+        .collect();
     let mut out = Vec::with_capacity(test.blocks.len());
 
     // Track the input state root for each iteration so we can
@@ -219,6 +249,56 @@ pub fn run_fixture(
 
     for (idx, fixture_block) in test.blocks.iter().enumerate() {
         let block_number = (idx + 1) as u64;
+
+        // ---- (1') Block the fixture expects to be rejected ----
+        // reth refuses to execute it, so we don't. The guest gets
+        // the block plus a witness of the WHOLE parent state (every
+        // account / slot that may exist), so it has to reject the
+        // block on its own rather than on a missing trie node. It
+        // doesn't advance the chain: nothing inserted or committed.
+        if fixture_block.expect_exception.is_some() {
+            let recovered = match SealedBlock::<RethBlock>::decode(&mut fixture_block.rlp.as_ref())
+                .map_err(|e| format!("RLP decode: {e}"))
+                .and_then(|b| b.try_recover().map_err(|e| format!("recover: {e:?}")))
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(idx, "invalid block can't be fed to the guest: {e}");
+                    out.push(None);
+                    continue;
+                }
+            };
+            let state_provider = provider.latest();
+            let mut witness = ExecutionWitness::default();
+            let mut seen = HashSet::new();
+            let mut touched_slot_pairs = BTreeSet::new();
+            for (addr, slots) in &known {
+                let slots: Vec<B256> = slots.iter().copied().collect();
+                let p = account_proof(*addr, &slots)
+                    .with_context(|| format!("proof for {addr} (invalid block {idx})"))?;
+                push_proof_nodes(&p, &mut seen, &mut witness.state);
+                witness.keys.push(Bytes::copy_from_slice(addr.as_slice()));
+                witness.keys.extend(slots.iter().map(|s| Bytes::copy_from_slice(s.as_slice())));
+                touched_slot_pairs.extend(slots.iter().map(|s| (*addr, *s)));
+                if let Some(code_hash) = p.info.and_then(|i| i.bytecode_hash) {
+                    let code = state_provider
+                        .bytecode_by_hash(&code_hash)?
+                        .with_context(|| format!("no bytecode for {addr}"))?
+                        .original_bytes();
+                    if !witness.codes.contains(&code) {
+                        witness.codes.push(code);
+                    }
+                }
+            }
+            out.push(Some(ExecutedBlock {
+                computed_hash: recovered.hash(),
+                block: recovered,
+                witness,
+                bundle_state: BundleState::default(),
+                touched_slot_pairs,
+            }));
+            continue;
+        }
 
         // ---- (2) Decode + recover the block ----
         let decoded = SealedBlock::<RethBlock>::decode(&mut fixture_block.rlp.as_ref())
@@ -496,46 +576,11 @@ pub fn run_fixture(
         // `state_provider.proof()` only walks the DB trie tables —
         // which our test provider barely populates — and returned
         // shallow proofs (depth=2) for addresses on a 5-deep trie.
-        use reth_trie_db::DatabaseProof;
-        // Build per-address proofs using reth's with_adapter macro
-        // so the DatabaseTrieCursorFactory's `A` table-adapter type
-        // is selected automatically. Empty TrieInput: the DB already
-        // has the post-block-(N-1) trie via prior write_trie_updates
-        // calls, so walking it directly yields proofs rooted at
-        // recovered.parent_hash() — exactly what cpp-guest needs.
-        // Earlier we passed `cumulative_hps` as overlay; this
-        // double-counted genesis accounts already in the DB and
-        // produced proofs at a different root.
-        let trie_input = TrieInput::default();
+        // Per-address proofs via `account_proof` (defined before the
+        // block loop).
         for addr in &touched_addrs {
-            let result = reth_trie_db::with_adapter!(provider, |A| {
-                let proof_builder = reth_trie::proof::Proof::<
-                    reth_trie_db::DatabaseTrieCursorFactory<_, A>,
-                    reth_trie_db::DatabaseHashedCursorFactory<_>,
-                >::from_tx(provider.tx_ref());
-                proof_builder.overlay_account_proof(
-                    trie_input.clone(),
-                    *addr,
-                    &touched_slots,
-                )
-            });
-            match result {
-                Ok(p) => {
-                    for node in p.proof.iter() {
-                        let h = keccak256(node.as_ref());
-                        if already.insert(h) {
-                            exec_witness.state.push(Bytes::from(node.to_vec()));
-                        }
-                    }
-                    for sp in &p.storage_proofs {
-                        for node in &sp.proof {
-                            let h = keccak256(node.as_ref());
-                            if already.insert(h) {
-                                exec_witness.state.push(Bytes::from(node.to_vec()));
-                            }
-                        }
-                    }
-                }
+            match account_proof(*addr, &touched_slots) {
+                Ok(p) => push_proof_nodes(&p, &mut already, &mut exec_witness.state),
                 Err(e) => {
                     tracing::warn!(idx, %addr, "overlay_account_proof failed: {e:#}");
                 }
@@ -631,17 +676,32 @@ pub fn run_fixture(
         // overlay_account_proof calls.
         cumulative_hps.extend(hashed_state.clone());
 
+        for (addr, acc) in &bundle_state.state {
+            let slots = known.entry(*addr).or_default();
+            slots.extend(acc.storage.keys().map(|k| B256::from(k.to_be_bytes::<32>())));
+        }
+
         let computed_hash = recovered.hash();
-        out.push(ExecutedBlock {
+        out.push(Some(ExecutedBlock {
             block: recovered,
             witness: exec_witness,
             computed_hash,
             bundle_state,
             touched_slot_pairs,
-        });
+        }));
     }
 
     Ok(out)
+}
+
+/// Append `p`'s account and storage proof nodes not yet in `seen`.
+fn push_proof_nodes(p: &reth_trie::AccountProof, seen: &mut HashSet<B256>, nodes: &mut Vec<Bytes>) {
+    let storage_nodes = p.storage_proofs.iter().flat_map(|sp| sp.proof.iter());
+    for node in p.proof.iter().chain(storage_nodes) {
+        if seen.insert(keccak256(node.as_ref())) {
+            nodes.push(node.clone());
+        }
+    }
 }
 
 /// Convert the EEST `Header` model (numeric fields are `U256`-ish
