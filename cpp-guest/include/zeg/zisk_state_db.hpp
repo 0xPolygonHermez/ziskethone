@@ -281,6 +281,14 @@ private:
     // "phantom" leaf) must still block CREATE/CREATE2.
     bool address_has_storage(const evmc::address& addr) const noexcept;
 
+    // EIP-7610: true iff row `idx` had a non-empty storage trie at block
+    // start and it hasn't been wiped since. Covers slots the witness
+    // carries no preimage for (they arrive as PhantomLeaf/Hash nodes, so
+    // `address_has_storage` can't see them). Only meaningful for an
+    // account with nonce==0 and empty code: such an account can't run
+    // code, so its storage can change only by being wiped.
+    bool has_block_start_storage(size_t idx) const noexcept;
+
     // EIP-6780 helper: zero nonce + code_hash and clear every storage
     // slot of `src_idx`. Caller (`selfdestruct`) has already moved the
     // balance to the beneficiary. All clears are journaled.
@@ -516,6 +524,12 @@ private:
     // destroyed contract can't issue SELFDESTRUCT after its CREATE
     // rolls back.
     std::unordered_set<size_t> created_this_tx_idx_{};
+
+    // Account indices whose storage `clear_account_for_selfdestruct` wiped
+    // earlier in the block. Block-lifetime, not journaled (the wipe runs
+    // after a tx's top-level frame, so nothing rolls it back). Makes
+    // `has_block_start_storage` ignore the stale block-start trie.
+    std::unordered_set<size_t> storage_wiped_idx_{};
 
     // EIP-7702: account indices that received a delegation-indicator
     // `set_code` in the current transaction. Same lifecycle as

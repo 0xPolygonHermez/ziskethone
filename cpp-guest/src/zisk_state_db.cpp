@@ -461,6 +461,10 @@ void ZiskStateDB::clear_account_for_selfdestruct(size_t src_idx) noexcept {
         auto snap = dynamic_storage_.erase_account(addr);
         journal_.log_dyn_account_erase(addr, std::move(snap));
     }
+
+    // The block-start storage trie (incl. preimage-less slots we couldn't
+    // zero above) is gone too — a later CREATE here must not collide on it.
+    storage_wiped_idx_.insert(src_idx);
 }
 
 evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
@@ -1075,6 +1079,21 @@ bool ZiskStateDB::address_has_storage(const evmc::address& addr) const noexcept 
     return false;
 }
 
+bool ZiskStateDB::has_block_start_storage(size_t idx) const noexcept {
+    if (storage_wiped_idx_.count(idx) != 0) return false;
+    // Set by the old-root walk and left alone until the new-root pass, so
+    // during execution it's the block-start storage subtree. Any non-Empty
+    // node (even an unrevealed Hash / PhantomLeaf) means non-empty storage.
+    // Rows appended at run time default to Empty.
+    if (accounts_.storage_root_child_at(idx).type != NodeType::Empty) return true;
+    // A row seeded from a preimage-less account leaf (see ensure_account)
+    // has no subtree here; its block-start storage root came with the leaf.
+    const evmc::address& addr = accounts_.address_at(idx);
+    const Accounts::PhantomAccount* ph = accounts_.phantom_account(
+        keccak256_bytes32(addr.bytes, sizeof(addr.bytes)));
+    return ph != nullptr && ph->storage_root != kEmptyTrieRoot;
+}
+
 bool ZiskStateDB::init_create_account(const evmc::address& new_addr,
                                       const evmc_message&  msg) noexcept {
     // EIP-684 collision check (EIP-7610 clarifies storage also counts).
@@ -1084,7 +1103,7 @@ bool ZiskStateDB::init_create_account(const evmc::address& new_addr,
     const size_t new_idx = ensure_account(new_addr);
     if (accounts_.nonce_at(new_idx) != 0 ||
         accounts_.code_hash_at(new_idx) != EMPTY_CODE_HASH ||
-        address_has_storage(new_addr)) {
+        address_has_storage(new_addr) || has_block_start_storage(new_idx)) {
         return false;
     }
 
@@ -1904,7 +1923,7 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
         // the CREATE fails with all gas consumed.
         if (accounts_.nonce_at(new_idx) != 0 ||
             accounts_.code_hash_at(new_idx) != EMPTY_CODE_HASH ||
-            address_has_storage(new_addr)) {
+            address_has_storage(new_addr) || has_block_start_storage(new_idx)) {
             return evmc::Result{EVMC_FAILURE, 0, 0, nullptr, 0};
         }
 
