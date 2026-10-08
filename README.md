@@ -317,28 +317,31 @@ fixtures whose bridge run failed (`BRIDGE_FAIL`).
 
 #### Current results (full corpus, all forks, ~53k blocks)
 
-These predate negative-test coverage (blocks with a tx-level exception never
-reached the guest), so `FAIL_NEG 0` below is not meaningful; re-run the sweep.
+EEST `blockchain_tests` plus the legacy `InvalidBlocks` suites (2,920 fixtures):
 
 | | |
 |---|---|
-| PASS | 52,354 |
-| PASS_NEG (correctly-rejected invalid blocks) | 655 |
-| **FAIL** (completeness gap — wrong hash on a valid block) | **43** |
-| **FAIL_NEG** (soundness — guest accepts an invalid block) | **0** |
+| PASS | 52,738 |
+| PASS_NEG (correctly-rejected invalid blocks) | 3,095 |
+| **FAIL** (completeness gap — wrong hash on a valid block) | **22** |
+| **FAIL_NEG** (soundness — guest accepts an invalid block) | **2** |
+| MISSING (fixtures with unsupported networks / undecodable blocks) | 57 |
 
-**Zero failures on Prague or Osaka** — the current target forks. All 43
-remaining failures are on older forks (Shanghai 14, Paris 14, Cancun 9,
-Berlin 4, London 2) and are all traced to known causes, dominated by one
-upstream witness-generation gap rather than a guest execution bug:
+**Zero failures on Prague or Osaka** — the current target forks. All 22
+remaining failures are on older forks (Paris 8, Shanghai 8, Berlin 4,
+London 2):
 
 | Test file | Blocks | Cause |
 |---|---|---|
-| `paris/eip7610_create_collision/test_init_collision_create_tx.json` | 18 | `rust-input-gen`/`eest-witness-gen` witness-generation gap (drops a storage preimage) — confirmed byte-identical guest execution vs. a reference trace, so not a guest bug |
-| `cancun/eip6780_selfdestruct/test_reentrancy_selfdestruct_revert.json` | 12 | Same witness-generation gap class: revm's bundle-state representation drops storage for self-destructed accounts, upstream of the guest |
+| `cancun/eip6780_selfdestruct/test_reentrancy_selfdestruct_revert.json` | 12 | Witness-generation gap: revm's bundle-state representation drops storage for self-destructed accounts, upstream of the guest (pre-Cancun only) |
 | `constantinople/eip1014_create2/test_recreate.json` | 8 | Likely the same witness-generation gap family (CREATE2 + storage); not yet confirmed |
-| `static/state_tests/stCreate2/create2collisionStorageParis.json` | 3 | Thematically matches the CREATE2/storage-collision cluster above; not yet confirmed |
 | `frontier/create/test_create_one_byte.json` | 2 | Unexplored |
+
+The 2 FAIL_NEG are both `InvalidBlocks/bc4895-withdrawals/shanghaiWithoutWithdrawalsRLP.json`
+(Cancun, Prague): a block whose RLP omits the withdrawals list. The guest
+computes the expected header hash with no fatal — most likely the malformed
+encoding is lost when the bridge turns the block into a JSON manifest; not
+yet investigated.
 
 Re-run the sweep above before any release to confirm this list hasn't grown
 and that Prague/Osaka remain at zero failures.
