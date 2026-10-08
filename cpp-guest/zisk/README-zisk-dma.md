@@ -2,8 +2,8 @@
 
 `-mzisk-dma` makes GCC lower block memory operations (`memcpy`, `memmove`,
 `memset`, equality `memcmp`, and the struct copies GCC turns into them) to the
-ZisK DMA precompile markers in place, instead of calling the `mem*` thunks in
-`dma/`. It cuts about 12% of a block's steps and 3–4% of its area, and it does
+ZisK DMA precompile markers in place, instead of calling the out-of-line `mem*`
+in `zkvm_mem.s` (the ZisK memory ABI's weak libc functions). It cuts about 12% of a block's steps and 3–4% of its area, and it does
 not change the block hash.
 
 The flag only exists in a patched GCC 14.3.0. A stock compiler cannot build with
@@ -89,9 +89,9 @@ The configure output should include:
 ## 4. Check the result
 
 Count the DMA markers in the ELF. With the lowering there are many thousands.
-A stock build has a few hundred: the `dma/*.s` thunks plus the explicit
-`zisk_xmem*` calls in the source (on the current tree, about 9,000 against
-about 300):
+A stock build has far fewer: the out-of-line `zkvm_mem.s` functions plus the
+explicit `zisk_xmem*` calls in the source, which `zkvm_mem.h` inlines (on the
+current tree, about 9,000 against about 300):
 
 ```bash
 riscv-none-elf-objdump -d cpp-guest/zisk/build-dma/zisk_eth_guest.elf \

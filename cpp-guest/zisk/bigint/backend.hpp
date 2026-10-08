@@ -1,13 +1,16 @@
-// backend.hpp — M1 of the MODEXP port: 256-bit primitives + fcall hints.
+// backend.hpp — portable 256-bit primitives for the HOST build of zevm.
 //
 // Big integers are little-endian arrays of 64-bit limbs (groups of 4 = one
-// "U256"). The inner 256-bit multiply-add is the ZisK arith256 precompile;
-// division/exponent-bit decomposition come from fcall hints (verified by the
-// higher layers). Dual backend selected by ZEG_ZISK (precompiles/fcalls vs
-// portable software for host tests). Faithful to ziskos syscalls/arith256 +
-// zisklib fcalls (bin_decomp id 16, bigint_div id 22).
+// "U256"). These are plain software reference versions of the multiply-add,
+// modular multiply-add, add and long division that zevm's arithmetic opcodes use
+// on the host. The ZisK guest does not use this file: there, the same opcodes go
+// through the little-endian U256 ABI (zkvm_u256_le.h).
 
 #pragma once
+
+#if defined(ZEG_ZISK)
+#error "bigint/backend.hpp is the host software; the ZisK guest uses zkvm_u256_le.h"
+#endif
 
 #include <cstdint>
 #include <cstring>
@@ -16,57 +19,6 @@ namespace zeg::bi {
 
 // d(512) = a*b + c, all 256-bit (4 limbs); dl = low 4, dh = high 4.
 // a,b,c point to [u64;4]; dl,dh to [u64;4].
-#if defined(ZEG_ZISK)
-
-inline void arith256(const uint64_t a[4], const uint64_t b[4], const uint64_t c[4],
-                     uint64_t dl[4], uint64_t dh[4]) {
-    struct { const uint64_t* a; const uint64_t* b; const uint64_t* c;
-             uint64_t* dl; uint64_t* dh; } p{a, b, c, dl, dh};
-    asm volatile("csrs 0x801, %0" : : "r"(&p) : "memory");
-}
-inline void arith256_mod(const uint64_t a[4], const uint64_t b[4], const uint64_t c[4],
-                         const uint64_t m[4], uint64_t d[4]) {
-    struct { const uint64_t* a; const uint64_t* b; const uint64_t* c;
-             const uint64_t* module; uint64_t* d; } p{a, b, c, m, d};
-    asm volatile("csrs 0x802, %0" : : "r"(&p) : "memory");
-}
-
-// 256-bit add: a + b + cin = cout|c (cout returned). CSR 0x811 (csrrs ret).
-inline uint64_t add256(const uint64_t a[4], const uint64_t b[4], uint64_t cin, uint64_t c[4]) {
-    struct { const uint64_t* a; const uint64_t* b; uint64_t cin; uint64_t* c; } p{a, b, cin, c};
-    uint64_t cout;
-    asm volatile("csrrs %0, 0x811, %1" : "=r"(cout) : "r"(&p) : "memory");
-    return cout;
-}
-
-// fcall direct-value param push (bucket 1 → CSR 0x8F0) and result read.
-inline void fc_param(uint64_t v) { asm volatile("csrs 0x8F0, %0" : : "r"(v) : "memory"); }
-inline uint64_t fc_get() { uint64_t v; asm volatile("csrr %0, 0xFFE" : "=r"(v)); return v; }
-
-// bin_decomp: bits of big int a[len_a] from MSB to LSB. Returns bit count;
-// writes bits (each 0/1) into bits_out. (fcall id 16)
-inline int fcall_bin_decomp(const uint64_t* a, int len_a, uint64_t* bits_out) {
-    fc_param((uint64_t)len_a);
-    for (int i = 0; i < len_a; ++i) fc_param(a[i]);
-    asm volatile("csrwi 0x8C0, 16" : : : "memory");
-    int n = (int)fc_get();
-    for (int i = 0; i < n; ++i) bits_out[i] = fc_get();
-    return n;
-}
-// bigint_div: a = b*quo + rem. Writes quo/rem, returns lengths via out-params. (id 22)
-inline void fcall_bigint_div(const uint64_t* a, int len_a, const uint64_t* b, int len_b,
-                             uint64_t* quo, int* len_quo, uint64_t* rem, int* len_rem) {
-    fc_param((uint64_t)len_a);
-    for (int i = 0; i < len_a; ++i) fc_param(a[i]);
-    fc_param((uint64_t)len_b);
-    for (int i = 0; i < len_b; ++i) fc_param(b[i]);
-    asm volatile("csrwi 0x8C0, 22" : : : "memory");
-    int lq = (int)fc_get(); for (int i = 0; i < lq; ++i) quo[i] = fc_get();
-    int lr = (int)fc_get(); for (int i = 0; i < lr; ++i) rem[i] = fc_get();
-    *len_quo = lq; *len_rem = lr;
-}
-
-#else  // ===================== portable software (host) =====================
 
 inline void arith256(const uint64_t a[4], const uint64_t b[4], const uint64_t c[4],
                      uint64_t dl[4], uint64_t dh[4]) {
@@ -123,15 +75,6 @@ inline uint64_t add256(const uint64_t a[4], const uint64_t b[4], uint64_t cin, u
     return (uint64_t)carry;
 }
 
-// bin_decomp (software): MSB→LSB bits of a[len_a], no leading zeros.
-inline int fcall_bin_decomp(const uint64_t* a, int len_a, uint64_t* bits_out) {
-    int top = -1;
-    for (int i = len_a*64 - 1; i >= 0; --i) if ((a[i>>6] >> (i&63)) & 1ULL) { top = i; break; }
-    if (top < 0) { return 0; }
-    int n = 0;
-    for (int i = top; i >= 0; --i) bits_out[n++] = (a[i>>6] >> (i&63)) & 1ULL;
-    return n;
-}
 // bigint_div (software): a = b*quo + rem, bit-by-bit long division.
 inline void fcall_bigint_div(const uint64_t* a, int len_a, const uint64_t* b, int len_b,
                              uint64_t* quo, int* len_quo, uint64_t* rem, int* len_rem) {
@@ -162,6 +105,5 @@ inline void fcall_bigint_div(const uint64_t* a, int len_a, const uint64_t* b, in
     *len_quo = lq; *len_rem = lr;
 }
 
-#endif  // backend
 
 } // namespace zeg::bi
