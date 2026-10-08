@@ -34,9 +34,8 @@ inline G1 g1_neg(const G1& p) { return { p.x, fp_neg(p.y) }; }
 #if defined(ZEG_ZISK)
 inline G1 g1_add_raw(const G1& a, const G1& b) {        // requires x_a != x_b
     G1 p1 = a, p2 = b;
-    struct { uint64_t* p1; const uint64_t* p2; } pp{ reinterpret_cast<uint64_t*>(&p1),
-                                                     reinterpret_cast<const uint64_t*>(&p2) };
-    asm volatile("csrs 0x80C, %0" : : "r"(&pp) : "memory");
+    // Two direct operands (a = &p1 receives the result, b = &p2), one precompiled instruction.
+    asm volatile("csrs 0x80C, %[a]\n\tadd x0, %[b], x0" : : [a] "r"(reinterpret_cast<uint64_t*>(&p1)), [b] "r"(reinterpret_cast<const uint64_t*>(&p2)) : "memory");
     return p1;
 }
 inline G1 g1_dbl_raw(const G1& a) {                     // requires y != 0

@@ -53,8 +53,8 @@ inline void arith256_mod(const u64 a[4], const u64 b[4], const u64 c[4], const u
     asm volatile("csrs 0x802, %0" : : "r"(&p) : "memory");
 }
 inline void ec_add(u64 p1[8], const u64 p2[8]) {  // p1 += p2 (affine, in place)
-    struct { u64 *p1; const u64 *p2; } pp{p1, p2};
-    asm volatile("csrs 0x817, %0" : : "r"(&pp) : "memory");
+    // Two direct operands (a = p1, b = p2) folded into one precompiled instruction.
+    asm volatile("csrs 0x817, %[a]\n\tadd x0, %[b], x0" : : [a] "r"(p1), [b] "r"(p2) : "memory");
 }
 inline void ec_dbl(u64 p[8]) {  // p = 2·p (affine, in place)
     asm volatile("csrs 0x818, %0" : : "r"(p) : "memory");

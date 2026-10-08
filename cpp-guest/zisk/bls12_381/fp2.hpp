@@ -34,14 +34,16 @@ inline uint64_t fp2_sgn0(const Fp2& a) {
 #if defined(ZEG_ZISK)
 
 namespace detail {
-struct CplxParams { uint64_t* f1; const uint64_t* f2; };
+// Two direct operands: `csrs csr, f1` + `add x0, f2, x0` fold into ONE precompiled
+// instruction (a = f1 receives the result, b = f2). Keep both in one asm block.
 inline Fp2 cplx_op(unsigned csr, const Fp2& a, const Fp2& b) {
     Fp2 f1 = a, f2 = b;
-    CplxParams p{ reinterpret_cast<uint64_t*>(&f1), reinterpret_cast<const uint64_t*>(&f2) };
+    uint64_t* pa = reinterpret_cast<uint64_t*>(&f1);
+    const uint64_t* pb = reinterpret_cast<const uint64_t*>(&f2);
     switch (csr) {
-        case 0x80E: asm volatile("csrs 0x80E, %0" : : "r"(&p) : "memory"); break;
-        case 0x80F: asm volatile("csrs 0x80F, %0" : : "r"(&p) : "memory"); break;
-        default:    asm volatile("csrs 0x810, %0" : : "r"(&p) : "memory"); break;
+        case 0x80E: asm volatile("csrs 0x80E, %[a]\n\tadd x0, %[b], x0" : : [a] "r"(pa), [b] "r"(pb) : "memory"); break;
+        case 0x80F: asm volatile("csrs 0x80F, %[a]\n\tadd x0, %[b], x0" : : [a] "r"(pa), [b] "r"(pb) : "memory"); break;
+        default:    asm volatile("csrs 0x810, %[a]\n\tadd x0, %[b], x0" : : [a] "r"(pa), [b] "r"(pb) : "memory"); break;
     }
     return f1;
 }

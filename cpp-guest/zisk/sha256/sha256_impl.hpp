@@ -24,13 +24,14 @@ inline constexpr uint32_t H0[8] = {
 #if defined(ZEG_ZISK)
 
 // One SHA-256 compression of a 512-bit block via the sha256f precompile (0x805).
-// Params struct = { state: &mut [u64;4], input: &[u64;8] } (SyscallSha256Params).
+// Two direct operands, no params struct: `csrs 0x805, state` + `add x0, input, x0` fold
+// into ONE precompiled instruction (a = state: &mut [u64;4], b = input: &[u64;8]).
 inline void compress(uint32_t h[8], const uint8_t block[64]) {
     alignas(8) uint64_t in[8];
     std::memcpy(in, block, 64);                       // raw bytes; precompile reads BE
-    struct { uint64_t* state; const uint64_t* input; } p{
-        reinterpret_cast<uint64_t*>(h), in };
-    asm volatile("csrs 0x805, %0" : : "r"(&p) : "memory");
+    uint64_t* state = reinterpret_cast<uint64_t*>(h);
+    const uint64_t* input = in;
+    asm volatile("csrs 0x805, %[a]\n\tadd x0, %[b], x0" : : [a] "r"(state), [b] "r"(input) : "memory");
 }
 
 #else  // ===================== portable software (host) =====================

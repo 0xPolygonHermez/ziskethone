@@ -20,11 +20,33 @@ inline constexpr uint64_t IV[8] = {
 
 #if defined(ZEG_ZISK)
 
-// One BLAKE2b round (SIGMA[index]) via the blake2b_round precompile (0x819).
-// Params struct = { index: u64, state: &mut [u64;16], input: &[u64;16] }.
+// One BLAKE2b round (SIGMA[Index]) via the blake2b_round precompile (0x819).
+// Two direct operands plus a static argument: `csrs 0x819, state` + `addi x0, input, Index`
+// fold into ONE precompiled instruction (a = state, b = input, extended_arg = Index). The
+// round index travels in the immediate, so it has to be a compile-time constant; the
+// runtime-index entry point below dispatches over the ten instantiations.
+template <uint64_t Index>
+inline void round_mix_const(uint64_t v[16], const uint64_t m[16]) {
+    static_assert(Index < 10, "blake2b_round: SIGMA index must be in [0,10)");
+    asm volatile("csrs 0x819, %[a]\n\taddi x0, %[b], %[idx]"
+                 :
+                 : [a] "r"(v), [b] "r"(m), [idx] "I"(int(Index))
+                 : "memory");
+}
 inline void round_mix(uint64_t v[16], const uint64_t m[16], uint64_t index) {
-    struct { uint64_t index; uint64_t* state; const uint64_t* input; } p{index, v, m};
-    asm volatile("csrs 0x819, %0" : : "r"(&p) : "memory");
+    switch (index) {
+        case 0: round_mix_const<0>(v, m); break;
+        case 1: round_mix_const<1>(v, m); break;
+        case 2: round_mix_const<2>(v, m); break;
+        case 3: round_mix_const<3>(v, m); break;
+        case 4: round_mix_const<4>(v, m); break;
+        case 5: round_mix_const<5>(v, m); break;
+        case 6: round_mix_const<6>(v, m); break;
+        case 7: round_mix_const<7>(v, m); break;
+        case 8: round_mix_const<8>(v, m); break;
+        case 9: round_mix_const<9>(v, m); break;
+        default: __builtin_trap();
+    }
 }
 
 #else  // ===================== portable software (host) =====================
