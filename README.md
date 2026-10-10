@@ -321,20 +321,19 @@ EEST `blockchain_tests` plus the legacy `InvalidBlocks` suites (2,920 fixtures):
 
 | | |
 |---|---|
-| PASS | 52,738 |
+| PASS | 52,750 |
 | PASS_NEG (correctly-rejected invalid blocks) | 3,095 |
-| **FAIL** (completeness gap — wrong hash on a valid block) | **22** |
+| **FAIL** (completeness gap — wrong hash on a valid block) | **10** |
 | **FAIL_NEG** (soundness — guest accepts an invalid block) | **2** |
 | MISSING (fixtures with unsupported networks / undecodable blocks) | 57 |
 
-**Zero failures on Prague or Osaka** — the current target forks. All 22
-remaining failures are on older forks (Paris 8, Shanghai 8, Berlin 4,
-London 2):
+**Zero failures on Prague or Osaka** — the current target forks. All 10
+remaining failures are on older forks (Berlin 4, London 2, Paris 2,
+Shanghai 2):
 
 | Test file | Blocks | Cause |
 |---|---|---|
-| `cancun/eip6780_selfdestruct/test_reentrancy_selfdestruct_revert.json` | 12 | Witness-generation gap: revm's bundle-state representation drops storage for self-destructed accounts, upstream of the guest (pre-Cancun only) |
-| `constantinople/eip1014_create2/test_recreate.json` | 8 | Likely the same witness-generation gap family (CREATE2 + storage); not yet confirmed |
+| `constantinople/eip1014_create2/test_recreate.json` | 8 | Unexplored (CREATE2 + storage); not the self-destructed-account storage gap, which no longer occurs |
 | `frontier/create/test_create_one_byte.json` | 2 | Unexplored |
 
 The 2 FAIL_NEG are both `InvalidBlocks/bc4895-withdrawals/shanghaiWithoutWithdrawalsRLP.json`
