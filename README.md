@@ -271,6 +271,10 @@ for m in $(find "$OUT" -name "block-*.json" | sort); do
             echo "PASS_NEG(guest) $FIX $m" >> "$LOG"
         elif [ $guest_rc -ne 0 ]; then   # crash / timeout, not a fatal
             echo "FAIL(guest_crash) $FIX $m" >> "$LOG"
+        elif ! tr '|' '\n' < "${base}.expect" \
+                | grep -qvxE 'BlockException\.RLP_(STRUCTURES_ENCODING|WITHDRAWALS_NOT_READ)'; then
+            # invalid only in the block's RLP envelope, which the guest input doesn't have
+            echo "NA_NEG(rlp_envelope) $FIX $m" >> "$LOG"
         else
             echo "FAIL_NEG(guest_accepted_bad_block) $FIX $m" >> "$LOG"
         fi
@@ -315,6 +319,11 @@ block with a witness of the whole parent state.
 `FAIL_NEG` would mean the guest wrongly *accepted* an invalid block — a
 soundness bug, more serious than a plain `FAIL` (a completeness gap: a valid
 block computed with the wrong hash).
+`NA_NEG(rlp_envelope)` = a block that is invalid only in its RLP envelope
+(e.g. a body that omits the withdrawals list), with a valid header. The guest
+input is structured (header fields, tx list, withdrawals list), not block RLP,
+so there is nothing to reject: the same header with a correctly encoded body
+is a valid block with the same hash.
 
 Blocks that get no result are counted as `MISSING`: tests on networks
 `eest-witness-gen` doesn't support (pre-Berlin forks — see
@@ -331,7 +340,8 @@ EEST `blockchain_tests` plus the legacy `InvalidBlocks` suites (2,920 fixtures):
 | PASS | 53,382 |
 | PASS_NEG (correctly-rejected invalid blocks) | 3,748 |
 | **FAIL** (completeness gap — wrong hash on a valid block) | **8** |
-| **FAIL_NEG** (soundness — guest accepts an invalid block) | **2** |
+| **FAIL_NEG** (soundness — guest accepts an invalid block) | **0** |
+| NA_NEG (invalid only in the RLP envelope, which the guest input doesn't have) | 2 |
 | MISSING (fixtures with unsupported networks / undecodable blocks) | 57 |
 
 **Zero failures on Prague or Osaka** — the current target forks. All 8
@@ -355,11 +365,13 @@ would mean resetting and rebuilding storage subtrees in the state-root pass.
 That complexity isn't worth it for a case that can't happen on the forks this
 client targets.
 
-The 2 FAIL_NEG are both `InvalidBlocks/bc4895-withdrawals/shanghaiWithoutWithdrawalsRLP.json`
-(Cancun, Prague): a block whose RLP omits the withdrawals list. The guest
-computes the expected header hash with no fatal — most likely the malformed
-encoding is lost when the bridge turns the block into a JSON manifest; not
-yet investigated.
+The 2 NA_NEG are both `InvalidBlocks/bc4895-withdrawals/shanghaiWithoutWithdrawalsRLP.json`
+(Cancun, Prague): a block whose body RLP omits the withdrawals list
+(`RLP_WITHDRAWALS_NOT_READ`). Its header is valid: `withdrawalsRoot` is the
+empty-trie root. The guest outputs exactly that header hash, which is correct:
+what it proves is that the header is a valid successor, and the same header
+with an empty withdrawals list is a valid block. A prover gains nothing from
+the bad encoding.
 
 Re-run the sweep above before any release to confirm this list hasn't grown
 and that Prague/Osaka remain at zero failures.
