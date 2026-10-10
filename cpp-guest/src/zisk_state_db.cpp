@@ -1013,8 +1013,9 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
         return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0};
     }
 
-    // EIP-3541 (London): contracts cannot have deployed code that
-    // starts with the 0xef byte. EIP-7702 extends this for the
+    // EIP-3541 (London+): contracts cannot have deployed code that
+    // starts with the 0xef byte (pre-London, e.g. Berlin, it is valid
+    // code — test_create_one_byte deploys `0xef`). EIP-7702 extends this for the
     // delegation-designation prefix 0xef0100 specifically — CREATE/
     // CREATE2 must reject init code that RETURNS code starting with
     // these bytes (otherwise the deployed contract would be
@@ -1022,7 +1023,8 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     // Reth rejects such CREATEs; fixtures
     // test_creating_delegation_designation_contract and
     // test_deploying_delegation_designation_contract verify this.
-    if (result.output_size > 0 && result.output_data[0] == 0xef) {
+    if (is_london_or_later() && result.output_size > 0 &&
+        result.output_data[0] == 0xef) {
         rollback(cp_after_bump);
         return evmc::Result{EVMC_CONTRACT_VALIDATION_FAILURE, 0, 0, nullptr, 0};
     }
@@ -1956,8 +1958,8 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
                 return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0};
             }
 
-            // EIP-3541 (London): reject deployed code starting with
-            // 0xef. EIP-7702 reinforces this for the delegation prefix
+            // EIP-3541 (London+): reject deployed code starting with
+            // 0xef (valid pre-London). EIP-7702 reinforces this for the delegation prefix
             // 0xef0100 specifically — top-level CREATE tx must also
             // refuse to deploy such code, otherwise the new contract
             // would be indistinguishable from a 7702-installed
@@ -1965,7 +1967,8 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
             // test_deploying_delegation_designation_contract.json
             // exercises this path (a Type-0 creation tx whose init
             // code RETURNs `0xef0100||addr`).
-            if (result.output_size > 0 && result.output_data[0] == 0xef) {
+            if (is_london_or_later() && result.output_size > 0 &&
+                result.output_data[0] == 0xef) {
                 return evmc::Result{EVMC_CONTRACT_VALIDATION_FAILURE,
                                     0, 0, nullptr, 0};
             }

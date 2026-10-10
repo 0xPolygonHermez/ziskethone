@@ -376,6 +376,8 @@ private:
     // 4800, and the SELFDESTRUCT refund to 0 — both already handled by
     // evmone itself, fork-gated on `state.rev`). Pre-London blocks
     // (Frontier..Berlin) still use the original /2 cap in settle_tx_gas.
+    // London also added EIP-3541 (reject deployed code starting with
+    // 0xef), gated in call_create and the create-tx path.
     bool is_london_or_later() const noexcept {
         return active_revision() >= EVMC_LONDON;
     }

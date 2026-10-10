@@ -328,20 +328,19 @@ EEST `blockchain_tests` plus the legacy `InvalidBlocks` suites (2,920 fixtures):
 
 | | |
 |---|---|
-| PASS | 52,750 |
-| PASS_NEG (correctly-rejected invalid blocks) | 3,095 |
-| **FAIL** (completeness gap — wrong hash on a valid block) | **10** |
+| PASS | 53,382 |
+| PASS_NEG (correctly-rejected invalid blocks) | 3,748 |
+| **FAIL** (completeness gap — wrong hash on a valid block) | **8** |
 | **FAIL_NEG** (soundness — guest accepts an invalid block) | **2** |
 | MISSING (fixtures with unsupported networks / undecodable blocks) | 57 |
 
-**Zero failures on Prague or Osaka** — the current target forks. All 10
-remaining failures are on older forks (Berlin 4, London 2, Paris 2,
-Shanghai 2):
+**Zero failures on Prague or Osaka** — the current target forks. All 8
+remaining failures are on older forks (Berlin 2, London 2, Paris 2,
+Shanghai 2), and all are one known pre-Cancun limitation:
 
 | Test file | Blocks | Cause |
 |---|---|---|
 | `constantinople/eip1014_create2/test_recreate.json` | 8 | Pre-Cancun only — won't fix (see below) |
-| `frontier/create/test_create_one_byte.json` | 2 | Unexplored |
 
 `test_recreate`: a contract that existed before the block SELFDESTRUCTs, and
 then the same address comes back in the same block (it receives value, or is
