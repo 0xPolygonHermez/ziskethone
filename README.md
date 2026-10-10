@@ -2,6 +2,13 @@
 
 A stateless Ethereum block verifier targeting the [ZisK](https://github.com/0xPolygonHermez/zisk) RISC-V zkVM.
 
+**Fork target:** the guest is built to verify blocks of the current mainnet
+forks (Prague, and Osaka in progress). Older forks are supported well enough to
+run the EEST corpus, but pre-Cancun edge cases that cannot occur on recent forks
+are not fixed when the fix would complicate the code. See
+[Current results](#current-results-full-corpus-all-forks-53k-blocks) for the
+known cases.
+
 The repository is split into three components that communicate through a binary
 file on disk:
 
@@ -333,8 +340,21 @@ Shanghai 2):
 
 | Test file | Blocks | Cause |
 |---|---|---|
-| `constantinople/eip1014_create2/test_recreate.json` | 8 | Unexplored (CREATE2 + storage); not the self-destructed-account storage gap, which no longer occurs |
+| `constantinople/eip1014_create2/test_recreate.json` | 8 | Pre-Cancun only — won't fix (see below) |
 | `frontier/create/test_create_one_byte.json` | 2 | Unexplored |
+
+`test_recreate`: a contract that existed before the block SELFDESTRUCTs, and
+then the same address comes back in the same block (it receives value, or is
+re-created with CREATE2). The destruction wipes its storage, but the guest only
+zeroes the slots the witness names. The new-root pass still hashes the account's
+block-start storage subtree, including the slots the block never read. So the
+revived account gets a stale storage root. Since Cancun (EIP-6780),
+SELFDESTRUCT only destroys an account created in the same transaction, and
+EIP-7610 forbids creating at an address that has storage. A pre-existing
+account's storage can therefore never be wiped on the target forks. Fixing this
+would mean resetting and rebuilding storage subtrees in the state-root pass.
+That complexity isn't worth it for a case that can't happen on the forks this
+client targets.
 
 The 2 FAIL_NEG are both `InvalidBlocks/bc4895-withdrawals/shanghaiWithoutWithdrawalsRLP.json`
 (Cancun, Prague): a block whose RLP omits the withdrawals list. The guest
