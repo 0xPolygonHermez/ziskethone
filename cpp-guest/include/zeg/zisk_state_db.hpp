@@ -26,6 +26,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -173,9 +174,12 @@ public:
     // (no txs) yields the well-known empty-trie root.
     const evmc::bytes32& receipts_root() const noexcept { return receipts_root_; }
 
-    // Cumulative gas used across every tx processed in this block —
-    // matches the block header's `gasUsed` field.
-    uint64_t gas_used() const noexcept { return cumulative_gas_used_; }
+    // The block header's `gasUsed`: the larger of the block's regular
+    // and state gas (EIP-8037, Amsterdam). Before Amsterdam the state
+    // dimension stays 0 and this is the sum of the txs' gas used.
+    uint64_t gas_used() const noexcept {
+        return std::max(block_regular_gas_used_, block_state_gas_used_);
+    }
 
     // Canonical withdrawals trie root (EIP-4895). Empty list yields the
     // well-known empty-trie root.
@@ -445,17 +449,34 @@ private:
     evmc::Result execute_top_level_frame(const Transactions::View& tx,
                                          size_t sender_idx,
                                          int64_t intrinsic_gas) noexcept;
+    // The frame itself, with its regular gas and state-gas reservoir.
+    evmc::Result execute_top_level_message(const Transactions::View& tx,
+                                           size_t  sender_idx,
+                                           int64_t gas,
+                                           int64_t state_gas) noexcept;
+
+    // A tx's gas, as settle_tx_gas splits it. `gas_used` is what the
+    // sender pays and the receipt records. `block_regular` and
+    // `block_state` are its share of the block's two gas dimensions
+    // (EIP-8037; refunds don't reduce them, EIP-7778). Before Amsterdam
+    // `block_regular == gas_used` and `block_state == 0`.
+    struct TxGasUsed {
+        uint64_t gas_used;
+        uint64_t block_regular;
+        uint64_t block_state;
+    };
 
     // Post-EVM gas settlement: EIP-3529 refund cap, sender refund,
-    // coinbase priority-fee credit. Returns the final tx gas_used.
-    uint64_t settle_tx_gas(const Transactions::View& tx,
+    // coinbase priority-fee credit.
+    TxGasUsed settle_tx_gas(const Transactions::View& tx,
                            const evmc::Result&       result,
                            size_t                    sender_idx,
                            int64_t                   auth_refund) noexcept;
 
     // Compute the per-tx logs bloom from the (post-rollback) surviving
-    // logs, OR into the block bloom, set the tx's status and cumGas.
-    void finalize_receipt(const evmc::Result& result, uint64_t gas_used) noexcept;
+    // logs, OR into the block bloom, set the tx's status and cumGas,
+    // and add the tx to the block's gas dimensions.
+    void finalize_receipt(const evmc::Result& result, const TxGasUsed& used) noexcept;
 
     // ----- Per-block post-execution phases (called by post_execute_block) -----
 
@@ -560,8 +581,14 @@ private:
     // Per-tx receipts (finalized at end-of-tx; logs filled by emit_log
     // during execution).
     std::vector<TxReceipt>   tx_receipts_{};
-    // Cumulative gas used across all processed txs in this block.
+    // Cumulative gas used across all processed txs in this block (the
+    // receipts' cumulativeGasUsed).
     uint64_t                 cumulative_gas_used_{0};
+    // The block's regular and state gas (EIP-8037). Tx admission checks
+    // each one against the block gas limit; the header's gasUsed is
+    // their max. Before Amsterdam regular == cumulative_gas_used_.
+    uint64_t                 block_regular_gas_used_{0};
+    uint64_t                 block_state_gas_used_{0};
     // OR-aggregation of every tx's logs_bloom; matches the block
     // header's logsBloom field.
     std::array<uint8_t, 256> block_bloom_filter_{};
@@ -581,6 +608,10 @@ private:
     // Current tx's EIP-7623 calldata floor, from check_transaction
     // (one calldata scan per tx); settle_tx_gas charges at least it.
     int64_t  tx_floor_gas_{0};
+    // Current tx's EIP-8037 state-gas reservoir: the gas limit above
+    // the EIP-7825 cap (Amsterdam), from check_transaction. 0 before
+    // Amsterdam.
+    int64_t  tx_state_gas_limit_{0};
 
     // EIP-7685 requests collected from the Pectra predeploys (one
     // entry per non-empty request type; entries are type-prefixed).

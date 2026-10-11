@@ -5,7 +5,7 @@ execution-layer half (the consensus half is Gloas). It activated on Sepolia on
 2026-10-06; mainnet is not scheduled yet.
 
 Status on branch `glamsterdam`: the test pipeline and the guest groundwork are
-in place, and the individual EIPs are not implemented yet.
+in place, and the EIPs are being implemented one by one (Status column below).
 
 - `eest-witness-gen` is on **reth v2.7.0** (the first release with Amsterdam on
   Sepolia). It maps the `Amsterdam` and `…ToAmsterdamAtTime…` networks, with blob
@@ -69,7 +69,7 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
 | [7981](https://eips.ethereum.org/EIPS/eip-7981) | Increase access list cost | `eip7981_increase_access_list_cost` | 19 / 189 | todo |
 | [7997](https://eips.ethereum.org/EIPS/eip-7997) | Deterministic factory contract | `eip7997_deterministic_factory_contract` | 21 / 40 | todo |
 | [8024](https://eips.ethereum.org/EIPS/eip-8024) | DUPN / SWAPN / EXCHANGE | `eip8024_dupn_swapn_exchange` | 66 / 288 | todo |
-| [8037](https://eips.ethereum.org/EIPS/eip-8037) | State creation gas cost increase (state-gas reservoir) | `eip8037_state_creation_gas_cost_increase` | 270 / 834 | todo |
+| [8037](https://eips.ethereum.org/EIPS/eip-8037) | State creation gas cost increase (state-gas reservoir) | `eip8037_state_creation_gas_cost_increase` | 270 / 834 | done (most fixtures also need 2780) |
 | [8038](https://eips.ethereum.org/EIPS/eip-8038) | State access gas cost increase | `eip8038_state_access_gas_cost_increase` | 88 / 263 | todo |
 | [8070](https://eips.ethereum.org/EIPS/eip-8070) | eth/72 sparse blobpool | — | — | n/a (networking only) |
 | [8246](https://eips.ethereum.org/EIPS/eip-8246) | Remove SELFDESTRUCT burn | `eip8246_selfdestruct_no_burn` | 9 / 663 | todo |
@@ -81,12 +81,18 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
   the input and goes straight into the header hash
   (`TODO(EIP-7928)` in `run.cpp`). EIP-7928 must build the BAL during execution
   and check its hash against the input.
-- **EIP-8037 state gas.** Top-level messages send `state_gas = 0`, and
-  host-built results only pass `msg.state_gas` through. Splitting the
-  transaction's reservoir, plus the host-side CREATE deposit and new-account
-  charges, belongs to EIP-8037.
-- **zevm** runs Amsterdam with Osaka opcodes and Osaka gas. Each EIP needs a
-  zevm change alongside the host change: 8024 and 7843 opcodes, 8037/8038 gas.
+- **EIP-8037 is entangled with other EIPs.** Its fixtures use EIP-2780's
+  intrinsic gas (e.g. a 15,000-gas plain call), EIP-8038's access costs and the
+  EIP-7976/7981 floor, so most of them pass only once those are in. Its block
+  accounting is also EIP-7778's rule (no refund in the block's gas).
+- **Total tx gas cap.** `TX_MAX_TOTAL_GAS_LIMIT` (2^32 − 1) comes from
+  execution-specs and the fixtures; revm 43 and reth 2.7 don't implement it.
+- **System calls** get 30M regular gas plus a 16-slot state-gas reservoir, as
+  evmone and the fixtures do. revm 43 gives 30M + 16 × 97,920 regular gas
+  instead.
+- **zevm** runs Amsterdam with Osaka opcodes and Osaka access costs; it has the
+  EIP-8037 state gas. Each remaining EIP needs a zevm change alongside the host
+  change: 8024 and 7843 opcodes, 8038 gas.
 - **Proving cost.** On a mainnet block (26167511) the evmone ELF takes +3.3%
   steps on evmone v0.24 vs v0.21 (136.0M → 140.5M); zevm is unchanged.
 

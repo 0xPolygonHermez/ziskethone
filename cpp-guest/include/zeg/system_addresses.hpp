@@ -86,6 +86,7 @@ constexpr uint8_t  kVersionedHashVersionKzg   = 0x01;     // EIP-4844
 // Tx validity limits.
 constexpr size_t   kMaxInitCodeSize           = 2 * 24576; // EIP-3860
 constexpr uint64_t kMaxTxGasLimit             = 1u << 24;  // EIP-7825 (Osaka)
+constexpr uint64_t kMaxTxTotalGasLimit        = 0xffffffff; // EIP-8037 (Amsterdam)
 constexpr size_t   kMaxBlobsPerTx             = 6;         // EIP-7594 (Osaka)
 
 // keccak256(rlp([])): the ommers hash of every post-Merge block (EIP-3675).

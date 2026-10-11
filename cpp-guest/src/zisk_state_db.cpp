@@ -9,6 +9,8 @@
 
 #include <intx/intx.hpp>    // 256-bit add for selfdestruct balance transfer
 #include <test/state/precompiles.hpp>  // evmone::state::call_precompile
+#include <evmone/constants.hpp>  // COST_PER_STATE_BYTE, NEW_ACCOUNT_STATE_GAS (EIP-8037)
+#include <evmone/state_gas.hpp>  // evmone::StateGas (EIP-8037)
 
 // The owned VM, behind the evmc2 interface. The backend is selected at build
 // time: EVM_BACKEND=zevm defines USE_ZEVM and links the hand-written EVM;
@@ -37,6 +39,30 @@
 namespace zeg {
 
 namespace {
+
+// Code deposit for a successful CREATE whose code passed the size and
+// 0xef checks. Before Amsterdam: 200 gas per byte (EIP-2). Amsterdam
+// (EIP-8037): 6 gas per word for hashing, plus COST_PER_STATE_BYTE per
+// byte of state gas, taken from the initcode's leftover reservoir first
+// (evmone test/state/host.cpp). Returns false when the frame can't pay;
+// the CREATE then fails with all its gas consumed.
+bool charge_code_deposit(evmc::Result& result, bool amsterdam) noexcept {
+    const auto size = static_cast<int64_t>(result.output_size);
+    if (!amsterdam) {
+        if (result.gas_left < size * 200) return false;
+        result.gas_left -= size * 200;
+        return true;
+    }
+    int64_t gas_left = result.gas_left - 6 * ((size + 31) / 32);
+    evmone::StateGas state_gas{result.state_gas};
+    if (gas_left < 0 ||
+        !state_gas.charge(gas_left, size * evmone::COST_PER_STATE_BYTE)) {
+        return false;
+    }
+    result.gas_left  = gas_left;
+    result.state_gas = state_gas;
+    return true;
+}
 
 // keccak256 of the empty byte string. An account whose code_hash equals
 // this is considered to have no code (per Yellow Paper §4.1).
@@ -1045,19 +1071,14 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
                             {.left = msg.state_gas}};
     }
 
-    // EIP-2 code-deposit cost (200 gas per byte of deployed code).
-    // Charged AFTER the init code's RETURN, deducted from result's
-    // remaining gas. If the leftover gas can't cover the deposit, the
-    // whole CREATE fails (per EIP-2 / Homestead+ semantics).
-    constexpr int64_t CODE_DEPOSIT_COST = 200;
-    const int64_t deposit =
-        static_cast<int64_t>(result.output_size) * CODE_DEPOSIT_COST;
-    if (result.gas_left < deposit) {
+    // Code deposit, charged AFTER the init code's RETURN from its
+    // remaining gas. If the frame can't cover it, the whole CREATE fails
+    // (per EIP-2 / Homestead+ semantics).
+    if (!charge_code_deposit(result, is_amsterdam_or_later())) {
         rollback(cp_after_bump);
         return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0,
                             {.left = msg.state_gas}};
     }
-    result.gas_left -= deposit;
 
     // 5. Register the deployed code on the new account. A *successful*
     //    CREATE/CREATE2 must not propagate the init code's RETURN payload
@@ -1304,11 +1325,11 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
             rollback(cp);
         }
 
-        const uint64_t gas_used = settle_tx_gas(tx, result, sender_idx, auth_refund);
+        const auto used = settle_tx_gas(tx, result, sender_idx, auth_refund);
         std::fprintf(stderr, "TX %zu gas_used=%llu status=%d\n",
-                     i, (unsigned long long)gas_used,
+                     i, (unsigned long long)used.gas_used,
                      (int)result.status_code);
-        finalize_receipt(result, gas_used);
+        finalize_receipt(result, used);
 
         // Apply deferred SELFDESTRUCT clears now that the tx has
         // committed. Per Yellow Paper, destruction happens at the
@@ -1492,11 +1513,21 @@ int64_t ZiskStateDB::check_transaction(const Transactions::View& tx,
     const int64_t min_gas = is_prague_or_later()
                                 ? std::max(intrinsic_gas, tx_floor_gas_)
                                 : intrinsic_gas;
-    if (static_cast<int64_t>(tx.gas_limit()) < min_gas) {
+    // EIP-8037 (Amsterdam): gas above the EIP-7825 cap is the state-gas
+    // reservoir, so intrinsic gas and the floor must fit under the cap.
+    const uint64_t gas_limit = tx.gas_limit();
+    const uint64_t state_gas_limit =
+        (is_amsterdam_or_later() && gas_limit > kMaxTxGasLimit) ? gas_limit - kMaxTxGasLimit
+                                                                : 0;
+    if (gas_limit - state_gas_limit < static_cast<uint64_t>(min_gas)) {
         fatal("tx gas_limit below intrinsic gas");
     }
-    // EIP-7825 (Osaka): tx gas limit cap.
-    if (is_osaka_or_later() && tx.gas_limit() > kMaxTxGasLimit) {
+    // EIP-7825 (Osaka): tx gas limit cap. Amsterdam (EIP-8037) applies it
+    // to the regular gas only and caps the whole gas limit at
+    // TX_MAX_TOTAL_GAS_LIMIT instead (execution-specs; EEST
+    // test_tx_total_gas_limit_cap).
+    if (is_amsterdam_or_later() ? gas_limit > kMaxTxTotalGasLimit
+                                : is_osaka_or_later() && gas_limit > kMaxTxGasLimit) {
         fatal("tx gas_limit exceeds cap");
     }
     // EIP-2681: nonce < 2^64 - 1.
@@ -1510,11 +1541,20 @@ int64_t ZiskStateDB::check_transaction(const Transactions::View& tx,
     }
 
     // ----- check_transaction -----
-    // The tx must fit in the block's remaining gas (cumulative_gas_used_
-    // covers the txs before this one).
-    if (tx.gas_limit() > consensus_.gas_limit() - cumulative_gas_used_) {
+    // The tx must fit in the block's remaining gas (the counters cover
+    // the txs before this one). Amsterdam (EIP-8037) checks each block
+    // dimension: the capped gas limit against the regular gas left, the
+    // full gas limit against the state gas left.
+    if (is_amsterdam_or_later()) {
+        if (std::min<uint64_t>(gas_limit, kMaxTxGasLimit) >
+                consensus_.gas_limit() - block_regular_gas_used_ ||
+            gas_limit > consensus_.gas_limit() - block_state_gas_used_) {
+            fatal("tx gas_limit exceeds block gas available");
+        }
+    } else if (gas_limit > consensus_.gas_limit() - cumulative_gas_used_) {
         fatal("tx gas_limit exceeds block gas available");
     }
+    tx_state_gas_limit_ = static_cast<int64_t>(state_gas_limit);
 
     const auto base_fee =
         intx::be::load<intx::uint256>(consensus_.base_fee_per_gas());
@@ -1859,11 +1899,54 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item& auth_item) no
 evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
                                                   size_t sender_idx,
                                                   int64_t intrinsic_gas) noexcept {
+    // EIP-8037 (Amsterdam): the gas above the EIP-7825 cap is the
+    // state-gas reservoir, apart from the regular gas.
+    const int64_t state_gas_limit = tx_state_gas_limit_;
+    int64_t gas = static_cast<int64_t>(tx.gas_limit()) - intrinsic_gas - state_gas_limit;
+    evmone::StateGas state_gas{{.left = state_gas_limit}};
+
+    // EIP-8037: a top-level CREATE, or a value transfer, to an account
+    // that doesn't exist pays its creation in state gas. Nested frames
+    // get this from the VM's CALL / CREATE; the top-level one is the
+    // host's (evmone test/state/host.cpp Host::call). The charge is kept
+    // only if the frame succeeds.
+    if (is_amsterdam_or_later() &&
+        (tx.to() == nullptr || intx::be::load<intx::uint256>(tx.value()) != 0)) {
+        const evmc::address recipient =
+            tx.to() != nullptr
+                ? *tx.to()
+                : compute_create_address(tx.sender(), accounts_.nonce_at(sender_idx) - 1);
+        if (!account_exists(recipient) &&
+            !state_gas.charge(gas, evmone::NEW_ACCOUNT_STATE_GAS)) {
+            return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0,
+                                {.left = state_gas_limit}};
+        }
+    }
+
+    auto result = execute_top_level_message(tx, sender_idx, gas, state_gas.left);
+    if (result.status_code == EVMC_SUCCESS) {
+        result.state_gas.spilled += state_gas.spilled;
+    } else {
+        // The VM / host already rolled the frame's own state gas back;
+        // undo the creation charge too. A revert returns its spill.
+        if (result.status_code == EVMC_REVERT) {
+            result.gas_left += state_gas.spilled;
+        }
+        result.state_gas.left = state_gas_limit;
+    }
+    return result;
+}
+
+evmc::Result ZiskStateDB::execute_top_level_message(const Transactions::View& tx,
+                                                    size_t  sender_idx,
+                                                    int64_t gas,
+                                                    int64_t state_gas) noexcept {
     evmc_message msg{};
-    msg.sender = tx.sender();
-    msg.value  = tx.value();
-    msg.gas    = static_cast<int64_t>(tx.gas_limit()) - intrinsic_gas;
-    msg.depth  = 0;
+    msg.sender    = tx.sender();
+    msg.value     = tx.value();
+    msg.gas       = gas;
+    msg.state_gas = state_gas;
+    msg.depth     = 0;
 
     if (tx.to() == nullptr) {
         // ----- Top-level CREATE -----
@@ -1952,16 +2035,12 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
                                     {.left = msg.state_gas}};
             }
 
-            // EIP-2 code deposit cost (200 / byte). Deducted from
-            // the CREATE frame's remaining gas; OOG if insufficient.
-            constexpr int64_t CODE_DEPOSIT_COST = 200;
-            const int64_t deposit =
-                static_cast<int64_t>(result.output_size) * CODE_DEPOSIT_COST;
-            if (result.gas_left < deposit) {
+            // Code deposit, from the CREATE frame's remaining gas;
+            // OOG if insufficient.
+            if (!charge_code_deposit(result, is_amsterdam_or_later())) {
                 return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0,
                                     {.left = msg.state_gas}};
             }
-            result.gas_left -= deposit;
 
             const auto deployed_hash = keccak256_bytes32(
                 result.output_data, result.output_size);
@@ -2052,15 +2131,17 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
         analysis_for(entry_code_hash))};
 }
 
-uint64_t ZiskStateDB::settle_tx_gas(const Transactions::View& tx,
-                                    const evmc::Result&       result,
-                                    size_t                    sender_idx,
-                                    int64_t                   auth_refund) noexcept {
+ZiskStateDB::TxGasUsed ZiskStateDB::settle_tx_gas(const Transactions::View& tx,
+                                                  const evmc::Result&       result,
+                                                  size_t                    sender_idx,
+                                                  int64_t auth_refund) noexcept {
     // result.gas_left is what remains of `msg.gas` (already net of
-    // intrinsic). Total tx gas used is gas_limit − gas_left. EIP-3529
-    // (London+) halved the refund cap from gas_used/2 to gas_used/5;
-    // pre-London forks (Frontier..Berlin) still use the original /2.
-    const int64_t gas_left      = result.gas_left;
+    // intrinsic), and result.state_gas.left what remains of the EIP-8037
+    // reservoir; both go back to the sender. Total tx gas used is
+    // gas_limit − gas_left − state_gas.left. EIP-3529 (London+) halved
+    // the refund cap from gas_used/2 to gas_used/5; pre-London forks
+    // (Frontier..Berlin) still use the original /2.
+    const int64_t gas_left      = result.gas_left + result.state_gas.left;
     const int64_t gas_used_pre  =
         static_cast<int64_t>(tx.gas_limit()) - gas_left;
     const int64_t max_refund    =
@@ -2092,6 +2173,19 @@ uint64_t ZiskStateDB::settle_tx_gas(const Transactions::View& tx,
     }
     const int64_t gas_remaining =
         static_cast<int64_t>(tx.gas_limit()) - gas_used;
+
+    // The block's share (EIP-8037 / EIP-7778, Amsterdam). State gas used
+    // is the reservoir consumed plus the state gas that spilled into
+    // regular gas. Neither block dimension is reduced by the refund; the
+    // floor applies to the regular one.
+    TxGasUsed used{static_cast<uint64_t>(gas_used), static_cast<uint64_t>(gas_used), 0};
+    if (is_amsterdam_or_later()) {
+        const int64_t state_used =
+            tx_state_gas_limit_ - result.state_gas.left + result.state_gas.spilled;
+        used.block_regular =
+            static_cast<uint64_t>(std::max(gas_used_pre - state_used, tx_floor_gas_));
+        used.block_state = static_cast<uint64_t>(state_used);
+    }
 
     const auto eff_gas_price_u =
         intx::be::load<intx::uint256>(tx_context_.tx_gas_price);
@@ -2128,11 +2222,11 @@ uint64_t ZiskStateDB::settle_tx_gas(const Transactions::View& tx,
             tx_counter_);
     }
 
-    return static_cast<uint64_t>(gas_used);
+    return used;
 }
 
 void ZiskStateDB::finalize_receipt(const evmc::Result& result,
-                                   uint64_t            gas_used) noexcept {
+                                   const TxGasUsed&    used) noexcept {
     // The in-progress receipt was pushed at the start of the
     // iteration and emit_log filled its `logs` (with revert truncation
     // via rollback). Compute the per-tx bloom now from whatever logs
@@ -2146,7 +2240,9 @@ void ZiskStateDB::finalize_receipt(const evmc::Result& result,
         }
     }
     bloom_or_into(block_bloom_filter_, rcpt.logs_bloom);
-    cumulative_gas_used_     += gas_used;
+    cumulative_gas_used_     += used.gas_used;
+    block_regular_gas_used_  += used.block_regular;
+    block_state_gas_used_    += used.block_state;
     rcpt.cumulative_gas_used  = cumulative_gas_used_;
     rcpt.status               = (result.status_code == EVMC_SUCCESS);
 }
@@ -2326,6 +2422,10 @@ evmc::Result ZiskStateDB::system_call(const evmc::address&     target,
     msg.input_data   = calldata.data();
     msg.input_size   = calldata.size();
     msg.gas          = kSystemCallGas;
+    // EIP-8037 (Amsterdam): a state-gas reservoir for up to 16 slot
+    // allocations, apart from the 30M regular gas (evmone
+    // test/state/system_contracts.cpp; EEST test_system_call_execution_*).
+    msg.state_gas    = is_amsterdam_or_later() ? 16 * evmone::STORAGE_SET_STATE_GAS : 0;
     msg.value        = evmc::uint256be{};       // 0
     msg.depth        = 0;
 
