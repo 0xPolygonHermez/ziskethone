@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <vector>
 
 #include <intx/intx.hpp>    // 256-bit add for selfdestruct balance transfer
@@ -1309,10 +1310,19 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         const size_t  sender_idx    = ensure_account(tx.sender());
         const int64_t intrinsic_gas = apply_pre_evm_accounting(tx, sender_idx);
 
+        // The tx's gas after intrinsic: regular gas, and the EIP-8037
+        // reservoir (the gas limit above the EIP-7825 cap, Amsterdam).
+        TxGas g{static_cast<int64_t>(tx.gas_limit()) - intrinsic_gas - tx_state_gas_limit_,
+                {.left = tx_state_gas_limit_}};
+
         // EIP-7702 authorization list (Type-4 only). Returns the
         // 12500-per-pre-existing-signer refund that folds into the
-        // post-EVM refund cap.
-        const int64_t auth_refund = apply_authorization_list(tx);
+        // post-EVM refund cap. Amsterdam (EIP-2780) charges `g` instead;
+        // if the authorizations or the first frame's charges run out of
+        // gas, the whole runtime phase from `cp_runtime` is undone
+        // (delegations included) and the tx is an out-of-gas halt.
+        const auto    cp_runtime  = checkpoint();
+        const int64_t auth_refund = apply_authorization_list(tx, sender_idx, g);
 
         // Checkpoint AFTER the upfront accounting + EIP-7702 auths so
         // none of those are rolled back on EVM revert. State changes
@@ -1320,8 +1330,10 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         // undone if the frame fails.
         const auto cp     = checkpoint();
         std::fprintf(stderr, "TX %zu START\n", i);
-        auto       result = execute_top_level_frame(tx, sender_idx, intrinsic_gas);
-        if (result.status_code != EVMC_SUCCESS) {
+        auto       result = execute_top_level_frame(tx, sender_idx, g);
+        if (g.runtime_oog) {
+            rollback(cp_runtime);
+        } else if (result.status_code != EVMC_SUCCESS) {
             rollback(cp);
         }
 
@@ -1509,7 +1521,7 @@ int64_t ZiskStateDB::check_transaction(const Transactions::View& tx,
     // gas_limit must cover the intrinsic gas and (EIP-7623, Prague) the
     // calldata floor.
     const int64_t intrinsic_gas =
-        compute_intrinsic_gas(tx, is_shanghai_or_later(), &tx_floor_gas_);
+        compute_intrinsic_gas(tx, active_revision(), &tx_floor_gas_);
     const int64_t min_gas = is_prague_or_later()
                                 ? std::max(intrinsic_gas, tx_floor_gas_)
                                 : intrinsic_gas;
@@ -1671,9 +1683,37 @@ int64_t ZiskStateDB::apply_pre_evm_accounting(const Transactions::View& tx,
     return intrinsic_gas;
 }
 
-int64_t ZiskStateDB::apply_authorization_list(const Transactions::View& tx) noexcept {
+// EIP-2780 (Amsterdam) authorization charges, per tx (revm
+// apply_auth_list_eip2780). `written` holds the accounts whose leaf write
+// is already paid for: the sender (in TX_BASE), the recipient of a
+// value-bearing call (in TX_VALUE_COST), and each authority once charged
+// ACCOUNT_WRITE. `start_delegated` remembers whether an authority was
+// delegated when the tx started (before an earlier auth here changed
+// it); `bytes_charged`, the authorities already charged for a
+// delegation indicator. The lists are tiny, so linear search.
+struct ZiskStateDB::AuthCharges {
+    TxGas&                                g;
+    std::vector<size_t>                   written;
+    std::vector<std::pair<size_t, bool>>  start_delegated;
+    std::vector<size_t>                   bytes_charged;
+
+    static bool has(const std::vector<size_t>& v, size_t idx) {
+        return std::find(v.begin(), v.end(), idx) != v.end();
+    }
+};
+
+int64_t ZiskStateDB::apply_authorization_list(const Transactions::View& tx,
+                                              size_t sender_idx, TxGas& g) noexcept {
     if (tx.type() != Transactions::Type::SetCode) {
         return 0;
+    }
+
+    std::optional<AuthCharges> charges;
+    if (is_amsterdam_or_later()) {
+        charges.emplace(AuthCharges{g, {sender_idx}, {}, {}});
+        if (tx.to() != nullptr && intx::be::load<intx::uint256>(tx.value()) != 0) {
+            charges->written.push_back(ensure_account(*tx.to()));
+        }
     }
 
     // Per the EIP, authorizations are applied at the START of the tx
@@ -1696,12 +1736,14 @@ int64_t ZiskStateDB::apply_authorization_list(const Transactions::View& tx) noex
         if (auth_item.kind != rlp::ItemKind::List) {
             fatal("EIP-7702: authorization entry not an RLP list");
         }
-        auth_refund += process_single_authorization(auth_item);
+        auth_refund += process_single_authorization(auth_item, charges ? &*charges : nullptr);
+        if (g.runtime_oog) break;  // later authorities aren't touched
     }
     return auth_refund;
 }
 
-int64_t ZiskStateDB::process_single_authorization(const rlp::Item& auth_item) noexcept {
+int64_t ZiskStateDB::process_single_authorization(const rlp::Item& auth_item,
+                                                  AuthCharges*     charges) noexcept {
     // Parse the 6 fields per EIP-7702: chain_id, address, nonce,
     // y_parity, r, s.
     rlp::ListIter fit{auth_item.payload};
@@ -1738,6 +1780,12 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item& auth_item) no
     // chain_id must be 0 (universal) or match the current chain id;
     // otherwise skip.
     if (a_chain_id != 0 && a_chain_id != kChainId) {
+        return 0;
+    }
+    // EIP-7702 step 2: nonce < 2^64 - 1, checked before the authority
+    // is recovered, so a skipped auth doesn't warm it (EEST
+    // top_frame_charges_delegation_is_authority, nonce_limit).
+    if (a_nonce == UINT64_MAX) {
         return 0;
     }
 
@@ -1806,14 +1854,14 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item& auth_item) no
     // prover can't hide a real account behind Op::Hash to drop the auth).
     const size_t signer_idx = ensure_account(signer);
 
-    // EIP-7702: refuse to bump if signer's nonce is already at the
-    // u64 ceiling — the bump would overflow. reth applies this guard
-    // (test_nonce_overflow_after_first_authorization's second auth
-    // sees signer.nonce == UINT64_MAX from the prior auth and
-    // rejects). cpp-guest's wrap-around would silently set nonce=0
-    // and diverge.
-    if (accounts_.nonce_at(signer_idx) == UINT64_MAX) {
-        return 0;
+    // EIP-2780: note whether the authority was delegated at tx start,
+    // the first time this tx's list names it (before any of its auths
+    // here is applied).
+    if (charges != nullptr &&
+        std::none_of(charges->start_delegated.begin(), charges->start_delegated.end(),
+                     [&](const auto& e) { return e.first == signer_idx; })) {
+        charges->start_delegated.emplace_back(
+            signer_idx, accounts_.code_hash_at(signer_idx) != EMPTY_CODE_HASH);
     }
 
     // EIP-7702: every recovered authority address is added to the
@@ -1849,6 +1897,50 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item& auth_item) no
         return 0;
     }
 
+    constexpr evmc::address kZeroAddress{};
+
+    // EIP-2780 (Amsterdam): the auth is valid, so charge its
+    // state-dependent costs before applying it (revm
+    // apply_auth_list_eip2780): a new account for an authority that
+    // doesn't exist (EIP-161 non-empty, as account_exists), ACCOUNT_WRITE
+    // on the first write to its leaf, and the delegation indicator's
+    // bytes when one is newly written. An unaffordable charge stops the
+    // runtime phase before this auth is applied.
+    if (charges != nullptr) {
+        TxGas&           g = charges->g;
+        evmone::StateGas state_gas{g.state_gas};
+        const bool clearing      = delegate == kZeroAddress;
+        const bool delegated_now = accounts_.code_hash_at(signer_idx) != EMPTY_CODE_HASH;
+        bool delegated_at_start  = false;
+        for (const auto& [idx, d] : charges->start_delegated) {
+            if (idx == signer_idx) delegated_at_start = d;
+        }
+        if (!account_exists(signer) &&
+            !state_gas.charge(g.gas, evmone::NEW_ACCOUNT_STATE_GAS)) {
+            g.runtime_oog = true;
+            return 0;
+        }
+        if (!AuthCharges::has(charges->written, signer_idx)) {
+            constexpr int64_t ACCOUNT_WRITE = 9000;  // EIP-8038
+            if (g.gas < ACCOUNT_WRITE) {
+                g.runtime_oog = true;
+                return 0;
+            }
+            g.gas -= ACCOUNT_WRITE;
+            charges->written.push_back(signer_idx);
+        }
+        if (!clearing && !delegated_now && !delegated_at_start &&
+            !AuthCharges::has(charges->bytes_charged, signer_idx)) {
+            constexpr int64_t DELEGATION_BYTES_STATE_GAS = 23 * evmone::COST_PER_STATE_BYTE;
+            if (!state_gas.charge(g.gas, DELEGATION_BYTES_STATE_GAS)) {
+                g.runtime_oog = true;
+                return 0;
+            }
+            charges->bytes_charged.push_back(signer_idx);
+        }
+        g.state_gas = state_gas;
+    }
+
     // EIP-7702 refund: PER_EMPTY_ACCOUNT_COST minus
     // PER_AUTH_BASE_COST (25000 − 12500 = 12500) per auth whose
     // signer's account already had state. Read BEFORE the mutation
@@ -1866,14 +1958,20 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item& auth_item) no
         }
     }
 
-    // Bump signer's nonce + set delegation code_hash. Raw setters —
-    // these changes survive any EVM revert below.
+    // Bump signer's nonce + set delegation code_hash. These changes
+    // survive any EVM revert below (they precede its checkpoint).
+    // Amsterdam journals them: a runtime-phase OOG undoes them.
+    if (charges != nullptr) {
+        journal_.log_nonce(signer_idx, accounts_.nonce_at(signer_idx),
+                           accounts_.last_tx_idx_at(signer_idx));
+        journal_.log_code_hash(signer_idx, accounts_.code_hash_at(signer_idx),
+                               accounts_.last_tx_idx_at(signer_idx));
+    }
     accounts_.set_nonce_at(signer_idx, a_nonce + 1, tx_counter_);
 
     // EIP-7702 carve-out: delegate == 0x000...000 means CLEAR the
     // delegation rather than install a stub. Set code_hash back to
     // EMPTY_CODE_HASH.
-    constexpr evmc::address kZeroAddress{};
     if (delegate == kZeroAddress) {
         accounts_.set_code_hash_at(signer_idx, EMPTY_CODE_HASH, tx_counter_);
     } else {
@@ -1893,33 +1991,60 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item& auth_item) no
         delegated_this_tx_idx_.insert(signer_idx);
     }
 
-    return signer_was_non_empty ? 12500 : 0;
+    return (signer_was_non_empty && charges == nullptr) ? 12500 : 0;
 }
 
 evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
                                                   size_t sender_idx,
-                                                  int64_t intrinsic_gas) noexcept {
-    // EIP-8037 (Amsterdam): the gas above the EIP-7825 cap is the
-    // state-gas reservoir, apart from the regular gas.
-    const int64_t state_gas_limit = tx_state_gas_limit_;
-    int64_t gas = static_cast<int64_t>(tx.gas_limit()) - intrinsic_gas - state_gas_limit;
-    evmone::StateGas state_gas{{.left = state_gas_limit}};
+                                                  TxGas& g) noexcept {
+    // A runtime-phase OOG (EIP-2780) includes the tx as an out-of-gas
+    // halt: all regular gas consumed, the reservoir returned untouched
+    // (the caller undoes the phase's state changes).
+    const auto runtime_oog = [&] {
+        g.runtime_oog = true;
+        return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0,
+                            {.left = tx_state_gas_limit_}};
+    };
+    if (g.runtime_oog) return runtime_oog();
 
-    // EIP-8037: a top-level CREATE, or a value transfer, to an account
-    // that doesn't exist pays its creation in state gas. Nested frames
-    // get this from the VM's CALL / CREATE; the top-level one is the
-    // host's (evmone test/state/host.cpp Host::call). The charge is kept
-    // only if the frame succeeds.
-    if (is_amsterdam_or_later() &&
-        (tx.to() == nullptr || intx::be::load<intx::uint256>(tx.value()) != 0)) {
-        const evmc::address recipient =
-            tx.to() != nullptr
-                ? *tx.to()
-                : compute_create_address(tx.sender(), accounts_.nonce_at(sender_idx) - 1);
-        if (!account_exists(recipient) &&
-            !state_gas.charge(gas, evmone::NEW_ACCOUNT_STATE_GAS)) {
-            return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0,
-                                {.left = state_gas_limit}};
+    int64_t          gas = g.gas;
+    evmone::StateGas state_gas{g.state_gas};
+
+    // The first frame's charges (EIP-2780 runtime phase, Amsterdam; revm
+    // create_init_frame), seen after the authorizations were applied:
+    // - a create to an empty target, or a value transfer to an empty
+    //   recipient, pays the new account in state gas (EIP-8037), kept
+    //   only if the frame succeeds;
+    // - a delegated recipient pays for resolving its delegate: WARM_ACCESS,
+    //   plus the cold surcharge if the delegate is cold.
+    bool new_account_charged = false;
+    if (is_amsterdam_or_later()) {
+        const bool has_value = intx::be::load<intx::uint256>(tx.value()) != 0;
+        if (tx.to() == nullptr || has_value) {
+            const evmc::address recipient =
+                tx.to() != nullptr
+                    ? *tx.to()
+                    : compute_create_address(tx.sender(), accounts_.nonce_at(sender_idx) - 1);
+            if (!account_exists(recipient)) {
+                if (!state_gas.charge(gas, evmone::NEW_ACCOUNT_STATE_GAS)) return runtime_oog();
+                new_account_charged = true;
+            }
+        }
+        if (tx.to() != nullptr) {
+            evmc::bytes32 code_hash{};
+            const auto code = code_and_hash(*tx.to(), code_hash);
+            if (code.size() == 23 && code[0] == 0xef && code[1] == 0x01 && code[2] == 0x00) {
+                constexpr int64_t WARM_ACCESS     = 100;
+                constexpr int64_t COLD_ACCESS_ADD = 3000 - WARM_ACCESS;  // EIP-8038
+                if (gas < WARM_ACCESS) return runtime_oog();
+                gas -= WARM_ACCESS;
+                evmc::address delegate;
+                std::memcpy(delegate.bytes, code.data() + 3, 20);
+                if (access_account(delegate) == EVMC_ACCESS_COLD) {
+                    if (gas < COLD_ACCESS_ADD) return runtime_oog();
+                    gas -= COLD_ACCESS_ADD;
+                }
+            }
         }
     }
 
@@ -1928,11 +2053,15 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
         result.state_gas.spilled += state_gas.spilled;
     } else {
         // The VM / host already rolled the frame's own state gas back;
-        // undo the creation charge too. A revert returns its spill.
-        if (result.status_code == EVMC_REVERT) {
-            result.gas_left += state_gas.spilled;
+        // give back the new-account charge too (a revert keeps the part
+        // that returns to regular gas, a halt consumes it). The
+        // authorizations' charges stay.
+        if (new_account_charged) {
+            int64_t refilled = 0;
+            state_gas.refill(refilled, evmone::NEW_ACCOUNT_STATE_GAS);
+            if (result.status_code == EVMC_REVERT) result.gas_left += refilled;
         }
-        result.state_gas.left = state_gas_limit;
+        result.state_gas = state_gas;
     }
     return result;
 }

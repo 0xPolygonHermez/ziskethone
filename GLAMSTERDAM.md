@@ -59,7 +59,7 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
 
 | EIP | Title | Fixture dir | Fixtures / blocks | Status |
 |---|---|---|---|---|
-| [2780](https://eips.ethereum.org/EIPS/eip-2780) | Resource-based intrinsic tx gas | `eip2780_reduce_intrinsic_tx_gas` | 61 / 283 | todo |
+| [2780](https://eips.ethereum.org/EIPS/eip-2780) | Resource-based intrinsic tx gas | `eip2780_reduce_intrinsic_tx_gas` | 61 / 283 | done (rest need 7708 / 7976 / 7981) |
 | [7708](https://eips.ethereum.org/EIPS/eip-7708) | ETH transfers emit a log | `eip7708_eth_transfer_logs` | 40 / 77 | todo |
 | [7778](https://eips.ethereum.org/EIPS/eip-7778) | Block gas accounting without refunds | `eip7778_block_gas_accounting_without_refunds` | 9 / 117 | todo |
 | [7843](https://eips.ethereum.org/EIPS/eip-7843) | SLOTNUM opcode (+ `slot_number` header field) | `eip7843_slotnum` | 10 / 23 | todo |
@@ -69,7 +69,7 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
 | [7981](https://eips.ethereum.org/EIPS/eip-7981) | Increase access list cost | `eip7981_increase_access_list_cost` | 19 / 189 | todo |
 | [7997](https://eips.ethereum.org/EIPS/eip-7997) | Deterministic factory contract | `eip7997_deterministic_factory_contract` | 21 / 40 | todo |
 | [8024](https://eips.ethereum.org/EIPS/eip-8024) | DUPN / SWAPN / EXCHANGE | `eip8024_dupn_swapn_exchange` | 66 / 288 | todo |
-| [8037](https://eips.ethereum.org/EIPS/eip-8037) | State creation gas cost increase (state-gas reservoir) | `eip8037_state_creation_gas_cost_increase` | 270 / 834 | done (most fixtures also need 2780) |
+| [8037](https://eips.ethereum.org/EIPS/eip-8037) | State creation gas cost increase (state-gas reservoir) | `eip8037_state_creation_gas_cost_increase` | 270 / 834 | done |
 | [8038](https://eips.ethereum.org/EIPS/eip-8038) | State access gas cost increase | `eip8038_state_access_gas_cost_increase` | 88 / 263 | todo |
 | [8070](https://eips.ethereum.org/EIPS/eip-8070) | eth/72 sparse blobpool | — | — | n/a (networking only) |
 | [8246](https://eips.ethereum.org/EIPS/eip-8246) | Remove SELFDESTRUCT burn | `eip8246_selfdestruct_no_burn` | 9 / 663 | todo |
@@ -81,10 +81,18 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
   the input and goes straight into the header hash
   (`TODO(EIP-7928)` in `run.cpp`). EIP-7928 must build the BAL during execution
   and check its hash against the input.
-- **EIP-8037 is entangled with other EIPs.** Its fixtures use EIP-2780's
-  intrinsic gas (e.g. a 15,000-gas plain call), EIP-8038's access costs and the
-  EIP-7976/7981 floor, so most of them pass only once those are in. Its block
+- **The gas EIPs are entangled.** Most fixtures of one gas EIP also exercise
+  the others: 8037 fixtures use 2780's intrinsic gas (e.g. a 15,000-gas plain
+  call); 2780 fixtures need 7708's transfer logs for any value-moving tx and
+  7976 / 7981 for the calldata floor and access-list prices. 8037's block
   accounting is also EIP-7778's rule (no refund in the block's gas).
+- **evmone v0.24 already has the in-VM parts** of 8038 (access costs), 7843
+  (SLOTNUM), 8024 (DUPN / SWAPN / EXCHANGE) and 7954 (code size) for
+  `EVMC_AMSTERDAM`; the host parts of those EIPs, and all of them in zevm, are
+  still to do.
+- **EIP-2780's "authority existed"** test is EIP-161 non-empty
+  (`account_exists`). revm also counts an empty account that is in the trie;
+  such an account can't arise on mainnet after Spurious Dragon.
 - **Total tx gas cap.** `TX_MAX_TOTAL_GAS_LIMIT` (2^32 − 1) comes from
   execution-specs and the fixtures; revm 43 and reth 2.7 don't implement it.
 - **System calls** get 30M regular gas plus a 16-slot state-gas reservoir, as
@@ -117,6 +125,34 @@ Branch `glamsterdam`, `tests@v21.0.1`, evmone guest, 2026-10-11:
 The reth 2.2 → 2.7 bridge upgrade was regression-checked on the
 `tests-v5.4.0` Prague + Osaka corpus: 3,820 PASS, 274 PASS_NEG, 0 FAIL, 1 MISSING
 (the undecodable `test_contract_create` type-4 creation).
+
+### After EIP-8037 and EIP-2780
+
+Same fixtures, evmone and zevm guests. The zevm gap is the in-VM EIPs evmone
+v0.24 already has (see Open items).
+
+| EIP | Blocks | evmone pass | zevm pass | FAIL_NEG (evmone) |
+|---|---:|---:|---:|---:|
+| 2780 | 283 | 160 | 149 | 7 |
+| 7708 | 77 | 25 | 11 | 0 |
+| 7778 | 117 | 98 | 48 | 0 |
+| 7843 | 23 | 23 | 0 | 0 |
+| 7928 | 1,248 | 683 | 335 | 48 |
+| 7954 | 58 | 28 | 6 | 0 |
+| 7976 | 543 | 201 | 190 | 142 |
+| 7981 | 189 | 9 | 9 | 26 |
+| 7997 | 40 | 33 | 0 | 0 |
+| 8024 | 288 | 288 | 176 | 0 |
+| 8037 | 834 | 721 | 249 | 6 |
+| 8038 | 263 | 155 | 28 | 4 |
+| 8246 | 663 | 109 | 1 | 0 |
+| 8282 | 356 | 115 | 91 | 0 |
+| **total** | **4,982** | **2,648** | **1,293** | **233** |
+
+FAIL_NEG went up (114 → 233): with the gas now right, invalid blocks that
+were rejected only because of a wrong gas total are now accepted. They expect
+an intrinsic-gas / floor error (7976, 7981) or a block-access-list error
+(7928), and close with those EIPs.
 
 ### After the guest groundwork
 

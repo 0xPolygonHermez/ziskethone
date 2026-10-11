@@ -430,25 +430,48 @@ private:
     int64_t check_transaction(const Transactions::View& tx,
                               size_t sender_idx) noexcept;
 
+    // A tx's gas after intrinsic gas: the regular gas left and the
+    // EIP-8037 state-gas reservoir (left + spilled). Amsterdam's EIP-2780
+    // runtime gas phase (authorizations, then the first frame's charges)
+    // draws from it; `runtime_oog` records that the phase ran out of gas.
+    struct TxGas {
+        int64_t        gas;
+        evmc::StateGas state_gas;
+        bool           runtime_oog = false;
+    };
+
+    // Per-tx bookkeeping for the Amsterdam (EIP-2780) authorization
+    // charges; defined in zisk_state_db.cpp.
+    struct AuthCharges;
+
     // Walk the EIP-7702 authorization_list (no-op for non-SetCode
     // txs). For each valid auth, bumps the signer's nonce and writes
     // the 0xef0100 || delegate code_hash on the signer. Returns the
     // accumulated refund (12500 per auth whose signer was non-empty).
-    int64_t apply_authorization_list(const Transactions::View& tx) noexcept;
+    // Amsterdam (EIP-2780): no refund; each applied auth charges `g`
+    // instead, and the walk stops at the first unaffordable charge
+    // (g.runtime_oog). The writes are journaled so that can be undone.
+    int64_t apply_authorization_list(const Transactions::View& tx,
+                                     size_t sender_idx, TxGas& g) noexcept;
 
     // Per-auth helper: parse one RLP-encoded authorization entry,
     // recover the signer from its signature (ecrecover), and (on
     // success) bump the signer's nonce + write the 0xef0100 ||
     // delegate code_hash. Returns the refund delta — 12500 if the
     // signer was non-empty before the mutation, else 0; returns 0 on
-    // any validity failure (silently skipped per the EIP).
-    int64_t process_single_authorization(const rlp::Item& auth_item) noexcept;
+    // any validity failure (silently skipped per the EIP). With
+    // `charges` (Amsterdam) the auth is charged instead of refunded.
+    int64_t process_single_authorization(const rlp::Item& auth_item,
+                                         AuthCharges*     charges) noexcept;
 
-    // Build the top-level evmc_message and dispatch CREATE vs CALL.
-    // Caller is responsible for the surrounding checkpoint/rollback.
+    // The first frame's EIP-2780 charges (Amsterdam), then the frame
+    // itself. Returns an OOG halt without running anything when the
+    // runtime gas phase ran out (g.runtime_oog, set here or by the
+    // authorizations). Caller is responsible for the surrounding
+    // checkpoint/rollback.
     evmc::Result execute_top_level_frame(const Transactions::View& tx,
                                          size_t sender_idx,
-                                         int64_t intrinsic_gas) noexcept;
+                                         TxGas& g) noexcept;
     // The frame itself, with its regular gas and state-gas reservoir.
     evmc::Result execute_top_level_message(const Transactions::View& tx,
                                            size_t  sender_idx,
