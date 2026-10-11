@@ -125,6 +125,21 @@ bool op_sstore(EvmState& s, Regs& R) {
     const int64_t cost = sc.cost + cold;
     if (R.gas < cost) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= cost;
+    // EIP-8037 (Amsterdam): allocating a slot (0 -> x) costs state gas; setting
+    // it back to 0 in the same tx gives it back.
+    if (s.rev >= EVMC_AMSTERDAM) {
+        if (st == EVMC_STORAGE_ADDED) {
+            int64_t g = R.gas;
+            if (!state_gas_charge(s, g, STORAGE_SET_STATE_GAS)) {
+                s.status = EVMC_OUT_OF_GAS; return false;
+            }
+            R.gas = g;
+        } else if (st == EVMC_STORAGE_ADDED_DELETED) {
+            int64_t g = R.gas;
+            state_gas_refill(s, g, STORAGE_SET_STATE_GAS);
+            R.gas = g;
+        }
+    }
     s.gas_refund += sc.refund;
 
     return true;

@@ -49,6 +49,41 @@ inline constexpr int64_t GAS_HIGH    = 10;  // JUMPI
 inline constexpr int64_t GAS_EXP     = 10;  // EXP base
 inline constexpr int64_t GAS_EXPBYTE = 50;  // EXP per byte of exponent (>= Spurious Dragon)
 
+// EIP-8037 state gas (Amsterdam), ported from evmone's StateGas
+// (lib/evmone/state_gas.hpp). Callers pass a local copy of R.gas and store it
+// back, so R.gas's address is never taken.
+inline constexpr int64_t COST_PER_STATE_BYTE   = 1530;
+inline constexpr int64_t NEW_ACCOUNT_STATE_GAS = 120 * COST_PER_STATE_BYTE;
+inline constexpr int64_t STORAGE_SET_STATE_GAS = 64 * COST_PER_STATE_BYTE;
+
+// Charge `cost` from the reservoir first, the rest from `gas` (spilled).
+inline bool state_gas_charge(EvmState& s, int64_t& gas, int64_t cost) {
+    if (s.state_gas_left >= cost) { s.state_gas_left -= cost; return true; }
+    const int64_t spill = cost - s.state_gas_left;
+    if (gas < spill) return false;
+    gas -= spill;
+    s.state_gas_spilled += spill;
+    s.state_gas_left = 0;
+    return true;
+}
+
+// Give `cost` back: to `gas` up to what was spilled, the rest to the reservoir.
+inline void state_gas_refill(EvmState& s, int64_t& gas, int64_t cost) {
+    const int64_t to_gas = std::min(cost, s.state_gas_spilled);
+    gas += to_gas;
+    s.state_gas_spilled -= to_gas;
+    s.state_gas_left += cost - to_gas;
+}
+
+// Take back a child frame's state gas (evmone absorb_child_state_gas): the
+// child got the whole reservoir, so its returned `left` replaces ours, first
+// repaying our spill; its spill becomes ours.
+inline void absorb_child_state_gas(EvmState& s, int64_t& gas, const evmc_result& r) {
+    s.state_gas_spilled += r.state_gas.spilled;
+    s.state_gas_left = 0;
+    state_gas_refill(s, gas, r.state_gas.left);
+}
+
 // Stack bounds as pointer comparisons (evmone-style; no index math). The top
 // pointer counts DOWN from s.stack+kStackLimit (empty) toward s.stack (full).
 // depth_lt(need): fewer than `need` operands present (underflow). Uses the

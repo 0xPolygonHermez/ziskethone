@@ -309,6 +309,14 @@ evmc_result run(const evmc_host_interface* host, evmc_host_context* context,
     // frame is popped because the caller is in the other zone (depth parity) and
     // copies/consumes them before reusing this zone. The pointer is captured here
     // while the frame is still the active EVMMem handle.
+    // EIP-8037 (Amsterdam): a failed frame rolls back all its state charges —
+    // the spill returns to its gas (kept on REVERT, consumed on a halt) and the
+    // reservoir is reported as received (evmone make_execution_result).
+    if (rev >= EVMC_AMSTERDAM && state.status != EVMC_SUCCESS) {
+        state.gas += state.state_gas_spilled;
+        state.state_gas_left    = msg->state_gas;
+        state.state_gas_spilled = 0;
+    }
     evmc_result result{};
     result.status_code = state.status;
     result.gas_left =
@@ -317,9 +325,7 @@ evmc_result run(const evmc_host_interface* host, evmc_host_context* context,
     result.output_data = state.output_size != 0 ? EVMMem::data(state.output_offset) : nullptr;
     result.output_size = state.output_size;
     result.release = nullptr;
-    // EIP-8037 state-gas reservoir: passed through untouched until zevm
-    // meters state gas (a failed frame must also return msg->state_gas).
-    result.state_gas = {.left = msg->state_gas, .spilled = 0};
+    result.state_gas = {.left = state.state_gas_left, .spilled = state.state_gas_spilled};
 
     // Release the frame (pop its EVMMem zone, free an owned chunk map, release any
     // held sub-call result). The output pointer above was captured while the frame

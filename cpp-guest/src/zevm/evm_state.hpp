@@ -82,6 +82,10 @@ struct EvmState {
     // Accumulated gas refund (SSTORE clears, etc.; may go negative). Reported in
     // the frame's evmc_result on success; the host applies the EIP-3529 cap.
     int64_t        gas_refund;
+    // EIP-8037 state gas (Amsterdam), as evmone's StateGas: the reservoir left,
+    // and how much of the frame's state charges came out of `gas` instead.
+    int64_t        state_gas_left;
+    int64_t        state_gas_spilled;
 
     // ----- evmc plumbing -----
     const evmc_message*           evmcMsg;     // borrowed (this frame's message)

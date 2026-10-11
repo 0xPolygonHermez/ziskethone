@@ -33,6 +33,7 @@ constexpr int64_t WARM_ACCESS         = 100;    // warm_storage_read_cost (call 
 constexpr int64_t COLD_ACCOUNT_ACCESS = 2600;   // EIP-2929
 constexpr int64_t CALL_VALUE_COST     = 9000;
 constexpr int64_t ACCOUNT_CREATION    = 25000;
+constexpr int64_t ACCOUNT_WRITE       = 9000;   // EIP-8038 (Amsterdam)
 constexpr int64_t CALL_STIPEND        = 2300;
 
 constexpr int64_t GAS_CREATE          = 32000;  // CREATE / CREATE2 base
@@ -126,11 +127,29 @@ bool call_impl(EvmState& s, Regs& R, evmc_call_kind kind, bool has_value, bool s
     }
 
     // ----- gas: new-account creation (CALL with value to a missing account) -----
+    // Amsterdam (EIP-8037) charges it as state gas, given back if the call
+    // doesn't succeed.
+    bool new_account_charged = false;
     if (kind == EVMC_CALL && nonzero_value &&
         !s.host->account_exists(s.context, &dst)) {
-        if (R.gas < ACCOUNT_CREATION) { s.status = EVMC_OUT_OF_GAS; return false; }
-        R.gas -= ACCOUNT_CREATION;
+        if (s.rev >= EVMC_AMSTERDAM) {
+            int64_t g = R.gas;
+            if (!state_gas_charge(s, g, NEW_ACCOUNT_STATE_GAS)) {
+                s.status = EVMC_OUT_OF_GAS; return false;
+            }
+            R.gas = g;
+            new_account_charged = true;
+        } else {
+            if (R.gas < ACCOUNT_CREATION) { s.status = EVMC_OUT_OF_GAS; return false; }
+            R.gas -= ACCOUNT_CREATION;
+        }
     }
+    auto refill_new_account = [&]() {
+        if (!new_account_charged) return;
+        int64_t g = R.gas;
+        state_gas_refill(s, g, NEW_ACCOUNT_STATE_GAS);
+        R.gas = g;
+    };
 
     // ----- gas: memory expansion for the input and output windows -----
     // Charged BEFORE the EIP-7702 delegation probe below so a CALL doomed to
@@ -179,6 +198,7 @@ bool call_impl(EvmState& s, Regs& R, evmc_call_kind kind, bool has_value, bool s
     msg.flags        = static_forced ? uint32_t{EVMC_STATIC} : (s.evmcMsg->flags & EVMC_STATIC);
     msg.depth        = s.evmcMsg->depth + 1;
     msg.gas          = call_gas;
+    msg.state_gas    = s.state_gas_left;                                   // the whole reservoir
     msg.recipient    = (kind == EVMC_CALL) ? dst : s.evmcMsg->recipient;   // CALL/STATICCALL -> dst
     msg.code_address = code_addr;                                          // delegate when 7702-delegated
     if (std::memcmp(dst.bytes, code_addr.bytes, sizeof(dst.bytes)) != 0)
@@ -196,11 +216,11 @@ bool call_impl(EvmState& s, Regs& R, evmc_call_kind kind, bool has_value, bool s
         msg.gas += CALL_STIPEND;
         R.gas   += CALL_STIPEND;
         const evmc_uint256be bal = s.host->get_balance(s.context, &s.evmcMsg->recipient);
-        if (be_lt(bal, value_be)) return finish_light();
+        if (be_lt(bal, value_be)) { refill_new_account(); return finish_light(); }
     }
 
     // ----- depth limit -----
-    if (s.evmcMsg->depth >= 1024) return finish_light();
+    if (s.evmcMsg->depth >= 1024) { refill_new_account(); return finish_light(); }
 
     // ----- run the child frame via the host -----
     evmc_result r = s.host->call(s.context, &msg);
@@ -218,6 +238,12 @@ bool call_impl(EvmState& s, Regs& R, evmc_call_kind kind, bool has_value, bool s
 
     R.gas        -= (msg.gas - r.gas_left);  // reclaim the child's leftover gas
     s.gas_refund += r.gas_refund;
+    if (s.rev >= EVMC_AMSTERDAM) {
+        int64_t g = R.gas;
+        absorb_child_state_gas(s, g, r);
+        R.gas = g;
+        if (r.status_code != EVMC_SUCCESS) refill_new_account();
+    }
 
     R.top = iResult;
     ++R.pc;
@@ -299,10 +325,8 @@ bool create_impl(EvmState& s, Regs& R, evmc_call_kind kind) {
     const uint64_t sender_nonce = s.host->get_nonce(s.context, &sender);
     if (sender_nonce == std::numeric_limits<uint64_t>::max()) return finish_fail();
 
-    // EIP-150 cap on the gas handed to the init frame.
     evmc_message msg{};
     msg.kind   = kind;
-    msg.gas    = R.gas - R.gas / 64;
     msg.sender = sender;
     msg.depth  = s.evmcMsg->depth + 1;
     msg.value  = value_be;
@@ -318,9 +342,32 @@ bool create_impl(EvmState& s, Regs& R, evmc_call_kind kind) {
     // EIP-2929: the new address is warmed whether or not the create succeeds.
     if (s.rev >= EVMC_BERLIN) s.host->access_account(s.context, &msg.recipient);
 
+    // EIP-8037 (Amsterdam): creating the account costs state gas, given back if
+    // the create doesn't succeed.
+    bool new_account_charged = false;
+    if (s.rev >= EVMC_AMSTERDAM && !s.host->account_exists(s.context, &msg.recipient)) {
+        int64_t g = R.gas;
+        if (!state_gas_charge(s, g, NEW_ACCOUNT_STATE_GAS)) {
+            s.status = EVMC_OUT_OF_GAS; return false;
+        }
+        R.gas = g;
+        new_account_charged = true;
+    }
+
+    // EIP-150 cap on the gas handed to the init frame.
+    msg.gas       = R.gas - R.gas / 64;
+    msg.state_gas = s.state_gas_left;  // the whole reservoir
+
     evmc_result r = s.host->call(s.context, &msg);
     R.gas        -= (msg.gas - r.gas_left);
     s.gas_refund += r.gas_refund;
+    if (s.rev >= EVMC_AMSTERDAM) {
+        int64_t g = R.gas;
+        absorb_child_state_gas(s, g, r);
+        if (new_account_charged && r.status_code != EVMC_SUCCESS)
+            state_gas_refill(s, g, NEW_ACCOUNT_STATE_GAS);
+        R.gas = g;
+    }
     s.returnDataOwner = r;  // keep revert output (empty on success) as return data
 
     if (r.status_code == EVMC_SUCCESS) {
@@ -425,8 +472,20 @@ bool op_selfdestruct(EvmState& s, Regs& R) {
     for (int i = 0; i < 32; ++i)
         if (bal.bytes[i] != 0) { bal_nonzero = true; break; }
     if (bal_nonzero && !s.host->account_exists(s.context, &ben)) {
-        if (R.gas < ACCOUNT_CREATION) { s.status = EVMC_OUT_OF_GAS; return false; }
-        R.gas -= ACCOUNT_CREATION;
+        if (s.rev >= EVMC_AMSTERDAM) {
+            // EIP-8037: the balance write (ACCOUNT_WRITE) first, so an OOG there
+            // doesn't consume state gas, then the account as state gas.
+            if (R.gas < ACCOUNT_WRITE) { s.status = EVMC_OUT_OF_GAS; return false; }
+            R.gas -= ACCOUNT_WRITE;
+            int64_t g = R.gas;
+            if (!state_gas_charge(s, g, NEW_ACCOUNT_STATE_GAS)) {
+                s.status = EVMC_OUT_OF_GAS; return false;
+            }
+            R.gas = g;
+        } else {
+            if (R.gas < ACCOUNT_CREATION) { s.status = EVMC_OUT_OF_GAS; return false; }
+            R.gas -= ACCOUNT_CREATION;
+        }
     }
 
     const bool first = s.host->selfdestruct(s.context, &s.evmcMsg->recipient, &ben);
