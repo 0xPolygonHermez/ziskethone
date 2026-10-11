@@ -41,8 +41,7 @@ constexpr StorageCostSpec storage_spec(evmc_revision rev) {
     if (rev >= EVMC_LONDON)         return {true, WARM_STORAGE_READ_COST, 20000, 5000 - COLD_SLOAD_COST, 4800};
     if (rev == EVMC_BERLIN)         return {true, WARM_STORAGE_READ_COST, 20000, 5000 - COLD_SLOAD_COST, 15000};
     if (rev == EVMC_ISTANBUL)       return {true, 800, 20000, 5000, 15000};
-    if (rev == EVMC_CONSTANTINOPLE) return {true, 200, 20000, 5000, 15000};
-    return {false, 200, 20000, 5000, 15000};  // legacy: Frontier..Byzantium, Petersburg
+    return {false, 200, 20000, 5000, 15000};  // legacy: Frontier..Petersburg
 }
 
 // SSTORE {cost, refund} for a storage-update status under the active revision's

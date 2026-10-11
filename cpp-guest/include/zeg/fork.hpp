@@ -66,9 +66,7 @@ constexpr evmc_revision fork_to_revision(ForkId f) noexcept {
         case ForkId::Cancun:   return EVMC_CANCUN;
         case ForkId::Prague:   return EVMC_PRAGUE;
         case ForkId::Osaka:    return EVMC_OSAKA;
-        // TODO(glamsterdam): EVMC_AMSTERDAM once evmone is bumped. On the
-        // pinned evmone, EVMC_EXPERIMENTAL executes the Osaka rules.
-        case ForkId::Amsterdam: return EVMC_EXPERIMENTAL;
+        case ForkId::Amsterdam: return EVMC_AMSTERDAM;
         case ForkId::Unknown:  return EVMC_PRAGUE;  // mainnet default
     }
     return EVMC_PRAGUE;

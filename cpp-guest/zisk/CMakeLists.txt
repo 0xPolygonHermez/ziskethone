@@ -122,14 +122,13 @@ file(GLOB EVMONE_CORE   ${EVMONE_SRC}/lib/evmone/*.cpp)
 # create_*_tracer factories, which we stub (tracer_stubs.cpp) to drop the whole
 # evmone tracer + its iostream dependency from the link.
 list(FILTER EVMONE_CORE EXCLUDE REGEX "/cpu_check\\.cpp$|/tracing\\.cpp$")
-file(GLOB EVMMAX_SRC    ${EVMONE_SRC}/lib/evmmax/*.cpp)
 file(GLOB PRECOMP_SRC   ${EVMONE_SRC}/lib/evmone_precompiles/*.cpp)
-# bls/kzg pull blst+c-kzg (asm); modexp pulls std::pmr. bn254 (ecadd/ecmul) is
+# bls/kzg (and kzg's precomputed pairing lines) pull blst+c-kzg (asm); modexp pulls std::pmr. bn254 (ecadd/ecmul) is
 # replaced by our ZisK-accelerated bn254_eip196.cpp. All are excluded here and
 # provided by the ZISK_SUPPORT wrapper TUs below.
-list(FILTER PRECOMP_SRC EXCLUDE REGEX "/bls\\.cpp$|/kzg\\.cpp$|/modexp\\.cpp$|/bn254\\.cpp$|/secp256r1\\.cpp$|/sha256\\.cpp$|/blake2b\\.cpp$")
+list(FILTER PRECOMP_SRC EXCLUDE REGEX "/bls\\.cpp$|/kzg\\.cpp$|/kzg_precomputed_lines\\.cpp$|/modexp\\.cpp$|/bn254\\.cpp$|/secp256r1\\.cpp$|/sha256\\.cpp$|/blake2b\\.cpp$")
 # bn254 pairing lives in a subdirectory (ECPAIRING precompile); we provide our own
-# evmmax::bn254::pairing_check, so exclude evmone's software pairing too.
+# evmone::crypto::bn254::pairing_check, so exclude evmone's software pairing too.
 file(GLOB PAIRING_SRC   ${EVMONE_SRC}/lib/evmone_precompiles/pairing/*/*.cpp)
 list(FILTER PAIRING_SRC EXCLUDE REGEX "/pairing/bn254/")
 # Keccak: instead of evmone's software keccak.c, compile our drop-in that
@@ -187,7 +186,7 @@ set(ZISK_SUPPORT
 )
 
 add_executable(zisk_eth_guest.elf
-  ${GUEST_SRC} ${EVMONE_CORE} ${EVMMAX_SRC} ${PRECOMP_SRC} ${PAIRING_SRC}
+  ${GUEST_SRC} ${EVMONE_CORE} ${PRECOMP_SRC} ${PAIRING_SRC}
   ${PRECOMP_C} ${STATE_SRC} ${ZISK_SUPPORT})
 
 # secp256k1 backend: precompiles+fcalls by default; software baseline when ON.
@@ -237,7 +236,7 @@ target_compile_definitions(zisk_eth_guest.elf PRIVATE
   $<$<BOOL:${ZEG_SECP256K1_SW}>:ZEG_SECP256K1_SW>
   $<$<BOOL:${ZEG_BSWAP_BUILTIN}>:ZEG_BSWAP_BUILTIN>
   $<$<BOOL:${ZEG_JUMPDEST_SW}>:ZEG_JUMPDEST_SW>
-  PROJECT_VERSION="0.21.0")          # normally injected by evmone's CMake
+  PROJECT_VERSION="0.24.0")          # normally injected by evmone's CMake
 target_compile_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
 target_link_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
 # runtime.cpp's calloc no longer zero-fills (the bump arena is fresh, ZisK-zero
@@ -249,7 +248,7 @@ set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/runtime.cpp
   TARGET_DIRECTORY zisk_eth_guest.elf PROPERTIES
   COMPILE_OPTIONS "-fno-tree-loop-distribute-patterns;-fno-builtin")
 
-# ECADD (0x06) reaches the generic evmmax::ecc::add_affine template inside
+# ECADD (0x06) reaches the generic evmone::crypto::ecc::add_affine template inside
 # precompiles.cpp; force-include our explicit BN254 specialization so the dispatch
 # routes through the accelerated G1 add (definition in bn254_eip196.cpp).
 set_source_files_properties(${STATE_SRC} TARGET_DIRECTORY zisk_eth_guest.elf PROPERTIES

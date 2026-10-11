@@ -234,6 +234,14 @@ evmc::uint256be ZiskStateDB::get_balance(const evmc::address& addr) const noexce
     return const_cast<Accounts&>(accounts_).balance(addr, tx_counter_);
 }
 
+uint64_t ZiskStateDB::get_nonce(const evmc::address& addr) const noexcept {
+    // The VM asks for the creator's nonce to derive a CREATE address.
+    if (!accounts_.contains(addr)) {
+        return 0;
+    }
+    return const_cast<Accounts&>(accounts_).nonce(addr, tx_counter_);
+}
+
 size_t ZiskStateDB::get_code_size(const evmc::address& addr) const noexcept {
     if (!accounts_.contains(addr)) {
         return 0;  // non-existent account has no code
@@ -525,7 +533,6 @@ evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
 
         case EVMC_CREATE:
         case EVMC_CREATE2:
-        case EVMC_EOFCREATE:
             return call_create(msg, cp);
     }
 
@@ -555,7 +562,8 @@ evmc::Result ZiskStateDB::ecrecover_precompile(const evmc_message& msg) noexcept
     // Flat 3000 gas; insufficient gas fails the call outright (no output).
     constexpr int64_t kEcrecoverGas = 3000;
     if (msg.gas < kEcrecoverGas) {
-        return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0};
+        return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0,
+                            {.left = msg.state_gas}};
     }
     const int64_t gas_left = msg.gas - kEcrecoverGas;
 
@@ -570,7 +578,8 @@ evmc::Result ZiskStateDB::ecrecover_precompile(const evmc_message& msg) noexcept
     for (size_t i = 32; i < 63 && v_ok; ++i)
         if (in[i] != 0) v_ok = false;
     if (!v_ok)
-        return evmc::Result{EVMC_SUCCESS, gas_left, 0, nullptr, 0};  // empty output
+        return evmc::Result{EVMC_SUCCESS, gas_left, 0, nullptr, 0,
+                            {.left = msg.state_gas}};  // empty output
     const unsigned recid = static_cast<unsigned>(in[63] - 27);
 
     evmc::bytes32   hash;  std::memcpy(hash.bytes, in,      32);
@@ -579,12 +588,14 @@ evmc::Result ZiskStateDB::ecrecover_precompile(const evmc_message& msg) noexcept
 
     evmc::address signer{};
     if (!ecrecover_address(hash, r, s, recid, signer))
-        return evmc::Result{EVMC_SUCCESS, gas_left, 0, nullptr, 0};  // not recoverable
+        return evmc::Result{EVMC_SUCCESS, gas_left, 0, nullptr, 0,
+                            {.left = msg.state_gas}};  // not recoverable
 
     // Output: 20-byte address, left-padded to 32 bytes. evmc::Result copies it.
     uint8_t out[32] = {};
     std::memcpy(out + 12, signer.bytes, 20);
-    return evmc::Result{EVMC_SUCCESS, gas_left, 0, out, sizeof(out)};
+    return evmc::Result{EVMC_SUCCESS, gas_left, 0, out, sizeof(out),
+                        {.left = msg.state_gas}};
 }
 
 evmc_tx_context ZiskStateDB::get_tx_context() const noexcept {
@@ -921,11 +932,13 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     // this, `sender_nonce_pre + 1` below silently wraps to 0 and the
     // create proceeds as if nothing were wrong.
     if (sender_nonce_pre == std::numeric_limits<uint64_t>::max()) {
-        return evmc::Result{EVMC_SUCCESS, msg.gas, 0, nullptr, 0};
+        return evmc::Result{EVMC_SUCCESS, msg.gas, 0, nullptr, 0,
+                            {.left = msg.state_gas}};
     }
 
-    const auto new_addr =
-        derive_create_address(msg, sender_nonce_pre, init_code, init_size);
+    // The VM derives the new address (CREATE: sender + nonce; CREATE2:
+    // sender + salt + keccak(init code)) and passes it as the recipient.
+    const auto& new_addr = msg.recipient;
 
     // 2. Bump sender nonce (journaled).
     journal_.log_nonce(sender_idx, sender_nonce_pre,
@@ -965,7 +978,8 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     //    = 1 + value transfer). Returns false on collision.
     if (!init_create_account(new_addr, msg)) {
         rollback(cp_after_bump);
-        return evmc::Result{EVMC_FAILURE, 0, 0, nullptr, 0};
+        return evmc::Result{EVMC_FAILURE, 0, 0, nullptr, 0,
+                            {.left = msg.state_gas}};
     }
 
     // EIP-6780: mark the new index as "created this tx" so a later
@@ -1010,7 +1024,8 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     constexpr size_t kMaxCodeSize = 24576;
     if (result.output_size > kMaxCodeSize) {
         rollback(cp_after_bump);
-        return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0};
+        return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0,
+                            {.left = msg.state_gas}};
     }
 
     // EIP-3541 (London+): contracts cannot have deployed code that
@@ -1026,7 +1041,8 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     if (is_london_or_later() && result.output_size > 0 &&
         result.output_data[0] == 0xef) {
         rollback(cp_after_bump);
-        return evmc::Result{EVMC_CONTRACT_VALIDATION_FAILURE, 0, 0, nullptr, 0};
+        return evmc::Result{EVMC_CONTRACT_VALIDATION_FAILURE, 0, 0, nullptr, 0,
+                            {.left = msg.state_gas}};
     }
 
     // EIP-2 code-deposit cost (200 gas per byte of deployed code).
@@ -1038,7 +1054,8 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
         static_cast<int64_t>(result.output_size) * CODE_DEPOSIT_COST;
     if (result.gas_left < deposit) {
         rollback(cp_after_bump);
-        return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0};
+        return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0,
+                            {.left = msg.state_gas}};
     }
     result.gas_left -= deposit;
 
@@ -1050,21 +1067,7 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     //    (test/state/host.cpp), which does the same on its success path.
     register_deployed_code(new_addr, result);
     return evmc::Result{result.status_code, result.gas_left, result.gas_refund,
-                        new_addr};
-}
-
-evmc::address ZiskStateDB::derive_create_address(
-        const evmc_message& msg,
-        uint64_t            sender_nonce_pre,
-        const uint8_t*      init_code,
-        std::size_t         init_size) noexcept {
-    if (msg.kind == EVMC_CREATE) {
-        return compute_create_address(msg.sender, sender_nonce_pre);
-    }
-    // EVMC_CREATE2 / EVMC_EOFCREATE — same formula, distinguished only
-    // by what bytes the EVM hands us as the init code.
-    return compute_create2_address(msg.sender, msg.create2_salt,
-                                   init_code, init_size);
+                        nullptr, 0, result.state_gas};
 }
 
 bool ZiskStateDB::address_has_storage(const evmc::address& addr) const noexcept {
@@ -1168,6 +1171,8 @@ void ZiskStateDB::pre_execute_block() noexcept {
         ctx.block_number      = static_cast<int64_t>(consensus_.number());
         ctx.block_timestamp   = static_cast<int64_t>(consensus_.timestamp());
         ctx.block_gas_limit   = static_cast<int64_t>(consensus_.gas_limit());
+        // EIP-7843 (Amsterdam) SLOTNUM; zero before Amsterdam.
+        ctx.block_slot_number = consensus_.slot_number();
         // EIP-4399 (Paris): opcode 0x44 (DIFFICULTY pre-Paris, PREVRANDAO
         // Paris+) reads this same tx_context field either way — the HOST
         // decides which ConsensusInfo value it holds. Pre-Paris blocks
@@ -1273,12 +1278,11 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         // fills status / bloom / cumGas at the end of the iteration.
         tx_receipts_.emplace_back().tx_type = tx.type();
 
-        // Backing storage for the blob-hashes and initcodes arrays
-        // pointed to by the per-tx tx_context. Must outlive the execute2
-        // call below — the ctx fields are raw pointers into these vectors.
-        std::vector<evmc::bytes32>    blob_hashes;
-        std::vector<evmc_tx_initcode> initcodes_vec;
-        set_tx_context(build_per_tx_context(tx, blob_hashes, initcodes_vec));
+        // Backing storage for the blob-hashes array pointed to by the
+        // per-tx tx_context. Must outlive the execute2 call below — the
+        // ctx field is a raw pointer into this vector.
+        std::vector<evmc::bytes32> blob_hashes;
+        set_tx_context(build_per_tx_context(tx, blob_hashes));
 
         // Pre-EVM accounting (NOT journaled — survives EVM revert).
         const size_t  sender_idx    = ensure_account(tx.sender());
@@ -1400,9 +1404,8 @@ void ZiskStateDB::pre_warm_for_tx(const Transactions::View& tx) noexcept {
 }
 
 evmc_tx_context ZiskStateDB::build_per_tx_context(
-        const Transactions::View&      tx,
-        std::vector<evmc::bytes32>&    blob_hashes,
-        std::vector<evmc_tx_initcode>& initcodes_vec) noexcept {
+        const Transactions::View&   tx,
+        std::vector<evmc::bytes32>& blob_hashes) noexcept {
     using TxType = Transactions::Type;
 
     auto ctx      = tx_context_;
@@ -1455,33 +1458,6 @@ evmc_tx_context ZiskStateDB::build_per_tx_context(
         // The per-tx fee debit happens in apply_pre_evm_accounting;
         // this is just the running header total.
         blob_gas_used_ += blob_hashes.size() * kGasPerBlob;
-    }
-
-    // EIP-7873 initcodes — Type 5 (Osaka) only. Each entry's `code`
-    // points zero-copy into the envelope; `hash` is keccak256 of those
-    // bytes (the TXCREATE lookup key).
-    ctx.initcodes       = nullptr;
-    ctx.initcodes_count = 0;
-    if (tx.type() == TxType::Osaka) {
-        const auto raw   = tx.initcodes_rlp();
-        const auto outer = rlp::decode_item(raw);
-        if (outer.kind != rlp::ItemKind::List) {
-            fatal("Osaka tx: initcodes is not an RLP list");
-        }
-        rlp::ListIter it{outer.payload};
-        while (it.has_next()) {
-            const auto item = it.next();
-            if (item.kind != rlp::ItemKind::String) {
-                fatal("Osaka tx: initcodes entry is not an RLP string");
-            }
-            evmc_tx_initcode entry{};
-            entry.code      = item.payload.data();
-            entry.code_size = item.payload.size();
-            entry.hash      = keccak256_bytes32(entry.code, entry.code_size);
-            initcodes_vec.push_back(entry);
-        }
-        ctx.initcodes       = initcodes_vec.data();
-        ctx.initcodes_count = initcodes_vec.size();
     }
 
     return ctx;
@@ -1926,7 +1902,8 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
         if (accounts_.nonce_at(new_idx) != 0 ||
             accounts_.code_hash_at(new_idx) != EMPTY_CODE_HASH ||
             address_has_storage(new_addr) || has_block_start_storage(new_idx)) {
-            return evmc::Result{EVMC_FAILURE, 0, 0, nullptr, 0};
+            return evmc::Result{EVMC_FAILURE, 0, 0, nullptr, 0,
+                                {.left = msg.state_gas}};
         }
 
         // Initialize the new account (nonce = 1) and transfer value.
@@ -1955,7 +1932,8 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
             // the per-byte deposit refused.
             constexpr size_t kMaxCodeSize = 24576;
             if (result.output_size > kMaxCodeSize) {
-                return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0};
+                return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0,
+                                    {.left = msg.state_gas}};
             }
 
             // EIP-3541 (London+): reject deployed code starting with
@@ -1970,7 +1948,8 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
             if (is_london_or_later() && result.output_size > 0 &&
                 result.output_data[0] == 0xef) {
                 return evmc::Result{EVMC_CONTRACT_VALIDATION_FAILURE,
-                                    0, 0, nullptr, 0};
+                                    0, 0, nullptr, 0,
+                                    {.left = msg.state_gas}};
             }
 
             // EIP-2 code deposit cost (200 / byte). Deducted from
@@ -1979,7 +1958,8 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
             const int64_t deposit =
                 static_cast<int64_t>(result.output_size) * CODE_DEPOSIT_COST;
             if (result.gas_left < deposit) {
-                return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0};
+                return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0,
+                                    {.left = msg.state_gas}};
             }
             result.gas_left -= deposit;
 
@@ -2008,7 +1988,7 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
             // Don't propagate the init code's RETURN payload as the tx's
             // output on success — see the matching fix in call_create().
             return evmc::Result{result.status_code, result.gas_left,
-                                result.gas_refund, new_addr};
+                                result.gas_refund, nullptr, 0, result.state_gas};
         }
         return result;
     }

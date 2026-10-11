@@ -11,11 +11,11 @@
 #include <span>
 #include <utility>
 #include <vector>
-#include "bn254.hpp"            // evmone evmmax::bn254 (reference pairing_check)
+#include "bn254.hpp"            // evmone evmone::crypto::bn254 (reference pairing_check)
 #include "../pairing.hpp"       // zeg::bn
 
 using namespace zeg::bn;
-namespace ev = evmmax::bn254;
+namespace ev = evmone::crypto::bn254;
 static int g_fail = 0;
 static void check(bool ok, const char* n){ std::printf("%s %s\n", ok?"ok  ":"FAIL", n); if(!ok)++g_fail; }
 
@@ -47,11 +47,16 @@ static std::optional<bool> my_pc(const std::vector<std::pair<G1,G2>>& ps){
     return fp12_is_one(final_exp(acc));
 }
 // evmone pairing_check on the same points.
+// Like evmone's ecpairing precompile: coordinates must be field elements (else
+// failure), then they are converted to Montgomery form for pairing_check.
 static std::optional<bool> ev_pc(const std::vector<std::pair<G1,G2>>& ps){
-    std::vector<std::pair<ev::Point, ev::ExtPoint>> pairs;
+    std::vector<std::pair<ev::AffinePoint, ev::ExtPoint>> pairs;
     for (auto& [g1,g2] : ps){
-        ev::Point P{ u256(g1.x), u256(g1.y) };
-        ev::ExtPoint Q{ { u256(g2.x.c0), u256(g2.x.c1) }, { u256(g2.y.c0), u256(g2.y.c1) } };
+        const intx::uint256 c[6] = { u256(g1.x), u256(g1.y), u256(g2.x.c0), u256(g2.x.c1),
+                                     u256(g2.y.c0), u256(g2.y.c1) };
+        for (const auto& v : c) if (v >= ev::Fq::ORDER) return std::nullopt;
+        ev::AffinePoint P{ ev::Fq{c[0]}, ev::Fq{c[1]} };
+        ev::ExtPoint Q{ ev::Fq2({ev::Fq{c[2]}, ev::Fq{c[3]}}), ev::Fq2({ev::Fq{c[4]}, ev::Fq{c[5]}}) };
         pairs.emplace_back(P,Q);
     }
     return ev::pairing_check(pairs);

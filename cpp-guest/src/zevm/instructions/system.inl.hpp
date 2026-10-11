@@ -20,8 +20,10 @@
 #include "detail.hpp"
 
 #include <cstring>
+#include <limits>
 
 #include "evm_mem.hpp"
+#include "zeg/create_address.hpp"
 
 namespace zevm {
 
@@ -292,18 +294,29 @@ bool create_impl(EvmState& s, Regs& R, evmc_call_kind kind) {
         if (be_lt(bal, value_be)) return finish_fail();
     }
 
+    // EIP-2681: a sender at the maximum nonce can't create ("light" failure).
+    const evmc_address& sender = s.evmcMsg->recipient;
+    const uint64_t sender_nonce = s.host->get_nonce(s.context, &sender);
+    if (sender_nonce == std::numeric_limits<uint64_t>::max()) return finish_fail();
+
     // EIP-150 cap on the gas handed to the init frame.
     evmc_message msg{};
     msg.kind   = kind;
     msg.gas    = R.gas - R.gas / 64;
-    msg.sender = s.evmcMsg->recipient;
+    msg.sender = sender;
     msg.depth  = s.evmcMsg->depth + 1;
     msg.value  = value_be;
-    if (is2) msg.create2_salt = salt;
     if (size > 0) {
         msg.input_data = EVMMem::data(static_cast<size_t>(off));
         msg.input_size = static_cast<size_t>(size);
     }
+    // The VM derives the new address and hands it to the host as the
+    // recipient (evmc ABI 18+).
+    msg.recipient = is2 ? zeg::compute_create2_address(sender, salt, msg.input_data,
+                                                       msg.input_size)
+                        : zeg::compute_create_address(sender, sender_nonce);
+    // EIP-2929: the new address is warmed whether or not the create succeeds.
+    if (s.rev >= EVMC_BERLIN) s.host->access_account(s.context, &msg.recipient);
 
     evmc_result r = s.host->call(s.context, &msg);
     R.gas        -= (msg.gas - r.gas_left);
@@ -311,7 +324,7 @@ bool create_impl(EvmState& s, Regs& R, evmc_call_kind kind) {
     s.returnDataOwner = r;  // keep revert output (empty on success) as return data
 
     if (r.status_code == EVMC_SUCCESS) {
-        iResult[0] = slot_from_address(r.create_address);  // 20-byte address -> LE slot
+        iResult[0] = slot_from_address(msg.recipient);  // 20-byte address -> LE slot
     } else {
         iResult[0] = U256{};  // zero is BE-agnostic
     }

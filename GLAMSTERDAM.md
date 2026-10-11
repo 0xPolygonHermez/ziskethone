@@ -4,19 +4,22 @@ Glamsterdam is the Ethereum upgrade after Fusaka; **Amsterdam** is its
 execution-layer half (the consensus half is Gloas). It activated on Sepolia on
 2026-10-06; mainnet is not scheduled yet.
 
-This branch has the test pipeline ready, and the guest does not implement
-Amsterdam yet:
+Status on branch `glamsterdam`: the test pipeline and the guest groundwork are
+in place, and the individual EIPs are not implemented yet.
 
 - `eest-witness-gen` is on **reth v2.7.0** (the first release with Amsterdam on
   Sepolia). It maps the `Amsterdam` and `…ToAmsterdamAtTime…` networks, with blob
   parameters from the fixture's `blobSchedule`. It also writes the new header
   fields (`blockAccessListHash`, `slotNumber`) into the manifest.
 - `input-gen` emits `fork_id = 8` (Amsterdam) for any header that carries
-  `block_access_list_hash`.
-- The guest still stops at Osaka, so it rejects every Amsterdam block with
-  `guest: ConsensusInfo: unknown fork_id`. `scripts/eest_sweep.sh` counts that
-  as `FAIL(unsupported_fork)`. It is not counted as `PASS_NEG`, even for an
-  invalid-block test.
+  `block_access_list_hash`. The binary format is v10 and carries both new header
+  fields (see `BINARY_FORMAT.md`).
+- The guest accepts Amsterdam: `ForkId::Amsterdam` → `EVMC_AMSTERDAM`, the
+  23-field header for the current block and its ancestors, SLOTNUM's
+  `block_slot_number` in the tx context, and `is_amsterdam_or_later()`.
+- The guest is on **evmone v0.24.0** (EVMC ABI 19, Amsterdam revision). zevm is
+  ported to the same ABI and has an `EVMC_AMSTERDAM` dispatch loop, which for
+  now has the Osaka opcode set.
 
 ## Fixtures
 
@@ -72,24 +75,24 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
 | [8246](https://eips.ethereum.org/EIPS/eip-8246) | Remove SELFDESTRUCT burn | `eip8246_selfdestruct_no_burn` | 9 / 663 | todo |
 | [8282](https://eips.ethereum.org/EIPS/eip-8282) | Builder execution requests | `eip8282_builder_execution_requests` | 22 / 356 | todo |
 
-### Guest groundwork (needed before any EIP can pass)
+### Open items that span EIPs
 
-Every Amsterdam block fails until the guest accepts the fork:
+- **Soundness: the BAL hash is trusted.** `block_access_list_hash` comes from
+  the input and goes straight into the header hash
+  (`TODO(EIP-7928)` in `run.cpp`). EIP-7928 must build the BAL during execution
+  and check its hash against the input.
+- **EIP-8037 state gas.** Top-level messages send `state_gas = 0`, and
+  host-built results only pass `msg.state_gas` through. Splitting the
+  transaction's reservoir, plus the host-side CREATE deposit and new-account
+  charges, belongs to EIP-8037.
+- **zevm** runs Amsterdam with Osaka opcodes and Osaka gas. Each EIP needs a
+  zevm change alongside the host change: 8024 and 7843 opcodes, 8037/8038 gas.
+- **Proving cost.** On a mainnet block (26167511) the evmone ELF takes +3.3%
+  steps on evmone v0.24 vs v0.21 (136.0M → 140.5M); zevm is unchanged.
 
-1. Add `ForkId::Amsterdam = 8` (`cpp-guest/include/zeg/fork.hpp`), map it to an
-   Amsterdam EVM revision and a 23-field header, and raise the `unknown fork_id`
-   gate in `consensus_info.cpp`. The pinned evmone (v0.21.0) stops at
-   `EVMC_OSAKA`. evmone **v0.24.0** has the Amsterdam revision, including
-   EIP-8037's state-gas reservoir (EVMC ABI 19: `state_gas` in
-   `evmc_message`/`evmc_result`) and EIP-8038. Bumping it is the natural first
-   step, and zevm needs the same revision.
-2. Carry `block_access_list_hash` and `slot_number` in `ConsensusInfo` (a
-   `BINARY_FORMAT.md` change), so the guest can hash the Amsterdam header.
-3. Validate `block_access_list_hash` by building the BAL during execution
-   (EIP-7928). Until then, the header hash can only be correct by trusting the
-   declared value.
+## Baseline
 
-## Baseline (all failing)
+### Before the guest groundwork
 
 Branch `glamsterdam`, `tests@v21.0.1`, evmone guest, 2026-10-11:
 
@@ -108,3 +111,39 @@ Branch `glamsterdam`, `tests@v21.0.1`, evmone guest, 2026-10-11:
 The reth 2.2 → 2.7 bridge upgrade was regression-checked on the
 `tests-v5.4.0` Prague + Osaka corpus: 3,820 PASS, 274 PASS_NEG, 0 FAIL, 1 MISSING
 (the undecodable `test_contract_create` type-4 creation).
+
+### After the guest groundwork
+
+The guest accepts Amsterdam, so each EIP's own failures show. Pass counts
+include `PASS_NEG`. A block can pass before its EIP is implemented: it passes
+whenever its transactions don't touch any changed rule. So a non-zero count does
+not mean the EIP is done.
+
+`FAIL_NEG` counts invalid Amsterdam blocks the guest accepts. These are
+soundness gaps, and each one closes with its EIP's validity rule.
+
+| EIP | Blocks | evmone pass | zevm pass | FAIL_NEG (evmone) |
+|---|---:|---:|---:|---:|
+| 2780 | 283 | 30 | 30 | 4 |
+| 7708 | 77 | 0 | 0 | 0 |
+| 7778 | 117 | 50 | 42 | 0 |
+| 7843 | 23 | 0 | 0 | 0 |
+| 7928 | 1,248 | 295 | 293 | 25 |
+| 7954 | 58 | 5 | 5 | 0 |
+| 7976 | 543 | 122 | 122 | 66 |
+| 7981 | 189 | 16 | 14 | 16 |
+| 7997 | 40 | 0 | 0 | 0 |
+| 8024 | 288 | 0 | 0 | 0 |
+| 8037 | 834 | 115 | 98 | 2 |
+| 8038 | 263 | 8 | 8 | 1 |
+| 8246 | 663 | 0 | 0 | 0 |
+| 8282 | 356 | 82 | 82 | 0 |
+| **total** | **4,982** | **723** | **694** | **114** |
+
+Regressions are unchanged with the groundwork in place:
+
+- The full `tests-v5.4.0` corpus plus the legacy `InvalidBlocks` suites give
+  identical results block for block on evmone v0.21 and v0.24.
+- The Prague + Osaka subset is at 0 FAIL on both backends.
+- Mainnet block 26167511 matches the chain hash on the host (both backends) and
+  on both ZisK ELFs (GCC 14).

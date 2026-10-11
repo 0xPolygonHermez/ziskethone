@@ -94,6 +94,7 @@ public:
                                const evmc::bytes32& key,
                                const evmc::bytes32& value) noexcept override;
     evmc::uint256be get_balance(const evmc::address& addr) const noexcept override;
+    uint64_t get_nonce(const evmc::address& addr) const noexcept override;
     size_t get_code_size(const evmc::address& addr) const noexcept override;
     evmc::bytes32 get_code_hash(const evmc::address& addr) const noexcept override;
     size_t copy_code(const evmc::address& addr,
@@ -261,14 +262,6 @@ private:
 
     // ----- CREATE-family sub-helpers (used by call_create) -----
 
-    // Derive the new contract address per the kind on `msg`. CREATE
-    // uses sender + sender_nonce; CREATE2 / EOFCREATE use sender +
-    // salt + keccak(init).
-    evmc::address derive_create_address(const evmc_message& msg,
-                                        uint64_t            sender_nonce_pre,
-                                        const uint8_t*      init_code,
-                                        std::size_t         init_size) noexcept;
-
     // EIP-684 collision check + initialize the new account
     // (nonce = 1, value transfer). Returns false on collision. Both
     // mutations are journaled.
@@ -414,13 +407,12 @@ private:
 
     // Build the per-tx evmc_tx_context from `tx_context_` (block-level
     // fields filled by pre_execute_block) + per-tx fields from `tx`.
-    // `blob_hashes` and `initcodes_vec` are scratch buffers the caller
-    // owns; pointers into them are written into the returned ctx so
-    // they must outlive any subsequent execute2 call.
+    // `blob_hashes` is a scratch buffer the caller owns; a pointer into
+    // it is written into the returned ctx so it must outlive any
+    // subsequent execute2 call.
     evmc_tx_context build_per_tx_context(
-        const Transactions::View&        tx,
-        std::vector<evmc::bytes32>&      blob_hashes,
-        std::vector<evmc_tx_initcode>&   initcodes_vec) noexcept;
+        const Transactions::View&   tx,
+        std::vector<evmc::bytes32>& blob_hashes) noexcept;
 
     // check_transaction, then bump sender nonce and debit upfront gas
     // + blob fee. Returns the tx's intrinsic gas (also used as the EVM

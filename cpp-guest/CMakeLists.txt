@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.22)
+cmake_minimum_required(VERSION 3.25)  # evmone v0.24 requires 3.25
 
 # Emit compile_commands.json so the VS Code C/C++ extension picks up the
 # real compile flags (notably -std=c++20 and the FetchContent include
@@ -17,7 +17,7 @@ include(FetchContent)
 FetchContent_Declare(
     evmone
     GIT_REPOSITORY https://github.com/ethereum/evmone.git
-    GIT_TAG        v0.21.0
+    GIT_TAG        v0.24.0
 )
 
 # FetchContent_Populate (without add_subdirectory) is deprecated since
@@ -31,17 +31,16 @@ if(NOT evmone_POPULATED)
     FetchContent_Populate(evmone)
 endif()
 
-# Apply our local evmone patches. 01 and 02 align evmone's CALL gas accounting
-# with revm's behavior so a stateless witness recorded by reth/revm is
-# sufficient for evmone — no extra host calls outside the witness:
-#   01: Reorder CALL gas checks to charge CALL_VALUE_COST first, then cold
-#       access, then ACCOUNT_CREATION_COST, then the EIP-7702 delegation
-#       probe — mirrors revm's `load_acc_and_calc_gas`. A value-bearing
-#       CALL destined to OOG no longer invokes any host state query.
+# Apply our local evmone patches. 02 keeps evmone within the stateless
+# witness reth/revm records — no host calls outside the witness:
 #   02: In get_delegate_address, fast-bail via host.get_code_hash before
 #       calling host.copy_code — an EOA (or any account with empty code)
 #       can never carry an EIP-7702 designator. Mirrors revm's
 #       `Bytecode::eip7702_address(account.code)` short-circuit.
+#   (01, a revm-ordered CALL gas check, was dropped at v0.24: upstream #1668
+#   charges every state-independent CALL cost — memory, value, cold access —
+#   before the delegation probe. Only the new-account cost now comes after
+#   the probe, and that target has no code, so 02 bails on it.)
 #   03: Route MUL/EXP/ADDMOD/MULMOD through the ZisK arith256/arith256_mod
 #       precompiles instead of intx's software bigint (the analogue of reth's
 #       ruint patch). Gated on ZEG_ZISK, so the host build keeps intx and
@@ -58,7 +57,6 @@ endif()
 # is already applied we skip — that keeps the configure step idempotent
 # across rebuilds.
 set(_evmone_patches
-    "${CMAKE_CURRENT_SOURCE_DIR}/patches/01-evmone-revm-aligned-call-gas-order.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/02-evmone-delegation-eoa-fastpath.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/03-evmone-zisk-arith256-mulmod.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/04-evmone-zisk-jumpdest-pointer-walk.patch"
@@ -132,7 +130,7 @@ target_include_directories(evmone-state PUBLIC ${evmone_SOURCE_DIR})
 # zkVM (riscv64ima-zisk-zkvm-elf). C++ guest support in ZisK is still
 # experimental and lives outside this CMakeLists for now.
 #
-# evmone v0.21.0 absorbed evmc into the same library, so a single `evmone`
+# Since v0.21.0 evmone bundles evmc into the same library, so a single `evmone`
 # link target gives us both the EVM and the `evmc::Host` interface that
 # ZiskStateDB implements.
 
@@ -194,8 +192,7 @@ add_executable(zisk_eth_guest ${GUEST_SOURCES})
 target_include_directories(zisk_eth_guest PUBLIC include)
 # evmone's baseline.hpp / vm.hpp (CodeAnalysis + the pre-analyzed execute()
 # overload used by the analysis cache) live under lib/, not the public include/.
-# include/ holds evmmax/evmmax.hpp, pulled in by evmone_precompiles/secp256k1.hpp
-# (the host secp256k1 recover path).
+# include/ holds evmone's public headers (evmone/evmone.h).
 target_include_directories(zisk_eth_guest PRIVATE
     ${evmone_SOURCE_DIR}/lib
     ${evmone_SOURCE_DIR}/include)

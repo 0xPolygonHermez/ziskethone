@@ -112,9 +112,9 @@ template <evmc_revision Rev>
             OPS(0x18, bitwise_ops, op_xor, 1)
             OPS(0x19, bitwise_ops, op_not, 0)
             OPS(0x1a, bitwise_ops, op_byte, 1)
-            OPSG(0x1b, EVMC_CONSTANTINOPLE, bitwise_ops, op_shl, 1)
-            OPSG(0x1c, EVMC_CONSTANTINOPLE, bitwise_ops, op_shr, 1)
-            OPSG(0x1d, EVMC_CONSTANTINOPLE, bitwise_ops, op_sar, 1)
+            OPSG(0x1b, EVMC_PETERSBURG, bitwise_ops, op_shl, 1)
+            OPSG(0x1c, EVMC_PETERSBURG, bitwise_ops, op_shr, 1)
+            OPSG(0x1d, EVMC_PETERSBURG, bitwise_ops, op_sar, 1)
             OPSG(0x1e, EVMC_OSAKA, bitwise_ops, op_clz, 0)
             OPS(0x20, keccak_ops, op_keccak256, 1)
             OPS(0x30, env_ops, op_address, -1)
@@ -132,7 +132,7 @@ template <evmc_revision Rev>
             OPS(0x3c, env_ops, op_extcodecopy, 4)
             OPSG(0x3d, EVMC_BYZANTIUM, system_ops, op_returndatasize, -1)
             OPSG(0x3e, EVMC_BYZANTIUM, system_ops, op_returndatacopy, 3)
-            OPSG(0x3f, EVMC_CONSTANTINOPLE, env_ops, op_extcodehash, 0)
+            OPSG(0x3f, EVMC_PETERSBURG, env_ops, op_extcodehash, 0)
             OPS(0x40, env_ops, op_blockhash, 0)
             OPS(0x41, env_ops, op_coinbase, -1)
             OPS(0x42, env_ops, op_timestamp, -1)
@@ -234,7 +234,7 @@ template <evmc_revision Rev>
             OP(0xf2, system_ops, op_callcode)
             OP(0xf3, system_ops, op_return)
             OPG(0xf4, EVMC_HOMESTEAD, system_ops, op_delegatecall)
-            OPG(0xf5, EVMC_CONSTANTINOPLE, system_ops, op_create2)
+            OPG(0xf5, EVMC_PETERSBURG, system_ops, op_create2)
             OPG(0xfa, EVMC_BYZANTIUM, system_ops, op_staticcall)
             OPG(0xfd, EVMC_BYZANTIUM, system_ops, op_revert)
             OP(0xfe, system_ops, op_invalid)
@@ -261,7 +261,7 @@ void dispatch_loop(EvmState& s) {
 // one instantiation (the fork-dependent *gas* logic inside handlers reads the
 // runtime EvmState::rev, so only the opcode availability needs the compile-time
 // revision). One loop per distinct fork opcode set: Frontier, Homestead,
-// Byzantium, Constantinople, Istanbul, London, Shanghai, Cancun, Osaka.
+// Byzantium, Petersburg, Istanbul, London, Shanghai, Cancun, Osaka, Amsterdam.
 void run_dispatch(evmc_revision rev, EvmState& s) {
     switch (rev) {
         case EVMC_FRONTIER:                                  dispatch_loop<EVMC_FRONTIER>(s);       break;
@@ -269,8 +269,7 @@ void run_dispatch(evmc_revision rev, EvmState& s) {
         case EVMC_TANGERINE_WHISTLE:
         case EVMC_SPURIOUS_DRAGON:                           dispatch_loop<EVMC_HOMESTEAD>(s);      break;
         case EVMC_BYZANTIUM:                                 dispatch_loop<EVMC_BYZANTIUM>(s);      break;
-        case EVMC_CONSTANTINOPLE:
-        case EVMC_PETERSBURG:                                dispatch_loop<EVMC_CONSTANTINOPLE>(s); break;
+        case EVMC_PETERSBURG:                                dispatch_loop<EVMC_PETERSBURG>(s);     break;
         case EVMC_ISTANBUL:
         case EVMC_BERLIN:                                    dispatch_loop<EVMC_ISTANBUL>(s);       break;
         case EVMC_LONDON:
@@ -278,8 +277,10 @@ void run_dispatch(evmc_revision rev, EvmState& s) {
         case EVMC_SHANGHAI:                                  dispatch_loop<EVMC_SHANGHAI>(s);       break;
         case EVMC_CANCUN:
         case EVMC_PRAGUE:                                    dispatch_loop<EVMC_CANCUN>(s);         break;
-        case EVMC_OSAKA:
-        default:                                             dispatch_loop<EVMC_OSAKA>(s);          break;
+        case EVMC_OSAKA:                                     dispatch_loop<EVMC_OSAKA>(s);          break;
+        // Amsterdam: same opcode set as Osaka until DUPN/SWAPN/EXCHANGE
+        // (EIP-8024) and SLOTNUM (EIP-7843) land.
+        case EVMC_AMSTERDAM:                                 dispatch_loop<EVMC_AMSTERDAM>(s);      break;
     }
 }
 
@@ -316,6 +317,9 @@ evmc_result run(const evmc_host_interface* host, evmc_host_context* context,
     result.output_data = state.output_size != 0 ? EVMMem::data(state.output_offset) : nullptr;
     result.output_size = state.output_size;
     result.release = nullptr;
+    // EIP-8037 state-gas reservoir: passed through untouched until zevm
+    // meters state gas (a failed frame must also return msg->state_gas).
+    result.state_gas = {.left = msg->state_gas, .spilled = 0};
 
     // Release the frame (pop its EVMMem zone, free an owned chunk map, release any
     // held sub-call result). The output pointer above was captured while the frame
@@ -336,10 +340,6 @@ evmc_result w_execute(evmc_vm* /*vm*/, const evmc_host_interface* host,
 void w_destroy(evmc_vm* /*vm*/) noexcept {
     // The VM instance is a single static object (see evmc2_create_zevm); nothing
     // to free.
-}
-
-evmc_capabilities_flagset w_get_capabilities(evmc_vm* /*vm*/) noexcept {
-    return EVMC_CAPABILITY_EVM1;
 }
 
 // ----- evmc2 extensions -----
@@ -373,18 +373,17 @@ evmc_result w_execute2(evmc_vm* /*vm*/, const evmc_host_interface* host,
 
 extern "C" evmc2_vm* evmc2_create_zevm(void) {
     static evmc2_vm vm = {
-        /*base=*/ {
-            EVMC_ABI_VERSION,
-            "zevm",
-            "0.0.1",
-            zevm::w_destroy,
-            zevm::w_execute,
-            zevm::w_get_capabilities,
-            nullptr,  // set_option: unsupported
+        .base = {
+            .abi_version = EVMC_ABI_VERSION,
+            .name        = "zevm",
+            .version     = "0.0.1",
+            .destroy     = zevm::w_destroy,
+            .execute     = zevm::w_execute,
+            .set_option  = nullptr,  // unsupported
         },
-        zevm::w_prepare,
-        zevm::w_execute2,
-        zevm::w_release,
+        .prepare               = zevm::w_prepare,
+        .execute2              = zevm::w_execute2,
+        .release_pre_execution = zevm::w_release,
     };
     return &vm;
 }
