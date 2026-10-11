@@ -1,4 +1,4 @@
-//! Map EEST fixture network strings ("Prague", "Osaka",
+//! Map EEST fixture network strings ("Prague", "Osaka", "Amsterdam",
 //! "CancunToPragueAtTime15k", …) into reth `ChainSpec` instances.
 //!
 //! Only Pectra+ forks are wired up (that's the cpp-guest target).
@@ -29,7 +29,7 @@ use crate::fixture::BlobScheduleEntry;
 /// from genesis.
 ///
 /// `blob_schedule` is the fixture's `config.blobSchedule`, used for the
-/// BPO forks' blob parameters.
+/// BPO and Amsterdam blob parameters.
 pub fn from_network(
     network: &str,
     blob_schedule: &BTreeMap<String, BlobScheduleEntry>,
@@ -44,6 +44,28 @@ pub fn from_network(
             .genesis(MAINNET.genesis.clone())
     };
 
+    // Amsterdam (Glamsterdam's execution layer): "Amsterdam" or "<Osaka|BPOn>ToAmsterdamAtTime…". Amsterdam
+    // carries its own blob parameters (BPO2's values on mainnet), which
+    // come from the fixture like the BPO ones below. ChainSpecBuilder
+    // drops any blob schedule, so set the scheduled params directly.
+    if network == "Amsterdam" || network.contains("ToAmsterdamAt") {
+        let ts = if network == "Amsterdam" {
+            0
+        } else {
+            parse_transition_timestamp(network, "ToAmsterdamAtTime")?
+        };
+        let mut scheduled = Vec::new();
+        if let Some(from) = network.split_once("ToAmsterdamAt").map(|(f, _)| f) {
+            if from.starts_with("BPO") {
+                scheduled.push((0, fixture_blob_params(network, blob_schedule, from)?));
+            }
+        }
+        scheduled.push((ts, fixture_blob_params(network, blob_schedule, "Amsterdam")?));
+        let mut spec = new_base().osaka_activated().with_amsterdam_at(ts).build();
+        spec.blob_params = BlobScheduleBlobParams::default().with_scheduled(scheduled);
+        return Ok(Arc::new(spec));
+    }
+
     // BPO transition: "<Osaka|BPOn>ToBPOm<AtTime…>". BPO forks keep the
     // Osaka rules and only change the blob parameters, which come from
     // the fixture (BPO3/BPO4 use test-only values). ChainSpecBuilder
@@ -51,17 +73,7 @@ pub fn from_network(
     if let Some((from, rest)) = network.split_once("ToBPO") {
         let ts = parse_transition_timestamp(network, "AtTime")?;
         let to = format!("BPO{}", rest.split("AtTime").next().unwrap());
-        let params = |fork: &str| -> Result<BlobParams> {
-            let e = blob_schedule
-                .get(fork)
-                .ok_or_else(|| anyhow::anyhow!("network '{network}': no blobSchedule for {fork}"))?;
-            Ok(BlobParams {
-                target_blob_count: e.target.to(),
-                max_blob_count: e.max.to(),
-                update_fraction: e.base_fee_update_fraction.to(),
-                ..BlobParams::osaka()
-            })
-        };
+        let params = |fork: &str| fixture_blob_params(network, blob_schedule, fork);
         let mut scheduled = Vec::new();
         if from.starts_with("BPO") {
             scheduled.push((0, params(from)?));
@@ -113,13 +125,30 @@ pub fn from_network(
         }
         other => bail!(
             "unsupported EEST network '{}'; only Berlin/London/Paris/\
-             Shanghai/Cancun/Prague/Osaka (and To{{Shanghai,Cancun,Prague,\
-             Osaka,BPOn}}At transitions) wired up",
+             Shanghai/Cancun/Prague/Osaka/Amsterdam (and To{{Shanghai,Cancun,\
+             Prague,Osaka,Amsterdam,BPOn}}At transitions) wired up",
             other
         ),
     };
 
     Ok(Arc::new(spec.build()))
+}
+
+/// The fixture's `config.blobSchedule` entry for `fork`, as reth blob params.
+fn fixture_blob_params(
+    network: &str,
+    blob_schedule: &BTreeMap<String, BlobScheduleEntry>,
+    fork: &str,
+) -> Result<BlobParams> {
+    let e = blob_schedule
+        .get(fork)
+        .ok_or_else(|| anyhow::anyhow!("network '{network}': no blobSchedule for {fork}"))?;
+    Ok(BlobParams {
+        target_blob_count: e.target.to(),
+        max_blob_count: e.max.to(),
+        update_fraction: e.base_fee_update_fraction.to(),
+        ..BlobParams::osaka()
+    })
 }
 
 /// Parse an EEST transition-network string of the form

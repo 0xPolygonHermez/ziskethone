@@ -199,8 +199,10 @@ same binary format as the live RPC path.
 
 The currently-supported forks (per
 [`eest-witness-gen/src/chain_spec.rs`](eest-witness-gen/src/chain_spec.rs)) are
-Berlin / London / Paris / Shanghai / Cancun / Prague / Osaka, plus the
-`CancunToPragueAtTime…` and `PragueToOsakaAtTime…` transition specs.
+Berlin / London / Paris / Shanghai / Cancun / Prague / Osaka / Amsterdam,
+plus the `…To{Shanghai,Cancun,Prague,Osaka,BPOn,Amsterdam}AtTime…`
+transition specs. Amsterdam (Glamsterdam) is bridged but not yet implemented
+in the guest — see [GLAMSTERDAM.md](GLAMSTERDAM.md).
 
 ### Running one fixture
 
@@ -218,6 +220,16 @@ for m in $(find "$OUT" -name "block-*.json" | sort); do
     [ "$actual" = "$expected" ] && echo "OK   $(basename "$m")" \
                                || echo "FAIL $(basename "$m") $actual vs $expected"
 done
+```
+
+### Sweeping a fork, an EIP, or a single fixture
+
+[`scripts/eest_sweep.sh`](scripts/eest_sweep.sh) runs the harness below over
+any set of fixture files or directories and prints a tally, overall and per
+directory:
+
+```bash
+scripts/eest_sweep.sh [-g GUEST] [-o OUT] [-j JOBS] PATH...
 ```
 
 ### Sweeping a full corpus

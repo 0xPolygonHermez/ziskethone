@@ -69,6 +69,9 @@ const FORK_SHANGHAI: u64 = 4;
 const FORK_CANCUN: u64 = 5;
 const FORK_PRAGUE: u64 = 6;
 const FORK_OSAKA: u64 = 7;
+// Amsterdam (Glamsterdam): the guest does not accept it yet and
+// rejects the block with "unknown fork_id" until it is implemented.
+const FORK_AMSTERDAM: u64 = 8;
 
 /// Section 1 — `ConsensusInfo`.
 ///
@@ -148,7 +151,9 @@ pub fn write_consensus_info(
     // Osaka layered on top via the upstream `is_osaka` flag (Osaka adds
     // no header field over Prague, so it can't be inferred here). The
     // guest maps this to the EVM revision + header field count.
-    let fork_id: u64 = if is_osaka {
+    let fork_id: u64 = if h.block_access_list_hash.is_some() {
+        FORK_AMSTERDAM
+    } else if is_osaka {
         FORK_OSAKA
     } else if h.requests_hash.is_some() {
         FORK_PRAGUE
