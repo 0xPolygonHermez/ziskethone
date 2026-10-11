@@ -5,7 +5,7 @@
 //
 // Why an explicit id: most forks add at least one header field, so
 // `field_count` happens to identify them (15 = pre-London, 16 = London,
-// 17 = Shanghai, 20 = Cancun, 21 = Prague). But Osaka (Fusaka) adds NO
+// 17 = Shanghai, 20 = Cancun, 21 = Prague, 23 = Amsterdam). But Osaka (Fusaka) adds NO
 // new header field over Prague — both encode 21 fields — yet it enables
 // new execution semantics (EIP-7939 CLZ opcode, the P256VERIFY
 // precompile, …). `field_count` therefore cannot distinguish Prague
@@ -36,6 +36,7 @@ enum class ForkId : uint64_t {
     Cancun   = 5,
     Prague   = 6,
     Osaka    = 7,
+    Amsterdam = 8,  // Glamsterdam's execution layer
 };
 
 // Number of header fields to RLP-encode for a block of this fork. Used
@@ -49,6 +50,7 @@ constexpr uint32_t fork_field_count(ForkId f) noexcept {
         case ForkId::Cancun:   return 20;  // + blob_gas_used, excess_blob_gas, parent_beacon_block_root
         case ForkId::Prague:   return 21;  // + requests_hash
         case ForkId::Osaka:    return 21;  // no new header field over Prague
+        case ForkId::Amsterdam: return 23; // + block_access_list_hash, slot_number
         case ForkId::Unknown:  return 21;  // mainnet default (Pectra)
     }
     return 21;
@@ -64,6 +66,9 @@ constexpr evmc_revision fork_to_revision(ForkId f) noexcept {
         case ForkId::Cancun:   return EVMC_CANCUN;
         case ForkId::Prague:   return EVMC_PRAGUE;
         case ForkId::Osaka:    return EVMC_OSAKA;
+        // TODO(glamsterdam): EVMC_AMSTERDAM once evmone is bumped. On the
+        // pinned evmone, EVMC_EXPERIMENTAL executes the Osaka rules.
+        case ForkId::Amsterdam: return EVMC_EXPERIMENTAL;
         case ForkId::Unknown:  return EVMC_PRAGUE;  // mainnet default
     }
     return EVMC_PRAGUE;
@@ -81,6 +86,7 @@ constexpr ForkId fork_from_field_count(uint32_t fc) noexcept {
         case 17: return ForkId::Shanghai;
         case 20: return ForkId::Cancun;
         case 21: return ForkId::Prague;
+        case 23: return ForkId::Amsterdam;
         case 0:  return ForkId::Prague;  // unset ⇒ mainnet default
         default: return ForkId::Prague;
     }

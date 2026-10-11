@@ -41,7 +41,7 @@ namespace zeg {
 class PreviousBlocks {
 public:
     // Wire-format record size in bytes. Documented in `View` below.
-    static constexpr uint64_t kRecordSize = 728;
+    static constexpr uint64_t kRecordSize = 768;
 
     // Zero-copy view of one wire-format record. Fields stored as fixed
     // bytes in the stream return references; the u64 fields are read
@@ -75,7 +75,9 @@ public:
         static constexpr size_t kExcessBlobGasOffset         = 656;
         static constexpr size_t kParentBeaconBlockRootOffset = 664;
         static constexpr size_t kRequestsHashOffset          = 696;
-        // End of record: 728 (divisible by 8).
+        static constexpr size_t kBlockAccessListHashOffset   = 728;  // EIP-7928
+        static constexpr size_t kSlotNumberOffset            = 760;  // u64, EIP-7843
+        // End of record: 768 (divisible by 8).
 
         // Hash accessors.
         const evmc::bytes32& parent_hash             () const noexcept;
@@ -87,6 +89,7 @@ public:
         const evmc::bytes32& withdrawals_root        () const noexcept;
         const evmc::bytes32& parent_beacon_block_root() const noexcept;
         const evmc::bytes32& requests_hash           () const noexcept;
+        const evmc::bytes32& block_access_list_hash  () const noexcept;
 
         // 20-byte miner / fee recipient.
         const evmc::address& coinbase() const noexcept;
@@ -109,6 +112,7 @@ public:
         uint64_t timestamp      () const noexcept;
         uint64_t blob_gas_used  () const noexcept;
         uint64_t excess_blob_gas() const noexcept;
+        uint64_t slot_number    () const noexcept;
 
         // Number of header fields cpp-guest should encode in the RLP
         // for this ancestor. Set by rust-input-gen from which Option<>
@@ -122,7 +126,7 @@ public:
         std::span<const uint8_t> extra_data() const noexcept;
     };
 
-    // Parse `u64 count` followed by `count` × 728-byte records, compute
+    // Parse `u64 count` followed by `count` × 768-byte records, compute
     // each header's keccak hash, verify parent-linkage between records
     // that are consecutive by number (gaps allowed — sparse sets are
     // valid), and build the number→index map. Aborts via zeg::fatal on a

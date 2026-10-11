@@ -355,6 +355,12 @@ private:
         return active_revision() >= EVMC_OSAKA;
     }
 
+    // Amsterdam (Glamsterdam's execution layer). Gated on the fork id, not
+    // the revision, so it holds whatever revision Amsterdam maps to.
+    bool is_amsterdam_or_later() const noexcept {
+        return consensus_.fork_id() >= ForkId::Amsterdam;
+    }
+
     // Cancun added the EIP-4788 beacon-roots predeploy system call in
     // pre_execute_block. Pre-Cancun blocks must skip it — the predeploy
     // address isn't installed in the prestate, so the unconditional

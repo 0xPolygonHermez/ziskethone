@@ -101,9 +101,15 @@ std::span<const uint8_t, 8> ConsensusInfo::nonce() const noexcept {
 const evmc::bytes32& ConsensusInfo::ommers_hash() const noexcept {
     return *reinterpret_cast<const evmc::bytes32*>(header_ + kOmmersHashOffset);
 }
+const evmc::bytes32& ConsensusInfo::block_access_list_hash() const noexcept {
+    return *reinterpret_cast<const evmc::bytes32*>(header_ + kBlockAccessListHashOffset);
+}
+uint64_t ConsensusInfo::slot_number() const noexcept {
+    return u64_at(header_ + kSlotNumberOffset);
+}
 
 // ============================================================================
-// Constructor — fixed 368 B prefix + N × 48 B withdrawal records.
+// Constructor — fixed 408 B prefix + N × 48 B withdrawal records.
 // ============================================================================
 
 ConsensusInfo::ConsensusInfo(const uint8_t*& cursor) {
@@ -114,7 +120,7 @@ ConsensusInfo::ConsensusInfo(const uint8_t*& cursor) {
     if (u64_at(header_ + kExtraDataLenOffset) > 32) {
         fatal("ConsensusInfo: extra_data_len > 32");
     }
-    if (u64_at(header_ + kForkIdOffset) > static_cast<uint64_t>(ForkId::Osaka)) {
+    if (u64_at(header_ + kForkIdOffset) > static_cast<uint64_t>(ForkId::Amsterdam)) {
         fatal("ConsensusInfo: unknown fork_id");
     }
 

@@ -54,9 +54,15 @@ sized to a multiple of 8, so the next section starts 8-byte aligned.
 | Offset | Size | Field     | Description |
 |-------:|-----:|-----------|-------------|
 |      0 |    4 | `magic`   | ASCII `"ZEG0"` (`0x3047455A` little-endian, see [`binary_format.hpp`](cpp-guest/include/zeg/binary_format.hpp)) |
-|      4 |    4 | `version` | `u32` little-endian format version (`kVersion`, currently `7`). Also keeps the cursor 8-byte aligned for everything that follows |
+|      4 |    4 | `version` | `u32` little-endian format version (`kVersion`, currently `10`). Also keeps the cursor 8-byte aligned for everything that follows |
 
 The guest fatals on magic mismatch or on a `version` other than `kVersion`.
+Version `10` added the Amsterdam header fields (`block_access_list_hash`,
+`slot_number`) to ConsensusInfo (prefix 368 → 408 B) and to the
+PreviousBlocks records (728 → 768 B).
+Version `9` compacted the StateRoot branch encoding (see Section 7).
+Version `8` added `target_blob_gas_per_block` / `max_blob_gas_per_block` to
+ConsensusInfo; version `5` added `blob_base_fee_update_fraction`.
 Version `4` made the StateRoot trie hints **witness-only**: the encoder
 transcribes the pre-state MPT straight from the execution witness and no
 longer pre-emits leaves for keys created during the block — the guest
@@ -77,7 +83,7 @@ Per-block consensus-layer inputs for the **current** block (the one
 being executed). Schema at
 [`consensus_info.hpp`](cpp-guest/include/zeg/consensus_info.hpp).
 
-### Fixed 344-byte header prefix
+### Fixed 408-byte header prefix
 
 | Offset | Size | Field                       | Type / encoding         |
 |-------:|-----:|-----------------------------|-------------------------|
@@ -98,8 +104,13 @@ being executed). Schema at
 |    264 |   32 | `difficulty`                | `uint256be` — pre-Merge PoW value; `0` post-Merge |
 |    296 |    8 | `nonce`                     | 8-byte fixed-width — pre-Merge PoW nonce; `0` post-Merge |
 |    304 |   32 | `ommers_hash`               | `bytes32` — `kEmptyOmmersHash` post-Merge |
-|    336 |    8 | `fork_id`                   | `u64` — hardfork identity (see [`zeg/fork.hpp`](cpp-guest/include/zeg/fork.hpp)). The guest derives both the EVM revision and the header field count from it. `0` (= Unknown) ⇒ Prague (mainnet default). Distinguishes Osaka from Prague, which share a header layout |
-|    344 |      | **end of fixed prefix**     |                         |
+|    336 |    8 | `fork_id`                   | `u64` — hardfork identity (see [`zeg/fork.hpp`](cpp-guest/include/zeg/fork.hpp)). The guest derives both the EVM revision and the header field count from it. `0` (= Unknown) ⇒ Prague (mainnet default). Distinguishes Osaka from Prague, which share a header layout. Values: 1 Berlin, 2 London, 3 Paris, 4 Shanghai, 5 Cancun, 6 Prague, 7 Osaka, 8 Amsterdam |
+|    344 |    8 | `blob_base_fee_update_fraction` | `u64` — BLOB_BASE_FEE_UPDATE_FRACTION of the block's blob schedule; `0` ⇒ current-mainnet default |
+|    352 |    8 | `target_blob_gas_per_block` | `u64` — TARGET_BLOB_GAS_PER_BLOCK of the block's blob schedule (`0` pre-Cancun) |
+|    360 |    8 | `max_blob_gas_per_block`    | `u64` — MAX_BLOB_GAS_PER_BLOCK of the block's blob schedule (`0` pre-Cancun) |
+|    368 |   32 | `block_access_list_hash`    | `bytes32` (EIP-7928; zero pre-Amsterdam) |
+|    400 |    8 | `slot_number`               | `u64` (EIP-7843; zero pre-Amsterdam) |
+|    408 |      | **end of fixed prefix**     |                         |
 
 `chain_id` is **not** in the stream. It is compile-time pinned to `1`
 (Ethereum mainnet) in [`zeg/config.hpp`](cpp-guest/include/zeg/config.hpp).
@@ -198,13 +209,13 @@ BLOCKHASH). Schema at
 | Offset | Size            | Field   |
 |-------:|----------------:|---------|
 |      0 |               8 | `count` |
-|      8 | `count` × 728   | records |
+|      8 | `count` × 768   | records |
 
 Index 0 = the parent, index `i` = the i-th ancestor. The guest
-recomputes each block's hash from canonical Pectra-era header RLP and
+recomputes each block's hash from the canonical header RLP of its fork and
 verifies the `parent_hash` chain.
 
-### PreviousBlocks record (728 bytes)
+### PreviousBlocks record (768 bytes)
 
 All fields are at 8-byte-aligned offsets:
 
@@ -213,7 +224,7 @@ All fields are at 8-byte-aligned offsets:
 |      0 |   32 | `parent_hash`               | `bytes32` (block hash of the parent) |
 |     32 |   32 | `ommers_hash`               | `bytes32` |
 |     64 |   20 | `coinbase`                  | address  |
-|     84 |    4 | pad                         | zero     |
+|     84 |    4 | `field_count`               | `u32` — header fields to RLP-encode (15/16/17/20/21/23); `0` ⇒ 21 |
 |     88 |   32 | `state_root`                | `bytes32` |
 |    120 |   32 | `transactions_root`         | `bytes32` |
 |    152 |   32 | `receipts_root`             | `bytes32` |
@@ -233,7 +244,9 @@ All fields are at 8-byte-aligned offsets:
 |    656 |    8 | `excess_blob_gas`           | `u64` |
 |    664 |   32 | `parent_beacon_block_root`  | `bytes32` |
 |    696 |   32 | `requests_hash`             | `bytes32` |
-|    728 |      | end of record               |          |
+|    728 |   32 | `block_access_list_hash`    | `bytes32` (zero pre-Amsterdam) |
+|    760 |    8 | `slot_number`               | `u64` (zero pre-Amsterdam) |
+|    768 |      | end of record               |          |
 
 ## Section 7 — `StateRoot` trie hints
 

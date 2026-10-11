@@ -373,6 +373,11 @@ int run(const uint8_t* input, size_t len, uint8_t out[32]) {
         .excess_blob_gas          = consensus.excess_blob_gas(),
         .parent_beacon_block_root = consensus.parent_beacon_block_root(),
         .requests_hash            = state.requests_hash(),
+        // TODO(EIP-7928): soundness — the block access list hash is taken
+        // from the input on trust. Build the BAL during execution and
+        // check its hash against this value.
+        .block_access_list_hash   = consensus.block_access_list_hash(),
+        .slot_number              = consensus.slot_number(),
         // Fork the block runs under. ForkId::Unknown (0 = inputs that
         // pre-date the field) resolves to Prague, the mainnet default.
         // The encoder derives the header field count from this.
@@ -420,6 +425,8 @@ int run(const uint8_t* input, size_t len, uint8_t out[32]) {
         std::fprintf(stderr, "HDR %-25s %llu\n", "excess_blob_gas", (unsigned long long)header.excess_blob_gas);
         dump32("parent_beacon_block_root", header.parent_beacon_block_root);
         dump32("requests_hash", header.requests_hash);
+        dump32("block_access_list_hash", header.block_access_list_hash);
+        std::fprintf(stderr, "HDR %-25s %llu\n", "slot_number", (unsigned long long)header.slot_number);
     }
     std::size_t header_rlp_size = 0;
     const evmc::bytes32 execution_block_hash =

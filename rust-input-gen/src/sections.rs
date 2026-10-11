@@ -19,6 +19,9 @@ use crate::writer::Writer;
 
 /// On-wire format version, written in the 4 bytes after the magic.
 /// Must match the guest's `kVersion` in `cpp-guest/include/zeg/binary_format.hpp`.
+/// v10: Amsterdam header fields — ConsensusInfo prefix 368 → 408 B
+/// (block_access_list_hash at 368, slot_number at 400) and PreviousBlocks
+/// records 728 → 768 B (the same two fields at 728 / 760).
 /// v9: compact StateRoot — a branch tags its 16 children in one word, so a
 /// tagged Empty child costs no bytes and a Hash child 32; nibble runs pack two
 /// per byte. ~22% smaller witness.
@@ -45,7 +48,7 @@ use crate::writer::Writer;
 /// derives read-only-ness dynamically (original == current).
 /// v1: StateRoot `Op::Leaf` carries no index (keccak-sorted tables +
 /// counter-derived index in the guest).
-pub const FORMAT_VERSION: u32 = 9;
+pub const FORMAT_VERSION: u32 = 10;
 
 /// File magic prefix (8 bytes): 4 B ASCII `"ZEG0"` + 4 B little-endian
 /// format version, which also keeps the cursor 8-byte aligned for the
@@ -69,8 +72,6 @@ const FORK_SHANGHAI: u64 = 4;
 const FORK_CANCUN: u64 = 5;
 const FORK_PRAGUE: u64 = 6;
 const FORK_OSAKA: u64 = 7;
-// Amsterdam (Glamsterdam): the guest does not accept it yet and
-// rejects the block with "unknown fork_id" until it is implemented.
 const FORK_AMSTERDAM: u64 = 8;
 
 /// Section 1 — `ConsensusInfo`.
@@ -175,8 +176,13 @@ pub fn write_consensus_info(
     // there's no mainnet-default fallback (see consensus_info.hpp).
     w.u64_le(target_blob_gas_per_block);
     // 360..368 max_blob_gas_per_block (u64-le). Same caveats as
-    // target_blob_gas_per_block above. End of fixed prefix: 368.
+    // target_blob_gas_per_block above.
     w.u64_le(max_blob_gas_per_block);
+    // 368..400 block_access_list_hash (EIP-7928; zero pre-Amsterdam)
+    w.bytes(h.block_access_list_hash.unwrap_or_default().as_slice());
+    // 400..408 slot_number (EIP-7843; zero pre-Amsterdam). End of fixed
+    // prefix: 408.
+    w.u64_le(h.slot_number.unwrap_or(0));
     w.assert_aligned();
 
     // Withdrawal records × 48 B each (EIP-4895).
@@ -409,8 +415,8 @@ pub fn storage_original_values(
 /// Section 6 — `PreviousBlocks`.
 ///
 /// `ancestors[0]` is the parent (block `N-1`), `ancestors[1]` the
-/// grandparent, etc. Each record is 728 B with all 21 Pectra header
-/// fields. Pre-Pectra blocks have zero-defaulted optional fields.
+/// grandparent, etc. Each record is 768 B with all 23 Amsterdam header
+/// fields. Older blocks have zero-defaulted optional fields.
 pub fn write_previous_blocks(w: &mut Writer, ancestors: &[Block]) {
     w.u64_le(ancestors.len() as u64);
     for blk in ancestors {
@@ -431,7 +437,9 @@ pub fn write_previous_blocks(w: &mut Writer, ancestors: &[Block]) {
         //          both have all-zero trailing fields. Was a 4-byte pad
         //          (always 0) → backward-compatible: cpp-guest treats 0
         //          as 21 (Pectra default), matching mainnet replays.
-        let field_count: u32 = if h.requests_hash.is_some() {
+        let field_count: u32 = if h.block_access_list_hash.is_some() {
+            23
+        } else if h.requests_hash.is_some() {
             21
         } else if h.parent_beacon_block_root.is_some() {
             20
@@ -484,6 +492,10 @@ pub fn write_previous_blocks(w: &mut Writer, ancestors: &[Block]) {
         w.bytes(h.parent_beacon_block_root.unwrap_or_default().as_slice());
         // 696..728 requests_hash (zero pre-Pectra)
         w.bytes(h.requests_hash.unwrap_or_default().as_slice());
+        // 728..760 block_access_list_hash (zero pre-Amsterdam)
+        w.bytes(h.block_access_list_hash.unwrap_or_default().as_slice());
+        // 760..768 slot_number (zero pre-Amsterdam)
+        w.u64_le(h.slot_number.unwrap_or(0));
 
         w.assert_aligned();
     }
