@@ -141,6 +141,14 @@ ZiskStateDB::~ZiskStateDB() {
     vm2_->base.destroy(&vm2_->base);
 }
 
+size_t ZiskStateDB::max_code_size() const noexcept {
+    return is_amsterdam_or_later() ? kMaxCodeSizeAmsterdam : kMaxCodeSize;
+}
+
+size_t ZiskStateDB::max_initcode_size() const noexcept {
+    return is_amsterdam_or_later() ? kMaxInitCodeSizeAmsterdam : kMaxInitCodeSize;
+}
+
 // ===== evmc::Host overrides =====
 //
 // In header declaration order. Most are direct pass-throughs to the
@@ -1067,7 +1075,8 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     }
 
     // EIP-170 (Spurious Dragon): deployed code cannot exceed
-    // MAX_CODE_SIZE (24576 B). Checked BEFORE EIP-3541 below, matching
+    // MAX_CODE_SIZE (24576 B; 65536 B from Amsterdam, EIP-7954).
+    // Checked BEFORE EIP-3541 below, matching
     // reth/geth's ordering. Every fork this guest targets (Berlin+)
     // postdates Spurious Dragon, so no fork gate is needed. On failure
     // all gas allocated to this CREATE is burned (gas_left=0) rather
@@ -1076,8 +1085,7 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     // create2CodeSizeLimit, CreateAddressWarmAfterFail's *_code_too_big
     // cases, createLargeResult's *_RETURN_HUGE/TOOBIG cases, and
     // CREATE_ContractRETURNBigOffset.
-    constexpr size_t kMaxCodeSize = 24576;
-    if (result.output_size > kMaxCodeSize) {
+    if (result.output_size > max_code_size()) {
         rollback(cp_after_bump);
         return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0,
                             {.left = msg.state_gas}};
@@ -1574,9 +1582,10 @@ int64_t ZiskStateDB::check_transaction(const Transactions::View& tx,
     if (tx.nonce() == UINT64_MAX) {
         fatal("tx nonce at maximum");
     }
-    // EIP-3860: creation tx init code <= 2 * MAX_CODE_SIZE.
+    // EIP-3860: creation tx init code <= 2 * MAX_CODE_SIZE (EIP-7954
+    // raises MAX_CODE_SIZE in Amsterdam).
     if (tx.to() == nullptr && is_shanghai_or_later() &&
-        tx.data().size() > kMaxInitCodeSize) {
+        tx.data().size() > max_initcode_size()) {
         fatal("tx init code exceeds size limit");
     }
 
@@ -2166,12 +2175,11 @@ evmc::Result ZiskStateDB::execute_top_level_message(const Transactions::View& tx
 
         if (result.status_code == EVMC_SUCCESS) {
             // EIP-170 (Spurious Dragon): deployed code cannot exceed
-            // MAX_CODE_SIZE (24576 B) — top-level CREATE tx must also
-            // enforce this, mirroring the matching check in
-            // call_create(). All gas is burned on failure, not just
-            // the per-byte deposit refused.
-            constexpr size_t kMaxCodeSize = 24576;
-            if (result.output_size > kMaxCodeSize) {
+            // MAX_CODE_SIZE (24576 B; 65536 B from Amsterdam) — top-level
+            // CREATE tx must also enforce this, mirroring the matching
+            // check in call_create(). All gas is burned on failure, not
+            // just the per-byte deposit refused.
+            if (result.output_size > max_code_size()) {
                 return evmc::Result{EVMC_OUT_OF_GAS, 0, 0, nullptr, 0,
                                     {.left = msg.state_gas}};
             }

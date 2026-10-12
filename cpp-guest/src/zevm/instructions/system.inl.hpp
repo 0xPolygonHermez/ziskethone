@@ -38,6 +38,7 @@ constexpr int64_t CALL_STIPEND        = 2300;
 
 constexpr int64_t GAS_CREATE          = 32000;  // CREATE / CREATE2 base
 constexpr uint64_t MAX_INITCODE_SIZE  = 0xC000; // EIP-3860 (2 * 24576)
+constexpr uint64_t MAX_INITCODE_SIZE_AMSTERDAM = 0x20000; // EIP-7954 (2 * 65536)
 constexpr int64_t INITCODE_WORD_COST  = 2;      // EIP-3860 per 32-byte word
 constexpr int64_t KECCAK_WORD_COST    = 6;      // CREATE2 hashes the init code
 
@@ -305,8 +306,11 @@ bool create_impl(EvmState& s, Regs& R, evmc_call_kind kind) {
     // EIP-3860 (Shanghai+): cap init-code size and add 2 gas/word. The CREATE2
     // keccak word cost (6/word) applies on its own since Constantinople, so
     // pre-Shanghai CREATE pays nothing here and CREATE2 pays only the 6/word.
+    // EIP-7954 (Amsterdam) raises the cap to 128 KiB.
     const bool eip3860 = s.rev >= EVMC_SHANGHAI;
-    if (eip3860 && size > MAX_INITCODE_SIZE) { s.status = EVMC_OUT_OF_GAS; return false; }
+    const uint64_t max_init =
+        s.rev >= EVMC_AMSTERDAM ? MAX_INITCODE_SIZE_AMSTERDAM : MAX_INITCODE_SIZE;
+    if (eip3860 && size > max_init) { s.status = EVMC_OUT_OF_GAS; return false; }
     const int64_t word_cost = (is2 ? KECCAK_WORD_COST : 0) + (eip3860 ? INITCODE_WORD_COST : 0);
     if (word_cost != 0) {
         const int64_t init_cost = num_words(size) * word_cost;

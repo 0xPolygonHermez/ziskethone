@@ -64,7 +64,7 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
 | [7778](https://eips.ethereum.org/EIPS/eip-7778) | Block gas accounting without refunds | `eip7778_block_gas_accounting_without_refunds` | 9 / 117 | done (rule landed with 8037) |
 | [7843](https://eips.ethereum.org/EIPS/eip-7843) | SLOTNUM opcode (+ `slot_number` header field) | `eip7843_slotnum` | 10 / 23 | todo |
 | [7928](https://eips.ethereum.org/EIPS/eip-7928) | Block-level access lists (+ `block_access_list_hash` header field) | `eip7928_block_level_access_lists` | 211 / 1,248 | todo |
-| [7954](https://eips.ethereum.org/EIPS/eip-7954) | Increase max contract size | `eip7954_increase_max_contract_size` | 22 / 58 | todo |
+| [7954](https://eips.ethereum.org/EIPS/eip-7954) | Increase max contract size | `eip7954_increase_max_contract_size` | 22 / 58 | done |
 | [7976](https://eips.ethereum.org/EIPS/eip-7976) | Increase calldata floor cost | `eip7976_increase_calldata_floor_cost` | 21 / 543 | done |
 | [7981](https://eips.ethereum.org/EIPS/eip-7981) | Increase access list cost | `eip7981_increase_access_list_cost` | 19 / 189 | done |
 | [7997](https://eips.ethereum.org/EIPS/eip-7997) | Deterministic factory contract | `eip7997_deterministic_factory_contract` | 21 / 40 | todo |
@@ -87,9 +87,9 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
   block's gas). 7981's access-list item price includes 8038's
   `COLD_* − WARM_ACCESS` (2,900 / 2,000).
 - **evmone v0.24 already has the in-VM parts** of 8038 (access costs), 7843
-  (SLOTNUM), 8024 (DUPN / SWAPN / EXCHANGE) and 7954 (code size) for
-  `EVMC_AMSTERDAM`; the host parts of those EIPs, and all of them in zevm, are
-  still to do.
+  (SLOTNUM) and 8024 (DUPN / SWAPN / EXCHANGE) for `EVMC_AMSTERDAM`; the host
+  parts of those EIPs, and all of them in zevm, are still to do. 7954 is done
+  in both backends.
 - **EIP-2780's "authority existed"** test is EIP-161 non-empty
   (`account_exists`). revm also counts an empty account that is in the trie;
   such an account can't arise on mainnet after Spurious Dragon.
@@ -125,6 +125,46 @@ Branch `glamsterdam`, `tests@v21.0.1`, evmone guest, 2026-10-11:
 The reth 2.2 → 2.7 bridge upgrade was regression-checked on the
 `tests-v5.4.0` Prague + Osaka corpus: 3,820 PASS, 274 PASS_NEG, 0 FAIL, 1 MISSING
 (the undecodable `test_contract_create` type-4 creation).
+
+### After EIP-7954
+
+From Amsterdam the size limits rise:
+- deployed code: 24,576 → 65,536 bytes;
+- init code: 49,152 → 131,072 bytes.
+
+The guest checks deployed code on CREATE / CREATE2 and on creation txs, and
+checks the init code of creation txs. zevm checks the CREATE / CREATE2 init
+code. evmone already had the in-VM check.
+
+| EIP | Blocks | evmone pass | zevm pass | FAIL_NEG (evmone) |
+|---|---:|---:|---:|---:|
+| 2780 | 283 | 283 | 270 | 0 |
+| 7708 | 77 | 77 | 26 | 0 |
+| 7778 | 117 | 117 | 56 | 0 |
+| 7843 | 23 | 23 | 0 | 0 |
+| 7928 | 1,248 | 1,148 | 524 | 100 |
+| 7954 | 58 | 58 | 28 | 0 |
+| 7976 | 543 | 543 | 531 | 0 |
+| 7981 | 189 | 189 | 173 | 0 |
+| 7997 | 40 | 40 | 1 | 0 |
+| 8024 | 288 | 288 | 176 | 0 |
+| 8037 | 834 | 834 | 294 | 0 |
+| 8038 | 263 | 263 | 49 | 0 |
+| 8246 | 663 | 663 | 5 | 0 |
+| 8282 | 356 | 356 | 145 | 0 |
+| **total** | **4,982** | **4,882** | **2,278** | **100** |
+
+**evmone failures left:** only the 100 7928 FAIL_NEG, which are invalid
+block-level access lists that the guest doesn't check yet.
+
+**Fork transition** (`for_bpo2toamsterdamattime15k`):
+- 366 PASS, 34 PASS_NEG, 2 MISSING;
+- 1 FAIL_NEG, 7928's BAL size check.
+
+zevm's 30 remaining 7954 blocks fail on gas, against evmone runs of the
+same blocks that pass. The gaps (e.g. 2,500 gas) come from the 8038 access
+costs and 8024 opcodes that zevm lacks, not from the size limits or jumpdest
+analysis of large code.
 
 ### After EIP-8282
 

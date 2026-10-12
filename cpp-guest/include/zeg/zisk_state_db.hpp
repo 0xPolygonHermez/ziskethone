@@ -366,6 +366,11 @@ private:
         return consensus_.fork_id() >= ForkId::Amsterdam;
     }
 
+    // EIP-170 / EIP-3860 size limits, raised by EIP-7954 (Amsterdam) to
+    // 64 KiB of deployed code and 128 KiB of init code.
+    size_t max_code_size() const noexcept;
+    size_t max_initcode_size() const noexcept;
+
     // Cancun added the EIP-4788 beacon-roots predeploy system call in
     // pre_execute_block. Pre-Cancun blocks must skip it — the predeploy
     // address isn't installed in the prestate, so the unconditional

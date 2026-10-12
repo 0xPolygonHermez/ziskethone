@@ -106,7 +106,10 @@ constexpr uint64_t kGasPerBlob                = 131072;
 constexpr uint8_t  kVersionedHashVersionKzg   = 0x01;     // EIP-4844
 
 // Tx validity limits.
-constexpr size_t   kMaxInitCodeSize           = 2 * 24576; // EIP-3860
+constexpr size_t   kMaxCodeSize               = 0x6000;    // EIP-170
+constexpr size_t   kMaxInitCodeSize           = 2 * kMaxCodeSize; // EIP-3860
+constexpr size_t   kMaxCodeSizeAmsterdam      = 0x10000;   // EIP-7954
+constexpr size_t   kMaxInitCodeSizeAmsterdam  = 2 * kMaxCodeSizeAmsterdam; // EIP-7954
 constexpr uint64_t kMaxTxGasLimit             = 1u << 24;  // EIP-7825 (Osaka)
 constexpr uint64_t kMaxTxTotalGasLimit        = 0xffffffff; // EIP-8037 (Amsterdam)
 constexpr size_t   kMaxBlobsPerTx             = 6;         // EIP-7594 (Osaka)
