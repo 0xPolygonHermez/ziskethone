@@ -21,7 +21,7 @@ in place, and the EIPs are being implemented one by one (Status column below).
   `block_slot_number` in the tx context, and `is_amsterdam_or_later()`.
 - The guest is on **evmone v0.24.0** (EVMC ABI 19, Amsterdam revision). zevm is
   ported to the same ABI and has an `EVMC_AMSTERDAM` dispatch loop: the Osaka
-  opcode set plus DUPN / SWAPN / EXCHANGE.
+  opcode set plus SLOTNUM and DUPN / SWAPN / EXCHANGE.
 
 ## Fixtures
 
@@ -64,12 +64,12 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
 | [2780](https://eips.ethereum.org/EIPS/eip-2780) | Resource-based intrinsic tx gas | `eip2780_reduce_intrinsic_tx_gas` | 61 / 283 | done |
 | [7708](https://eips.ethereum.org/EIPS/eip-7708) | ETH transfers emit a log | `eip7708_eth_transfer_logs` | 40 / 77 | done |
 | [7778](https://eips.ethereum.org/EIPS/eip-7778) | Block gas accounting without refunds | `eip7778_block_gas_accounting_without_refunds` | 9 / 117 | done (rule landed with 8037) |
-| [7843](https://eips.ethereum.org/EIPS/eip-7843) | SLOTNUM opcode (+ `slot_number` header field) | `eip7843_slotnum` | 10 / 23 | todo |
+| [7843](https://eips.ethereum.org/EIPS/eip-7843) | SLOTNUM opcode (+ `slot_number` header field) | `eip7843_slotnum` | 10 / 23 | done |
 | [7928](https://eips.ethereum.org/EIPS/eip-7928) | Block-level access lists (+ `block_access_list_hash` header field) | `eip7928_block_level_access_lists` | 211 / 1,248 | done |
 | [7954](https://eips.ethereum.org/EIPS/eip-7954) | Increase max contract size | `eip7954_increase_max_contract_size` | 22 / 58 | done |
 | [7976](https://eips.ethereum.org/EIPS/eip-7976) | Increase calldata floor cost | `eip7976_increase_calldata_floor_cost` | 21 / 543 | done |
 | [7981](https://eips.ethereum.org/EIPS/eip-7981) | Increase access list cost | `eip7981_increase_access_list_cost` | 19 / 189 | done |
-| [7997](https://eips.ethereum.org/EIPS/eip-7997) | Deterministic factory contract | `eip7997_deterministic_factory_contract` | 21 / 40 | todo |
+| [7997](https://eips.ethereum.org/EIPS/eip-7997) | Deterministic factory contract | `eip7997_deterministic_factory_contract` | 21 / 40 | done (no guest change) |
 | [8024](https://eips.ethereum.org/EIPS/eip-8024) | DUPN / SWAPN / EXCHANGE | `eip8024_dupn_swapn_exchange` | 66 / 288 | done |
 | [8037](https://eips.ethereum.org/EIPS/eip-8037) | State creation gas cost increase (state-gas reservoir) | `eip8037_state_creation_gas_cost_increase` | 270 / 834 | done |
 | [8038](https://eips.ethereum.org/EIPS/eip-8038) | State access gas cost increase | `eip8038_state_access_gas_cost_increase` | 88 / 263 | done |
@@ -78,6 +78,12 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
 | [8282](https://eips.ethereum.org/EIPS/eip-8282) | Builder execution requests | `eip8282_builder_execution_requests` | 22 / 356 | done |
 
 ### Open items that span EIPs
+
+- **EIP-7997 needs no guest code.** The fixtures inject nothing at the fork:
+  `factory_untouched_across_transition` keeps a chain without the factory
+  without it. Every other test has the factory (0x4e59…956c) in its pre-state,
+  as mainnet has since 2019. Both backends pass all 40 blocks and the 19
+  transition blocks.
 
 - **BAL loads follow the VM's host calls.** An account counts as loaded when
   the guest reads or writes it. A bare `access_account` counts once the VM
@@ -93,8 +99,8 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
   block's gas). 7981's access-list item price includes 8038's
   `COLD_* − WARM_ACCESS` (2,900 / 2,000).
 - **evmone v0.24 already has the in-VM parts** of 8038 (access costs), 7843
-  (SLOTNUM) and 8024 (DUPN / SWAPN / EXCHANGE) for `EVMC_AMSTERDAM`. 8038, 8024
-  and 7954 are done in both backends; 7843 is still to do in zevm.
+  (SLOTNUM) and 8024 (DUPN / SWAPN / EXCHANGE) for `EVMC_AMSTERDAM`. All of them
+  are now in zevm too.
 - **EIP-2780's "authority existed"** test is EIP-161 non-empty
   (`account_exists`). revm also counts an empty account that is in the trie;
   such an account can't arise on mainnet after Spurious Dragon.
@@ -103,8 +109,8 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
 - **System calls** get 30M regular gas plus a 16-slot state-gas reservoir, as
   evmone and the fixtures do. revm 43 gives 30M + 16 × 97,920 regular gas
   instead.
-- **zevm** has the 8037 state gas, the 8038 access costs and the 8024 opcodes.
-  What it still lacks is 7843's SLOTNUM.
+- **zevm** has every Amsterdam EIP: the 8037 state gas, the 8038 access costs,
+  and the 8024 and 7843 opcodes. It matches evmone on all Amsterdam fixtures.
 - **Proving cost.** On a mainnet block (26167511) the evmone ELF takes +3.3%
   steps on evmone v0.24 vs v0.21 (136.0M → 140.5M); zevm is unchanged.
 
@@ -129,6 +135,29 @@ Branch `glamsterdam`, `tests@v21.0.1`, evmone guest, 2026-10-11:
 The reth 2.2 → 2.7 bridge upgrade was regression-checked on the
 `tests-v5.4.0` Prague + Osaka corpus: 3,820 PASS, 274 PASS_NEG, 0 FAIL, 1 MISSING
 (the undecodable `test_contract_create` type-4 creation).
+
+### After EIP-7843
+
+zevm gets SLOTNUM (0x4b) in its Amsterdam dispatch loop. It costs 2 gas and
+pushes `tx_context.block_slot_number`. The host already fills that field from
+ConsensusInfo's `slot_number` (the groundwork), so there is no host change.
+
+**zevm now matches evmone on every Amsterdam fixture:**
+
+| Set | evmone | zevm |
+|---|---:|---:|
+| `for_amsterdam/amsterdam` (14 EIP dirs) | 4,982 / 4,982 | 4,982 / 4,982 |
+| rest of `for_amsterdam` | 22,523 PASS, 5,215 PASS_NEG, 0 FAIL | identical block for block |
+| fork transition | 366 PASS, 35 PASS_NEG, 0 FAIL | identical |
+
+FAIL_NEG is 0 everywhere.
+- **Prague + Osaka on zevm:** identical block for block (3,820 / 274 / 1).
+- **ELF:** the zevm ELF (GCC 14) matches the host on 23/23 7843 blocks.
+- **Proving cost:** on mainnet the zevm ELF takes +0.42% steps on block
+  26176606 (94.22M → 94.61M) and +0.21% on block 26177276 (27.39M → 27.45M).
+  The pre-Amsterdam loops run the same source; the new `case 0x4b` label (which
+  behaves like `default:` before Amsterdam) changes GCC's block layout in every
+  fork's loop.
 
 ### After EIP-8024
 

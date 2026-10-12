@@ -144,6 +144,7 @@ template <evmc_revision Rev>
             OPSG(0x48, EVMC_LONDON, env_ops, op_basefee, -1)
             OPSG(0x49, EVMC_CANCUN, env_ops, op_blobhash, 0)
             OPSG(0x4a, EVMC_CANCUN, env_ops, op_blobbasefee, -1)
+            OPSG(0x4b, EVMC_AMSTERDAM, env_ops, op_slotnum, -1)
             OPS(0x50, control_ops, op_pop, 1)
             OPS(0x51, memory_ops, op_mload, 0)
             OPS(0x52, memory_ops, op_mstore, 2)
@@ -281,8 +282,8 @@ void run_dispatch(evmc_revision rev, EvmState& s) {
         case EVMC_CANCUN:
         case EVMC_PRAGUE:                                    dispatch_loop<EVMC_CANCUN>(s);         break;
         case EVMC_OSAKA:                                     dispatch_loop<EVMC_OSAKA>(s);          break;
-        // Amsterdam: Osaka + DUPN / SWAPN / EXCHANGE (EIP-8024); SLOTNUM
-        // (EIP-7843) is still to come.
+        // Amsterdam: Osaka + SLOTNUM (EIP-7843) and DUPN / SWAPN / EXCHANGE
+        // (EIP-8024).
         case EVMC_AMSTERDAM:                                 dispatch_loop<EVMC_AMSTERDAM>(s);      break;
     }
 }

@@ -185,6 +185,14 @@ bool op_blobbasefee(EvmState& s, Regs& R) {
     if (!push_be32(s, R, tx.blob_base_fee.bytes)) return false;
     return true;
 }
+// 0x4b SLOTNUM (Amsterdam, EIP-7843) — the beacon slot number of the block.
+bool op_slotnum(EvmState& s, Regs& R) {
+    if (R.gas < GAS_BASE) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_BASE;
+    const evmc_tx_context tx = s.host->get_tx_context(s.context);
+    if (!push_u64(s, R, tx.block_slot_number)) return false;
+    return true;
+}
 bool op_calldatasize(EvmState& s, Regs& R) {
     if (R.gas < GAS_BASE) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_BASE;
