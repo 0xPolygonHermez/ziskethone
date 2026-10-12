@@ -353,10 +353,13 @@ bool ZiskStateDB::selfdestruct(const evmc::address& addr,
             // unconditionally zeroed whenever `should_destroy` is true,
             // regardless of whether target == address; only the truly
             // no-op case (should_destroy == false, self-beneficiary) skips
-            // the balance write entirely.
-            journal_.log_balance(src_idx, accounts_.balance_at(src_idx),
-                                 accounts_.last_tx_idx_at(src_idx));
-            accounts_.set_balance_at(src_idx, evmc::uint256be{}, tx_counter_);
+            // the balance write entirely. EIP-8246 (Amsterdam): no burn —
+            // the balance stays and survives the end-of-tx clear.
+            if (!is_amsterdam_or_later()) {
+                journal_.log_balance(src_idx, accounts_.balance_at(src_idx),
+                                     accounts_.last_tx_idx_at(src_idx));
+                accounts_.set_balance_at(src_idx, evmc::uint256be{}, tx_counter_);
+            }
             // Defer destruction to end-of-tx per Yellow Paper —
             // see comment on pending_destruct_ in the header.
             const auto [_, inserted] = pending_destruct_.insert(src_idx);
@@ -463,9 +466,16 @@ void ZiskStateDB::clear_account_for_selfdestruct(size_t src_idx) noexcept {
     // requires balance == 0 too, not just nonce/code), so zero it now —
     // per Yellow Paper / real-client behavior, that late-arriving value
     // is simply burned, not returned or re-swept.
-    journal_.log_balance(src_idx, accounts_.balance_at(src_idx),
-                         accounts_.last_tx_idx_at(src_idx));
-    accounts_.set_balance_at(src_idx, evmc::uint256be{}, tx_counter_);
+    //
+    // EIP-8246 (Amsterdam): no burn. The balance is kept and the rest of
+    // the account is cleared below, so a non-zero balance leaves a
+    // balance-only account (nonce 0, no code, empty storage); a zero one
+    // is empty and drops out of the trie as before.
+    if (!is_amsterdam_or_later()) {
+        journal_.log_balance(src_idx, accounts_.balance_at(src_idx),
+                             accounts_.last_tx_idx_at(src_idx));
+        accounts_.set_balance_at(src_idx, evmc::uint256be{}, tx_counter_);
+    }
 
     // Account fields.
     journal_.log_nonce(src_idx, accounts_.nonce_at(src_idx),

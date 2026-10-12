@@ -59,7 +59,7 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
 
 | EIP | Title | Fixture dir | Fixtures / blocks | Status |
 |---|---|---|---|---|
-| [2780](https://eips.ethereum.org/EIPS/eip-2780) | Resource-based intrinsic tx gas | `eip2780_reduce_intrinsic_tx_gas` | 61 / 283 | done (1 left needs 8246) |
+| [2780](https://eips.ethereum.org/EIPS/eip-2780) | Resource-based intrinsic tx gas | `eip2780_reduce_intrinsic_tx_gas` | 61 / 283 | done |
 | [7708](https://eips.ethereum.org/EIPS/eip-7708) | ETH transfers emit a log | `eip7708_eth_transfer_logs` | 40 / 77 | done |
 | [7778](https://eips.ethereum.org/EIPS/eip-7778) | Block gas accounting without refunds | `eip7778_block_gas_accounting_without_refunds` | 9 / 117 | done (rule landed with 8037) |
 | [7843](https://eips.ethereum.org/EIPS/eip-7843) | SLOTNUM opcode (+ `slot_number` header field) | `eip7843_slotnum` | 10 / 23 | todo |
@@ -72,7 +72,7 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
 | [8037](https://eips.ethereum.org/EIPS/eip-8037) | State creation gas cost increase (state-gas reservoir) | `eip8037_state_creation_gas_cost_increase` | 270 / 834 | done |
 | [8038](https://eips.ethereum.org/EIPS/eip-8038) | State access gas cost increase | `eip8038_state_access_gas_cost_increase` | 88 / 263 | todo |
 | [8070](https://eips.ethereum.org/EIPS/eip-8070) | eth/72 sparse blobpool | — | — | n/a (networking only) |
-| [8246](https://eips.ethereum.org/EIPS/eip-8246) | Remove SELFDESTRUCT burn | `eip8246_selfdestruct_no_burn` | 9 / 663 | todo |
+| [8246](https://eips.ethereum.org/EIPS/eip-8246) | Remove SELFDESTRUCT burn | `eip8246_selfdestruct_no_burn` | 9 / 663 | done |
 | [8282](https://eips.ethereum.org/EIPS/eip-8282) | Builder execution requests | `eip8282_builder_execution_requests` | 22 / 356 | todo |
 
 ### Open items that span EIPs
@@ -125,6 +125,42 @@ Branch `glamsterdam`, `tests@v21.0.1`, evmone guest, 2026-10-11:
 The reth 2.2 → 2.7 bridge upgrade was regression-checked on the
 `tests-v5.4.0` Prague + Osaka corpus: 3,820 PASS, 274 PASS_NEG, 0 FAIL, 1 MISSING
 (the undecodable `test_contract_create` type-4 creation).
+
+### After EIP-8246
+
+SELFDESTRUCT no longer burns ETH (Amsterdam):
+- **To itself:** a contract created in the same tx that self-destructs to
+  itself keeps its balance.
+- **End of tx:** a destroyed account that still holds a balance (value received
+  after the SELFDESTRUCT, its own balance, or a coinbase's priority fee) becomes
+  a balance-only account. Its nonce, code and storage are cleared.
+- A destroyed account with a zero balance is deleted as before.
+
+| EIP | Blocks | evmone pass | zevm pass | FAIL_NEG (evmone) |
+|---|---:|---:|---:|---:|
+| 2780 | 283 | 283 | 270 | 0 |
+| 7708 | 77 | 77 | 26 | 0 |
+| 7778 | 117 | 117 | 56 | 0 |
+| 7843 | 23 | 23 | 0 | 0 |
+| 7928 | 1,248 | 1,132 | 518 | 100 |
+| 7954 | 58 | 34 | 6 | 0 |
+| 7976 | 543 | 543 | 531 | 0 |
+| 7981 | 189 | 189 | 173 | 0 |
+| 7997 | 40 | 40 | 0 | 0 |
+| 8024 | 288 | 288 | 176 | 0 |
+| 8037 | 834 | 821 | 287 | 2 |
+| 8038 | 263 | 263 | 49 | 0 |
+| 8246 | 663 | 663 | 5 | 0 |
+| 8282 | 356 | 134 | 90 | 6 |
+| **total** | **4,982** | **4,607** | **2,187** | **108** |
+
+**evmone failures left outside 7928 / 8282:**
+- **7954** (code size): 24 blocks, plus 3 8037 code-deposit /
+  oversized-initcode blocks that hit 7954's size limits.
+- **8037 system-call boundaries:** 10 blocks, including 2 FAIL_NEG.
+
+zevm's 8246 blocks fail on 8038 costs (e.g. CREATE is ~40,000 gas off), not
+on the burn.
 
 ### After EIP-7976 and EIP-7981
 
