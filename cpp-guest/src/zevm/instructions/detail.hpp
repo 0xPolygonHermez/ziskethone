@@ -49,6 +49,26 @@ inline constexpr int64_t GAS_HIGH    = 10;  // JUMPI
 inline constexpr int64_t GAS_EXP     = 10;  // EXP base
 inline constexpr int64_t GAS_EXPBYTE = 50;  // EXP per byte of exponent (>= Spurious Dragon)
 
+// State-access costs (EIP-2929, EIP-8038), as evmone's instructions_traits.hpp.
+// Amsterdam raises the cold account access to 3000 and prices writes
+// separately (ACCOUNT_WRITE / STORAGE_WRITE).
+inline constexpr int64_t WARM_ACCESS                   = 100;
+inline constexpr int64_t COLD_STORAGE_ACCESS           = 2100;
+inline constexpr int64_t COLD_ACCOUNT_ACCESS           = 2600;
+inline constexpr int64_t COLD_ACCOUNT_ACCESS_AMSTERDAM = 3000;
+inline constexpr int64_t ACCOUNT_WRITE                 = 9000;
+inline constexpr int64_t STORAGE_WRITE                 = 10000;
+inline constexpr int64_t CREATE_ACCESS = ACCOUNT_WRITE + COLD_ACCOUNT_ACCESS_AMSTERDAM;
+
+// The full cold account access cost.
+inline constexpr int64_t cold_account_access(evmc_revision rev) {
+    return rev >= EVMC_AMSTERDAM ? COLD_ACCOUNT_ACCESS_AMSTERDAM : COLD_ACCOUNT_ACCESS;
+}
+// The cold surcharge over the warm base the opcode already paid.
+inline constexpr int64_t additional_cold_account_access(evmc_revision rev) {
+    return cold_account_access(rev) - WARM_ACCESS;
+}
+
 // EIP-8037 state gas (Amsterdam), ported from evmone's StateGas
 // (lib/evmone/state_gas.hpp). Callers pass a local copy of R.gas and store it
 // back, so R.gas's address is never taken.

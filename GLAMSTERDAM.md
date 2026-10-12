@@ -72,7 +72,7 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
 | [7997](https://eips.ethereum.org/EIPS/eip-7997) | Deterministic factory contract | `eip7997_deterministic_factory_contract` | 21 / 40 | todo |
 | [8024](https://eips.ethereum.org/EIPS/eip-8024) | DUPN / SWAPN / EXCHANGE | `eip8024_dupn_swapn_exchange` | 66 / 288 | todo |
 | [8037](https://eips.ethereum.org/EIPS/eip-8037) | State creation gas cost increase (state-gas reservoir) | `eip8037_state_creation_gas_cost_increase` | 270 / 834 | done |
-| [8038](https://eips.ethereum.org/EIPS/eip-8038) | State access gas cost increase | `eip8038_state_access_gas_cost_increase` | 88 / 263 | todo |
+| [8038](https://eips.ethereum.org/EIPS/eip-8038) | State access gas cost increase | `eip8038_state_access_gas_cost_increase` | 88 / 263 | done |
 | [8070](https://eips.ethereum.org/EIPS/eip-8070) | eth/72 sparse blobpool | — | — | n/a (networking only) |
 | [8246](https://eips.ethereum.org/EIPS/eip-8246) | Remove SELFDESTRUCT burn | `eip8246_selfdestruct_no_burn` | 9 / 663 | done |
 | [8282](https://eips.ethereum.org/EIPS/eip-8282) | Builder execution requests | `eip8282_builder_execution_requests` | 22 / 356 | done |
@@ -93,9 +93,8 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
   block's gas). 7981's access-list item price includes 8038's
   `COLD_* − WARM_ACCESS` (2,900 / 2,000).
 - **evmone v0.24 already has the in-VM parts** of 8038 (access costs), 7843
-  (SLOTNUM) and 8024 (DUPN / SWAPN / EXCHANGE) for `EVMC_AMSTERDAM`; the host
-  parts of those EIPs, and all of them in zevm, are still to do. 7954 is done
-  in both backends.
+  (SLOTNUM) and 8024 (DUPN / SWAPN / EXCHANGE) for `EVMC_AMSTERDAM`. 8038 and
+  7954 are done in both backends; 7843 and 8024 are still to do in zevm.
 - **EIP-2780's "authority existed"** test is EIP-161 non-empty
   (`account_exists`). revm also counts an empty account that is in the trie;
   such an account can't arise on mainnet after Spurious Dragon.
@@ -104,9 +103,8 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
 - **System calls** get 30M regular gas plus a 16-slot state-gas reservoir, as
   evmone and the fixtures do. revm 43 gives 30M + 16 × 97,920 regular gas
   instead.
-- **zevm** runs Amsterdam with Osaka opcodes and Osaka access costs; it has the
-  EIP-8037 state gas. Each remaining EIP needs a zevm change alongside the host
-  change: 8024 and 7843 opcodes, 8038 gas.
+- **zevm** runs Amsterdam with the Osaka opcode set; it has the 8037 state gas
+  and the 8038 access costs. What it still lacks is the 8024 and 7843 opcodes.
 - **Proving cost.** On a mainnet block (26167511) the evmone ELF takes +3.3%
   steps on evmone v0.24 vs v0.21 (136.0M → 140.5M); zevm is unchanged.
 
@@ -131,6 +129,61 @@ Branch `glamsterdam`, `tests@v21.0.1`, evmone guest, 2026-10-11:
 The reth 2.2 → 2.7 bridge upgrade was regression-checked on the
 `tests-v5.4.0` Prague + Osaka corpus: 3,820 PASS, 274 PASS_NEG, 0 FAIL, 1 MISSING
 (the undecodable `test_contract_create` type-4 creation).
+
+### After EIP-8038
+
+The host parts of 8038 landed with 2780, 7981 and 8037: the intrinsic
+access-list and create costs, the top-frame 7702 delegation charge, and the
+authorization `ACCOUNT_WRITE`. evmone v0.24 has the in-VM part. This step ports
+the in-VM part to zevm, matching evmone v0.24's Amsterdam costs:
+
+| Cost | Osaka | Amsterdam |
+|---|---:|---:|
+| Cold account access (SELFDESTRUCT, 7702 delegate) | 2,600 | 3,000 |
+| Cold surcharge over the warm base (BALANCE, EXT*, CALL*) | 2,500 | 2,900 |
+| EXTCODESIZE / EXTCODECOPY base | 100 | 200 |
+| CREATE / CREATE2 base | 32,000 | 12,000 |
+| CALL / CALLCODE value cost (stipend still given back) | 9,000 | 11,300 |
+| SSTORE set / reset | 20,000 / 2,900 | 10,100 / 10,100 |
+| SSTORE clear refund | 4,800 | 11,616 |
+| SSTORE cold surcharge | 2,100 | 2,000 |
+
+zevm's CALL now runs its checks in evmone's order on every fork: static value,
+then memory, value cost, target access, 7702 delegate and new account.
+- **Gas:** the order doesn't change it, because each early exit is an
+  exceptional halt that burns all gas.
+- **BAL:** the order does decide which accounts the host sees loaded before
+  the halt, and from Amsterdam that set is the BAL.
+
+| EIP | Blocks | evmone pass | zevm pass | FAIL_NEG (zevm) |
+|---|---:|---:|---:|---:|
+| 2780 | 283 | 283 | 283 | 0 |
+| 7708 | 77 | 77 | 77 | 0 |
+| 7778 | 117 | 117 | 117 | 0 |
+| 7843 | 23 | 23 | 2 | 0 |
+| 7928 | 1,248 | 1,248 | 1,248 | 0 |
+| 7954 | 58 | 58 | 58 | 0 |
+| 7976 | 543 | 543 | 543 | 0 |
+| 7981 | 189 | 189 | 189 | 0 |
+| 7997 | 40 | 40 | 40 | 0 |
+| 8024 | 288 | 288 | 190 | 0 |
+| 8037 | 834 | 834 | 834 | 0 |
+| 8038 | 263 | 263 | 263 | 0 |
+| 8246 | 663 | 663 | 663 | 0 |
+| 8282 | 356 | 356 | 356 | 0 |
+| **total** | **4,982** | **4,982** | **4,863** | **0** |
+
+zevm now fails only blocks that use the 8024 / 7843 opcodes.
+- **Rest of `for_amsterdam`** (earlier forks' tests under Amsterdam rules,
+  27,745 blocks): zevm 22,510 PASS, 5,215 PASS_NEG, 13 FAIL; evmone 22,523 /
+  5,215 / 0. The 13 are the DUPN / SWAPN / EXCHANGE / SLOTNUM cases of the
+  opcode-enumeration tests.
+- **Fork transition:** zevm 358 PASS, 35 PASS_NEG, 8 FAIL. All 8 are 8024 / 7843
+  opcode-at-fork blocks.
+- **Regression:** the full tests-v5.4.0 + InvalidBlocks corpus on zevm is
+  identical block for block before and after the change.
+- **Proving cost:** the zevm ELF on mainnet block 26176606 takes 94.22M steps,
+  against 94.19M before (+0.03%).
 
 ### After EIP-7928
 

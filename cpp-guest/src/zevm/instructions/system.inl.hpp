@@ -29,14 +29,14 @@ namespace zevm {
 
 namespace system_ops {
 
-constexpr int64_t WARM_ACCESS         = 100;    // warm_storage_read_cost (call base)
-constexpr int64_t COLD_ACCOUNT_ACCESS = 2600;   // EIP-2929
 constexpr int64_t CALL_VALUE_COST     = 9000;
 constexpr int64_t ACCOUNT_CREATION    = 25000;
-constexpr int64_t ACCOUNT_WRITE       = 9000;   // EIP-8038 (Amsterdam)
 constexpr int64_t CALL_STIPEND        = 2300;
+// EIP-8038 (Amsterdam): the value transfer is an account write; the stipend
+// is still handed to the callee on top.
+constexpr int64_t CALL_VALUE_COST_AMSTERDAM = ACCOUNT_WRITE + CALL_STIPEND;
 
-constexpr int64_t GAS_CREATE          = 32000;  // CREATE / CREATE2 base
+constexpr int64_t GAS_CREATE          = 32000;  // CREATE / CREATE2 base (CREATE_ACCESS from Amsterdam)
 constexpr uint64_t MAX_INITCODE_SIZE  = 0xC000; // EIP-3860 (2 * 24576)
 constexpr uint64_t MAX_INITCODE_SIZE_AMSTERDAM = 0x20000; // EIP-7954 (2 * 65536)
 constexpr int64_t INITCODE_WORD_COST  = 2;      // EIP-3860 per 32-byte word
@@ -107,23 +107,64 @@ bool call_impl(EvmState& s, Regs& R, evmc_call_kind kind, bool has_value, bool s
         return true;
     };
 
-    // ----- gas: account access (EIP-2929) -----
+    // The checks below run in evmone's order (static value → memory → value
+    // cost → target access → 7702 delegate → new account). An early exit is an
+    // exceptional halt that burns all gas, so the order doesn't change the
+    // gas, but it fixes which accounts the host sees loaded before the halt,
+    // and from Amsterdam that set is the block access list (EIP-7928).
+
+    // ----- static-mode violation (CALL with value) -----
+    if (kind == EVMC_CALL && nonzero_value && (s.evmcMsg->flags & EVMC_STATIC)) {
+        s.status = EVMC_STATIC_MODE_VIOLATION;
+        return false;
+    }
+
+    // ----- gas: memory expansion for the input and output windows -----
+    // Charged BEFORE any account is read, so a CALL doomed to OOG on memory
+    // expansion never reads the callee's code (copy_code). This mirrors
+    // reth/revm's ordering: a stateless host (debug_executionWitness, ZK
+    // provers) is never required to include bytecode the EVM didn't
+    // materially read.
+    if (mem_expand(R, static_cast<size_t>(in_off), static_cast<size_t>(in_size)) != MemError::Ok) {
+        s.status = EVMC_OUT_OF_GAS; return false;
+    }
+    if (mem_expand(R, static_cast<size_t>(out_off), static_cast<size_t>(out_size)) != MemError::Ok) {
+        s.status = EVMC_OUT_OF_GAS; return false;
+    }
+
+    // ----- gas: value transfer -----
+    if (has_value && nonzero_value) {
+        const int64_t vcost =
+            s.rev >= EVMC_AMSTERDAM ? CALL_VALUE_COST_AMSTERDAM : CALL_VALUE_COST;
+        if (R.gas < vcost) { s.status = EVMC_OUT_OF_GAS; return false; }
+        R.gas -= vcost;
+    }
+
+    // ----- gas: account access (EIP-2929; 2900 surcharge from Amsterdam) -----
     if (s.rev >= EVMC_BERLIN &&
         s.host->access_account(s.context, &dst) == EVMC_ACCESS_COLD) {
-        const int64_t extra = COLD_ACCOUNT_ACCESS - WARM_ACCESS;  // 2500
+        const int64_t extra = additional_cold_account_access(s.rev);
         if (R.gas < extra) { s.status = EVMC_OUT_OF_GAS; return false; }
         R.gas -= extra;
     }
 
-    // ----- gas: value transfer (+ static-mode violation) -----
-    if (has_value) {
-        if (kind == EVMC_CALL && nonzero_value && (s.evmcMsg->flags & EVMC_STATIC)) {
-            s.status = EVMC_STATIC_MODE_VIOLATION;
-            return false;
-        }
-        if (nonzero_value) {
-            if (R.gas < CALL_VALUE_COST) { s.status = EVMC_OUT_OF_GAS; return false; }
-            R.gas -= CALL_VALUE_COST;
+    // ----- EIP-7702 (Prague+): resolve a delegated call target -----
+    // If the callee's code is a delegation designator (0xef0100 || address), run
+    // the delegate's code instead — charging the delegate's EIP-2929 account
+    // access (cold / 100 warm) on top of the target's own access above. The
+    // child still uses `recipient` for storage/context; only `code_address` moves
+    // to the delegate. (EXTCODE* are unaffected: they see the designator.)
+    evmc_address code_addr = dst;
+    if (s.rev >= EVMC_PRAGUE) {
+        uint8_t desig[23];  // 0xef 0x01 0x00 + 20-byte delegate address
+        const size_t n = s.host->copy_code(s.context, &dst, 0, desig, sizeof(desig));
+        if (n == sizeof(desig) && desig[0] == 0xef && desig[1] == 0x01 && desig[2] == 0x00) {
+            std::memcpy(code_addr.bytes, desig + 3, 20);
+            const int64_t dcost =
+                s.host->access_account(s.context, &code_addr) == EVMC_ACCESS_COLD
+                    ? cold_account_access(s.rev) : WARM_ACCESS;
+            if (R.gas < dcost) { s.status = EVMC_OUT_OF_GAS; return false; }
+            R.gas -= dcost;
         }
     }
 
@@ -151,42 +192,6 @@ bool call_impl(EvmState& s, Regs& R, evmc_call_kind kind, bool has_value, bool s
         state_gas_refill(s, g, NEW_ACCOUNT_STATE_GAS);
         R.gas = g;
     };
-
-    // ----- gas: memory expansion for the input and output windows -----
-    // Charged BEFORE the EIP-7702 delegation probe below so a CALL doomed to
-    // OOG on memory expansion never reads the callee's code (copy_code). This
-    // mirrors reth/revm's ordering: a stateless host (debug_executionWitness,
-    // ZK provers) is never required to include bytecode the EVM didn't
-    // materially read. Result-neutral — a CALL OOG is an exceptional halt that
-    // consumes all gas regardless of which check trips it, and a non-OOG call
-    // charges the same total either way. Matches the evmone-backend patch
-    // patches/01-evmone-revm-aligned-call-gas-order.patch.
-    if (mem_expand(R, static_cast<size_t>(in_off), static_cast<size_t>(in_size)) != MemError::Ok) {
-        s.status = EVMC_OUT_OF_GAS; return false;
-    }
-    if (mem_expand(R, static_cast<size_t>(out_off), static_cast<size_t>(out_size)) != MemError::Ok) {
-        s.status = EVMC_OUT_OF_GAS; return false;
-    }
-
-    // ----- EIP-7702 (Prague+): resolve a delegated call target -----
-    // If the callee's code is a delegation designator (0xef0100 || address), run
-    // the delegate's code instead — charging the delegate's EIP-2929 account
-    // access (2600 cold / 100 warm) on top of the target's own access above. The
-    // child still uses `recipient` for storage/context; only `code_address` moves
-    // to the delegate. (EXTCODE* are unaffected: they see the designator.)
-    evmc_address code_addr = dst;
-    if (s.rev >= EVMC_PRAGUE) {
-        uint8_t desig[23];  // 0xef 0x01 0x00 + 20-byte delegate address
-        const size_t n = s.host->copy_code(s.context, &dst, 0, desig, sizeof(desig));
-        if (n == sizeof(desig) && desig[0] == 0xef && desig[1] == 0x01 && desig[2] == 0x00) {
-            std::memcpy(code_addr.bytes, desig + 3, 20);
-            const int64_t dcost =
-                s.host->access_account(s.context, &code_addr) == EVMC_ACCESS_COLD
-                    ? COLD_ACCOUNT_ACCESS : WARM_ACCESS;
-            if (R.gas < dcost) { s.status = EVMC_OUT_OF_GAS; return false; }
-            R.gas -= dcost;
-        }
-    }
 
     // ----- EIP-150 "all but one 64th" cap on the gas passed to the child -----
     int64_t call_gas = req_gas;
@@ -265,8 +270,9 @@ bool create_impl(EvmState& s, Regs& R, evmc_call_kind kind) {
     const bool     is2   = (kind == EVMC_CREATE2);
     const size_t nargs = is2 ? 4u : 3u;
 
-    if (R.gas < GAS_CREATE) { s.status = EVMC_OUT_OF_GAS; return false; }
-    R.gas -= GAS_CREATE;
+    const int64_t base = s.rev >= EVMC_AMSTERDAM ? CREATE_ACCESS : GAS_CREATE;  // EIP-8038
+    if (R.gas < base) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= base;
     if (depth_lt(R, nargs)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     if (s.evmcMsg->flags & EVMC_STATIC) { s.status = EVMC_STATIC_MODE_VIOLATION; return false; }
 
@@ -463,11 +469,13 @@ bool op_selfdestruct(EvmState& s, Regs& R) {
 
     const evmc_address ben = addr_from_slot(R.top[0]);  // low 20 bytes of the value
 
-    // Cold beneficiary access (Berlin+): the full 2600 (no warm base for SELFDESTRUCT).
+    // Cold beneficiary access (Berlin+): the full cold cost (no warm base for
+    // SELFDESTRUCT); 3000 from Amsterdam (EIP-8038).
     if (s.rev >= EVMC_BERLIN &&
         s.host->access_account(s.context, &ben) == EVMC_ACCESS_COLD) {
-        if (R.gas < COLD_ACCOUNT_ACCESS) { s.status = EVMC_OUT_OF_GAS; return false; }
-        R.gas -= COLD_ACCOUNT_ACCESS;
+        const int64_t cold = cold_account_access(s.rev);
+        if (R.gas < cold) { s.status = EVMC_OUT_OF_GAS; return false; }
+        R.gas -= cold;
     }
     // New-account surcharge: charged when the account has balance to send and the
     // beneficiary does not yet exist.
