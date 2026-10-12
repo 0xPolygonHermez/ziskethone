@@ -94,6 +94,12 @@ pub struct OfflineSources {
     /// `excess_blob_gas` formula.
     #[serde(default)]
     pub max_blob_gas_per_block: u64,
+    /// EIP-7928 block-level access list keys in BAL order (accounts by
+    /// address, each with its accessed slots), written as the BalHint
+    /// section. Empty before Amsterdam; `serde(default)` keeps older
+    /// manifests decoding.
+    #[serde(default)]
+    pub bal_hint: Vec<sections::BalHintAccount>,
 }
 
 /// Encode an `OfflineSources` bundle to the cpp-guest's binary
@@ -178,6 +184,7 @@ pub fn encode_binary(sources: &OfflineSources) -> Result<Vec<u8>> {
         &sources.witness.state,
         &sources.witness.keys,
     )?;
+    sections::write_bal_hint(&mut w, &sources.bal_hint);
 
     Ok(w.into_bytes())
 }

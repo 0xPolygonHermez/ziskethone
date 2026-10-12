@@ -171,6 +171,10 @@ public:
 
     uint64_t size() const noexcept { return originals_.size(); }
 
+    // EIP-7928: id of the row's BlockAccessList slot record (UINT32_MAX until
+    // the slot is first loaded in an Amsterdam block).
+    uint32_t& bal_id_at(size_t idx) noexcept { return mods_[idx].bal_id; }
+
     // All storage indices belonging to `addr`, in table order. Built once
     // at construction. Used by SELFDESTRUCT (EIP-6780 full-destroy) to
     // zero every slot of a same-tx-created account without scanning or
@@ -222,6 +226,7 @@ private:
         evmc::bytes32 value{};
         uint64_t      last_tx_idx = 0;
         evmc::bytes32 tx_original{};
+        uint32_t      bal_id = UINT32_MAX;  // EIP-7928 BlockAccessList slot record
     };
 
     // Composite map key: 20-byte address + 32-byte slot key. `pad` keeps

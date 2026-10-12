@@ -12,8 +12,10 @@ in place, and the EIPs are being implemented one by one (Status column below).
   parameters from the fixture's `blobSchedule`. It also writes the new header
   fields (`blockAccessListHash`, `slotNumber`) into the manifest.
 - `input-gen` emits `fork_id = 8` (Amsterdam) for any header that carries
-  `block_access_list_hash`. The binary format is v10 and carries both new header
-  fields (see `BINARY_FORMAT.md`).
+  `block_access_list_hash`. The binary format is v11 (see `BINARY_FORMAT.md`):
+  - ConsensusInfo carries `slot_number`;
+  - the BAL hash is not an input, because the guest computes it;
+  - a trailing BalHint section lists the BAL's keys in order.
 - The guest accepts Amsterdam: `ForkId::Amsterdam` → `EVMC_AMSTERDAM`, the
   23-field header for the current block and its ancestors, SLOTNUM's
   `block_slot_number` in the tx context, and `is_amsterdam_or_later()`.
@@ -63,7 +65,7 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
 | [7708](https://eips.ethereum.org/EIPS/eip-7708) | ETH transfers emit a log | `eip7708_eth_transfer_logs` | 40 / 77 | done |
 | [7778](https://eips.ethereum.org/EIPS/eip-7778) | Block gas accounting without refunds | `eip7778_block_gas_accounting_without_refunds` | 9 / 117 | done (rule landed with 8037) |
 | [7843](https://eips.ethereum.org/EIPS/eip-7843) | SLOTNUM opcode (+ `slot_number` header field) | `eip7843_slotnum` | 10 / 23 | todo |
-| [7928](https://eips.ethereum.org/EIPS/eip-7928) | Block-level access lists (+ `block_access_list_hash` header field) | `eip7928_block_level_access_lists` | 211 / 1,248 | todo |
+| [7928](https://eips.ethereum.org/EIPS/eip-7928) | Block-level access lists (+ `block_access_list_hash` header field) | `eip7928_block_level_access_lists` | 211 / 1,248 | done |
 | [7954](https://eips.ethereum.org/EIPS/eip-7954) | Increase max contract size | `eip7954_increase_max_contract_size` | 22 / 58 | done |
 | [7976](https://eips.ethereum.org/EIPS/eip-7976) | Increase calldata floor cost | `eip7976_increase_calldata_floor_cost` | 21 / 543 | done |
 | [7981](https://eips.ethereum.org/EIPS/eip-7981) | Increase access list cost | `eip7981_increase_access_list_cost` | 19 / 189 | done |
@@ -77,10 +79,14 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
 
 ### Open items that span EIPs
 
-- **Soundness: the BAL hash is trusted.** `block_access_list_hash` comes from
-  the input and goes straight into the header hash
-  (`TODO(EIP-7928)` in `run.cpp`). EIP-7928 must build the BAL during execution
-  and check its hash against the input.
+- **BAL loads follow the VM's host calls.** An account counts as loaded when
+  the guest reads or writes it. A bare `access_account` counts once the VM
+  shows it paid the access cost: by making another host call in the frame, or
+  by the frame ending normally. That reproduces revm skipping a cold load it
+  can't pay for. zevm follows the same host-call pattern as evmone.
+- **BAL for Amsterdam mainnet blocks.** Online `input-gen` writes an empty
+  BalHint, because mainnet is pre-Amsterdam. An Amsterdam mainnet block will
+  need its BAL keys from the node.
 - **The gas EIPs are entangled.** Most fixtures of one gas EIP also exercise
   the others, so 2780, 7708, 7778, 7976, 7981 and 8037 were only measurable
   together. 8037's block accounting is EIP-7778's rule (no refund in the
@@ -126,7 +132,62 @@ The reth 2.2 → 2.7 bridge upgrade was regression-checked on the
 `tests-v5.4.0` Prague + Osaka corpus: 3,820 PASS, 274 PASS_NEG, 0 FAIL, 1 MISSING
 (the undecodable `test_contract_create` type-4 creation).
 
-### After EIP-7954
+### After EIP-7928
+
+The guest builds the block-level access list while it executes and puts its
+hash into the header. The input no longer carries the hash.
+
+- **Accessed set.** An `accessed` flag on each account row and slot record,
+  never rolled back.
+  - Set by actual loads and writes, not by EIP-2929 warming or EIP-2930
+    prewarming.
+  - Precompiles, system-call targets without code, the coinbase, withdrawal
+    recipients, CREATE targets and 7702 authorities are included as revm
+    includes them.
+- **Changes, lazily.** Each account and slot remembers the BAL index it was
+  last written in and its value at the start of that index.
+  - The first write in a new index records the old index's net change, if any,
+    and the final pass closes what is still open. Nothing walks the state per tx.
+  - A slot with no change becomes a read.
+- **Order from the prover.** The BalHint input lists the keys in BAL order. The
+  guest checks it in one pass: strictly increasing, every key accessed, and the
+  counts equal to the accessed counts, so it is exactly the accessed set. It
+  then encodes the RLP in that order and hashes it once.
+- **Size limit.** `accounts + slots ≤ gas_limit / 2000`, or the block is
+  invalid.
+
+A corrupted BAL now yields either a different block hash or a fatal hint
+check. All 102 invalid 7928 blocks are rejected.
+
+| EIP | Blocks | evmone pass | zevm pass | FAIL_NEG (evmone) |
+|---|---:|---:|---:|---:|
+| 2780 | 283 | 283 | 274 | 0 |
+| 7708 | 77 | 77 | 26 | 0 |
+| 7778 | 117 | 117 | 56 | 0 |
+| 7843 | 23 | 23 | 0 | 0 |
+| 7928 | 1,248 | 1,248 | 558 | 0 |
+| 7954 | 58 | 58 | 28 | 0 |
+| 7976 | 543 | 543 | 531 | 0 |
+| 7981 | 189 | 189 | 173 | 0 |
+| 7997 | 40 | 40 | 1 | 0 |
+| 8024 | 288 | 288 | 176 | 0 |
+| 8037 | 834 | 834 | 290 | 0 |
+| 8038 | 263 | 263 | 49 | 0 |
+| 8246 | 663 | 663 | 5 | 0 |
+| 8282 | 356 | 356 | 145 | 0 |
+| **total** | **4,982** | **4,982** | **2,312** | **0** |
+
+zevm accepts no invalid block either (it was at 74 FAIL_NEG). Its 8037 count
+drops by 4 (294 → 290):
+- `inner_create_succeeds_code_deposit_state_gas` and
+  `max_initcode_size_gas_metering_via_create` end in a halting outer frame, so
+  their state comes out the same either way;
+- zevm, without the 8038 costs, never reaches the inner CREATE that the BAL now
+  records.
+
+**Fork transition** (`for_bpo2toamsterdamattime15k`): 366 PASS, 35 PASS_NEG,
+2 MISSING (undecodable headers), 0 FAIL.
+
 
 From Amsterdam the size limits rise:
 - deployed code: 24,576 → 65,536 bytes;

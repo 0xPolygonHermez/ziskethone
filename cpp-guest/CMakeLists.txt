@@ -139,6 +139,7 @@ set(GUEST_SOURCES
     src/run.cpp
     src/fatal.cpp
     src/accounts.cpp
+    src/block_access_list.cpp
     src/block_header.cpp
     src/bloom.cpp
     src/consensus_info.cpp

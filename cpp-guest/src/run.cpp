@@ -22,6 +22,7 @@
 
 #include "zeg/accounts.hpp"
 #include "zeg/binary_format.hpp"     // kMagic, kVersion
+#include "zeg/block_access_list.hpp"
 #include "zeg/block_header.hpp"
 #include "zeg/keccak.hpp"
 #include "zeg/consensus_info.hpp"
@@ -247,11 +248,16 @@ int run(const uint8_t* input, size_t len, uint8_t out[32]) {
         zeg::fatal("pre-execution state root mismatch");
     }
 
+    // 4'. EIP-7928 BalHint: the prover's BAL keys in order (empty before
+    //     Amsterdam). Execution checks them against what it accessed.
+    const zeg::BalHint bal_hint(cursor);
+
     // 5. Construct the state DB. ZiskStateDB borrows the five
     //    collections by reference for the rest of the run; Host
     //    callbacks pass data through them (or fatal-stub for overrides
     //    that need infrastructure not yet built).
     zeg::ZiskStateDB state(accounts, consensus, contracts, previous_blocks, storages);
+    state.set_bal_hint(&bal_hint);
 
     // 6. Run the whole block: pre-block system calls, every tx, then
     //    post-block side-effects. `state` owns the evmone VM and
@@ -373,10 +379,8 @@ int run(const uint8_t* input, size_t len, uint8_t out[32]) {
         .excess_blob_gas          = consensus.excess_blob_gas(),
         .parent_beacon_block_root = consensus.parent_beacon_block_root(),
         .requests_hash            = state.requests_hash(),
-        // TODO(EIP-7928): soundness — the block access list hash is taken
-        // from the input on trust. Build the BAL during execution and
-        // check its hash against this value.
-        .block_access_list_hash   = consensus.block_access_list_hash(),
+        // EIP-7928: the hash of the BAL built during execution.
+        .block_access_list_hash   = state.block_access_list_hash(),
         .slot_number              = consensus.slot_number(),
         // Fork the block runs under. ForkId::Unknown (0 = inputs that
         // pre-date the field) resolves to Prague, the mainnet default.

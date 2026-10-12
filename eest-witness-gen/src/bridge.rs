@@ -22,8 +22,8 @@ use serde_json::Value;
 use crate::executor::ExecutedBlock;
 use crate::fixture::{Account as EestAccount, BlockchainTest, Header as EestHeader};
 use crate::manifest::{
-    AccountPrestate, ExecutionWitness as ManifestExecutionWitness, ManifestSources, Prestate,
-    PrestateDiff,
+    AccountPrestate, BalHintAccount, ExecutionWitness as ManifestExecutionWitness,
+    ManifestSources, Prestate, PrestateDiff,
 };
 use reth_chainspec::{ChainSpec, EthChainSpec, EthereumHardforks};
 use std::sync::Arc;
@@ -288,6 +288,7 @@ pub fn manifests_for_fixture(
                 .blob_params_at_timestamp(exec.block.header().timestamp())
                 .map(|p| p.max_blob_count * DATA_GAS_PER_BLOB)
                 .unwrap_or(0),
+            bal_hint: bal_hint_for_block(&test.blocks[i]),
         }));
 
         // (h) Apply post-state to running_prestate for the next iter.
@@ -545,4 +546,29 @@ fn u64_hex(v: u64) -> String {
 
 fn u256_hex(v: &U256) -> String {
     format!("0x{:x}", v)
+}
+
+/// EIP-7928: the BalHint (BAL keys in BAL order) for one fixture block, built
+/// the way an honest prover would — accounts sorted and deduplicated by
+/// address, each with its changed and read slots merged, sorted and
+/// deduplicated — from the block's `blockAccessList` (or, for an invalid
+/// block, `rlp_decoded.blockAccessList`). The guest checks the keys against
+/// what execution accessed and recomputes every value, so a corrupted fixture
+/// BAL still fails there. Empty when the fixture has no BAL (pre-Amsterdam).
+fn bal_hint_for_block(block: &crate::fixture::Block) -> Vec<BalHintAccount> {
+    let bal = block
+        .block_access_list
+        .as_ref()
+        .or_else(|| block.rlp_decoded.as_ref().and_then(|d| d.block_access_list.as_ref()));
+    let Some(bal) = bal else { return Vec::new() };
+    let mut by_addr: BTreeMap<Address, BTreeSet<U256>> = BTreeMap::new();
+    for a in bal {
+        let slots = by_addr.entry(a.address).or_default();
+        slots.extend(a.storage_changes.iter().map(|c| c.slot));
+        slots.extend(a.storage_reads.iter().copied());
+    }
+    by_addr
+        .into_iter()
+        .map(|(address, slots)| BalHintAccount { address, slots: slots.into_iter().collect() })
+        .collect()
 }

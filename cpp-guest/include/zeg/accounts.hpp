@@ -33,6 +33,8 @@
 
 namespace zeg {
 
+class BlockAccessList;
+
 class Accounts {
 public:
     // Internal record stride in bytes. Documented in `View` below. No
@@ -207,8 +209,21 @@ public:
     void     set_warm_at    (size_t idx, uint64_t tx_idx) noexcept;
 
     uint64_t size() const noexcept { return originals_.size(); }
+    uint64_t capacity() const noexcept { return capacity_; }
+
+    // ----- EIP-7928 block-level access list (Amsterdam) -----
+    //
+    // When set, the touching readers (`balance` / `nonce` / `code_hash`) mark
+    // the row accessed, and every `set_*_at` — the single path of every write
+    // and every journal restore — first opens the row's BAL period (see
+    // BlockAccessList). The `*_at` readers and `mark_touched_at` don't, so
+    // EIP-2929 warming alone never puts an account in the BAL.
+    void set_block_access_list(BlockAccessList* bal) noexcept { bal_ = bal; }
+    void bal_access_at(size_t idx) noexcept;
 
 private:
+    void bal_before_write(size_t idx);
+
     // View into one 128-byte record in `record_store_`. Layout:
     //   offset  size  field
     //        0   20   address       (raw bytes)
@@ -314,6 +329,8 @@ private:
     };
     std::unordered_map<evmc::bytes32, PhantomAccount, AddrHashHash, AddrHashEq>
         phantom_accounts_;
+
+    BlockAccessList* bal_ = nullptr;
 };
 
 } // namespace zeg

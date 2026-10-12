@@ -70,6 +70,16 @@ pub struct ManifestSources {
     /// formula.
     #[serde(default)]
     pub max_blob_gas_per_block: u64,
+    /// EIP-7928 BAL keys in BAL order — mirror of `OfflineSources.bal_hint`.
+    #[serde(default)]
+    pub bal_hint: Vec<BalHintAccount>,
+}
+
+/// Mirror of `rust_input_gen::sections::BalHintAccount`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BalHintAccount {
+    pub address: Address,
+    pub slots: Vec<U256>,
 }
 
 /// Mirror of `rust_input_gen::rpc::Prestate`.

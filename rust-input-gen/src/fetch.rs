@@ -136,6 +136,9 @@ pub(crate) async fn fetch_offline_sources_online(
         blob_base_fee_update_fraction,
         target_blob_gas_per_block,
         max_blob_gas_per_block,
+        // TODO(EIP-7928): an Amsterdam mainnet block needs its BAL keys from
+        // the node (mainnet is pre-Amsterdam, so the hint is empty for now).
+        bal_hint: Vec::new(),
     })
 }
 

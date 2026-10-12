@@ -2,6 +2,7 @@
 
 #include <cstdio>
 
+#include "zeg/block_access_list.hpp"
 #include "zeg/fatal.hpp"
 #include "zeg/hash_reserve.hpp"
 #include "zeg/stream.hpp"
@@ -100,18 +101,21 @@ size_t Accounts::index_of(const evmc::address& addr) const {
 evmc::uint256be Accounts::balance(const evmc::address& addr, uint64_t tx_idx) {
     const size_t i = index_of(addr);
     mark_touched_at(i, tx_idx);
+    if (bal_) bal_->access_account(i);
     return mods_[i].balance_dirty ? mods_[i].balance : originals_[i].balance();
 }
 
 uint64_t Accounts::nonce(const evmc::address& addr, uint64_t tx_idx) {
     const size_t i = index_of(addr);
     mark_touched_at(i, tx_idx);
+    if (bal_) bal_->access_account(i);
     return mods_[i].nonce_dirty ? mods_[i].nonce : originals_[i].nonce();
 }
 
 evmc::bytes32 Accounts::code_hash(const evmc::address& addr, uint64_t tx_idx) {
     const size_t i = index_of(addr);
     mark_touched_at(i, tx_idx);
+    if (bal_) bal_->access_account(i);
     return mods_[i].code_hash_dirty ? mods_[i].code_hash : originals_[i].code_hash();
 }
 
@@ -178,6 +182,7 @@ void Accounts::set_code_hash(const evmc::address& addr, const evmc::bytes32& v,
 
 void Accounts::set_balance_at(size_t idx, const evmc::uint256be& v,
                               uint64_t tx_idx) {
+    if (bal_) bal_before_write(idx);
     auto& m = mods_[idx];
     m.balance       = v;
     m.balance_dirty = true;
@@ -185,6 +190,7 @@ void Accounts::set_balance_at(size_t idx, const evmc::uint256be& v,
 }
 
 void Accounts::set_nonce_at(size_t idx, uint64_t v, uint64_t tx_idx) {
+    if (bal_) bal_before_write(idx);
     auto& m = mods_[idx];
     m.nonce       = v;
     m.nonce_dirty = true;
@@ -193,10 +199,22 @@ void Accounts::set_nonce_at(size_t idx, uint64_t v, uint64_t tx_idx) {
 
 void Accounts::set_code_hash_at(size_t idx, const evmc::bytes32& v,
                                 uint64_t tx_idx) {
+    if (bal_) bal_before_write(idx);
     auto& m = mods_[idx];
     m.code_hash       = v;
     m.code_hash_dirty = true;
     m.last_tx_idx     = tx_idx;
+}
+
+void Accounts::bal_access_at(size_t idx) noexcept {
+    if (bal_) bal_->access_account(idx);
+}
+
+void Accounts::bal_before_write(size_t idx) {
+    bal_->access_account(idx);
+    if (!bal_->account_period_open(idx)) {
+        bal_->open_account(idx, balance_at(idx), nonce_at(idx), code_hash_at(idx));
+    }
 }
 
 // ----- per-tx warm/cold tracking -----

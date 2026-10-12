@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <array>
+#include <memory>
 #include <cstdint>
 #include <cstring>
 #include <span>
@@ -40,6 +41,7 @@
 #include "zeg/evmc2.h"          // backend-agnostic VM interface (prepare/execute2)
 
 #include "zeg/accounts.hpp"
+#include "zeg/block_access_list.hpp"
 #include "zeg/consensus_info.hpp"
 #include "zeg/contracts.hpp"
 #include "zeg/dynamic_storage.hpp"
@@ -210,6 +212,12 @@ public:
     // list collapses to sha256("") per the EIP.
     const evmc::bytes32& requests_hash() const noexcept { return requests_hash_; }
 
+    // EIP-7928 (Amsterdam): the prover's BAL key hint (the BalHint input
+    // section), set before `execute_block`; and the hash of the BAL built
+    // while executing, available after it (zero before Amsterdam).
+    void set_bal_hint(const BalHint* hint) noexcept { bal_hint_ = hint; }
+    const evmc::bytes32& block_access_list_hash() const noexcept { return bal_hash_; }
+
     // ----- block execution driver -----
     //
     // One-shot entry point that drives the whole block: pre-block
@@ -232,6 +240,25 @@ private:
     // created/credited this block). Sound: an absent address has empty
     // block-state (a non-empty one would fail the parent anchor).
     size_t ensure_account(const evmc::address& addr) noexcept;
+
+    // EIP-7928: put `addr` in the BAL (Amsterdam only) — for loads that
+    // don't go through the touching Accounts readers or a write, e.g. a
+    // precompile CALL, a system-call target without code, or a read of a
+    // witness-absent address. Gives the address a row if it has none.
+    void bal_load(const evmc::address& addr) noexcept;
+    // EIP-7928: commit the account of the last `access_account` as loaded
+    // (a later host callback in the frame, or the frame ending normally,
+    // means its gas was paid).
+    void bal_commit_pending() const noexcept;
+    // Run one EVM frame; settles a pending BAL access the frame ended on.
+    evmc_result run_frame(const evmc_message* msg, const uint8_t* code,
+                          size_t code_size, evmc2_pre_execution* analysis) noexcept;
+    // EIP-7928: the BAL slot record for (addr, key), marked accessed.
+    BlockAccessList::Slot& bal_slot(size_t storage_idx, const evmc::address& addr,
+                                    const evmc::bytes32& key) noexcept;
+    // EIP-7928: check the prover's key hint against the accessed set, close
+    // every open period, encode the BAL and hash it. End of block.
+    evmc::bytes32 build_block_access_list_hash() noexcept;
 
     // Commit surviving fresh-account slots from `dynamic_storage_` into the
     // static `Storages` table at tx-end, then clear it. Called once per tx
@@ -626,6 +653,17 @@ private:
     // discarded: they reach no receipt and no bloom (execution-specs
     // process_system_transaction; EEST test_system_contract_logs).
     bool in_system_call_ = false;
+
+    // EIP-7928 (Amsterdam): the block-level access list under construction
+    // (null before Amsterdam, so every hook is one predictable branch), the
+    // prover's key hint, the number of txs (for the post-execution index
+    // n+1), and the final hash.
+    std::unique_ptr<BlockAccessList> bal_;
+    const BalHint*                   bal_hint_ = nullptr;
+    static constexpr size_t          kNoBalPending = SIZE_MAX;
+    mutable size_t                   bal_pending_  = kNoBalPending;
+    uint32_t                         bal_tx_count_ = 0;
+    evmc::bytes32                    bal_hash_{};
 
     // Per-tx receipts (finalized at end-of-tx; logs filled by emit_log
     // during execution).

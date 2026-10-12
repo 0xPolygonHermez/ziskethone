@@ -101,15 +101,12 @@ std::span<const uint8_t, 8> ConsensusInfo::nonce() const noexcept {
 const evmc::bytes32& ConsensusInfo::ommers_hash() const noexcept {
     return *reinterpret_cast<const evmc::bytes32*>(header_ + kOmmersHashOffset);
 }
-const evmc::bytes32& ConsensusInfo::block_access_list_hash() const noexcept {
-    return *reinterpret_cast<const evmc::bytes32*>(header_ + kBlockAccessListHashOffset);
-}
 uint64_t ConsensusInfo::slot_number() const noexcept {
     return u64_at(header_ + kSlotNumberOffset);
 }
 
 // ============================================================================
-// Constructor — fixed 408 B prefix + N × 48 B withdrawal records.
+// Constructor — fixed 376 B prefix + N × 48 B withdrawal records.
 // ============================================================================
 
 ConsensusInfo::ConsensusInfo(const uint8_t*& cursor) {

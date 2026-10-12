@@ -39,6 +39,8 @@ The file is one contiguous byte stream, consumed left-to-right:
 +---------------------------+
 |  StateRoot trie hints     |
 +---------------------------+
+|  BalHint (v11)            |
++---------------------------+
 ```
 
 The Accounts and Storages tables are no longer standalone sections: as
@@ -54,9 +56,13 @@ sized to a multiple of 8, so the next section starts 8-byte aligned.
 | Offset | Size | Field     | Description |
 |-------:|-----:|-----------|-------------|
 |      0 |    4 | `magic`   | ASCII `"ZEG0"` (`0x3047455A` little-endian, see [`binary_format.hpp`](cpp-guest/include/zeg/binary_format.hpp)) |
-|      4 |    4 | `version` | `u32` little-endian format version (`kVersion`, currently `10`). Also keeps the cursor 8-byte aligned for everything that follows |
+|      4 |    4 | `version` | `u32` little-endian format version (`kVersion`, currently `11`). Also keeps the cursor 8-byte aligned for everything that follows |
 
 The guest fatals on magic mismatch or on a `version` other than `kVersion`.
+Version `11` (EIP-7928) dropped `block_access_list_hash` from ConsensusInfo
+(prefix 408 → 376 B, `slot_number` moves to 368) — the guest builds the
+block-level access list and computes the hash itself — and appended the
+BalHint section (Section 8).
 Version `10` added the Amsterdam header fields (`block_access_list_hash`,
 `slot_number`) to ConsensusInfo (prefix 368 → 408 B) and to the
 PreviousBlocks records (728 → 768 B).
@@ -83,7 +89,7 @@ Per-block consensus-layer inputs for the **current** block (the one
 being executed). Schema at
 [`consensus_info.hpp`](cpp-guest/include/zeg/consensus_info.hpp).
 
-### Fixed 408-byte header prefix
+### Fixed 376-byte header prefix
 
 | Offset | Size | Field                       | Type / encoding         |
 |-------:|-----:|-----------------------------|-------------------------|
@@ -108,9 +114,11 @@ being executed). Schema at
 |    344 |    8 | `blob_base_fee_update_fraction` | `u64` — BLOB_BASE_FEE_UPDATE_FRACTION of the block's blob schedule; `0` ⇒ current-mainnet default |
 |    352 |    8 | `target_blob_gas_per_block` | `u64` — TARGET_BLOB_GAS_PER_BLOCK of the block's blob schedule (`0` pre-Cancun) |
 |    360 |    8 | `max_blob_gas_per_block`    | `u64` — MAX_BLOB_GAS_PER_BLOCK of the block's blob schedule (`0` pre-Cancun) |
-|    368 |   32 | `block_access_list_hash`    | `bytes32` (EIP-7928; zero pre-Amsterdam) |
-|    400 |    8 | `slot_number`               | `u64` (EIP-7843; zero pre-Amsterdam) |
-|    408 |      | **end of fixed prefix**     |                         |
+|    368 |    8 | `slot_number`               | `u64` (EIP-7843; zero pre-Amsterdam) |
+|    376 |      | **end of fixed prefix**     |                         |
+
+The header's `block_access_list_hash` (EIP-7928) is not an input: the guest
+builds the block-level access list during execution and hashes it.
 
 `chain_id` is **not** in the stream. It is compile-time pinned to `1`
 (Ethereum mainnet) in [`zeg/config.hpp`](cpp-guest/include/zeg/config.hpp).
@@ -308,6 +316,28 @@ a leaf is read-only iff its original value equals its current value; a
 old-root pass records every node's computed result in a per-node array (in
 post-order); the new-root pass walks the same array and, for a read-only
 node, reuses the cached result instead of re-hashing.
+
+## Section 8 — `BalHint` (v11)
+
+The keys of the block's EIP-7928 block-level access list, in BAL order:
+accounts strictly increasing by address, each with every storage slot the
+block accessed (changed or only read), strictly increasing. Empty
+(`n_accounts = 0`) before Amsterdam. Schema at
+[`block_access_list.hpp`](cpp-guest/include/zeg/block_access_list.hpp).
+
+| Size | Field        | Description |
+|-----:|--------------|-------------|
+|    8 | `n_accounts` | `u64` |
+|      | per account: | |
+|   20 | `address`    | 20 B |
+|    4 | `n_slots`    | `u32` |
+| 32 × `n_slots` | `slots` | 32-byte big-endian slot keys |
+
+The hint only saves the guest a sort. The guest checks it against what
+execution accessed: the addresses and each account's slots must be strictly
+increasing, every key must have been accessed, and the account and slot
+counts must equal the accessed counts. Together these make the hint exactly
+the accessed set. The guest computes every value itself.
 
 ## Encoding conventions cheat-sheet
 
