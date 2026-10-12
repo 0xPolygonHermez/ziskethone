@@ -20,8 +20,8 @@ in place, and the EIPs are being implemented one by one (Status column below).
   23-field header for the current block and its ancestors, SLOTNUM's
   `block_slot_number` in the tx context, and `is_amsterdam_or_later()`.
 - The guest is on **evmone v0.24.0** (EVMC ABI 19, Amsterdam revision). zevm is
-  ported to the same ABI and has an `EVMC_AMSTERDAM` dispatch loop, which for
-  now has the Osaka opcode set.
+  ported to the same ABI and has an `EVMC_AMSTERDAM` dispatch loop: the Osaka
+  opcode set plus DUPN / SWAPN / EXCHANGE.
 
 ## Fixtures
 
@@ -70,7 +70,7 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
 | [7976](https://eips.ethereum.org/EIPS/eip-7976) | Increase calldata floor cost | `eip7976_increase_calldata_floor_cost` | 21 / 543 | done |
 | [7981](https://eips.ethereum.org/EIPS/eip-7981) | Increase access list cost | `eip7981_increase_access_list_cost` | 19 / 189 | done |
 | [7997](https://eips.ethereum.org/EIPS/eip-7997) | Deterministic factory contract | `eip7997_deterministic_factory_contract` | 21 / 40 | todo |
-| [8024](https://eips.ethereum.org/EIPS/eip-8024) | DUPN / SWAPN / EXCHANGE | `eip8024_dupn_swapn_exchange` | 66 / 288 | todo |
+| [8024](https://eips.ethereum.org/EIPS/eip-8024) | DUPN / SWAPN / EXCHANGE | `eip8024_dupn_swapn_exchange` | 66 / 288 | done |
 | [8037](https://eips.ethereum.org/EIPS/eip-8037) | State creation gas cost increase (state-gas reservoir) | `eip8037_state_creation_gas_cost_increase` | 270 / 834 | done |
 | [8038](https://eips.ethereum.org/EIPS/eip-8038) | State access gas cost increase | `eip8038_state_access_gas_cost_increase` | 88 / 263 | done |
 | [8070](https://eips.ethereum.org/EIPS/eip-8070) | eth/72 sparse blobpool | — | — | n/a (networking only) |
@@ -93,8 +93,8 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
   block's gas). 7981's access-list item price includes 8038's
   `COLD_* − WARM_ACCESS` (2,900 / 2,000).
 - **evmone v0.24 already has the in-VM parts** of 8038 (access costs), 7843
-  (SLOTNUM) and 8024 (DUPN / SWAPN / EXCHANGE) for `EVMC_AMSTERDAM`. 8038 and
-  7954 are done in both backends; 7843 and 8024 are still to do in zevm.
+  (SLOTNUM) and 8024 (DUPN / SWAPN / EXCHANGE) for `EVMC_AMSTERDAM`. 8038, 8024
+  and 7954 are done in both backends; 7843 is still to do in zevm.
 - **EIP-2780's "authority existed"** test is EIP-161 non-empty
   (`account_exists`). revm also counts an empty account that is in the trie;
   such an account can't arise on mainnet after Spurious Dragon.
@@ -103,8 +103,8 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
 - **System calls** get 30M regular gas plus a 16-slot state-gas reservoir, as
   evmone and the fixtures do. revm 43 gives 30M + 16 × 97,920 regular gas
   instead.
-- **zevm** runs Amsterdam with the Osaka opcode set; it has the 8037 state gas
-  and the 8038 access costs. What it still lacks is the 8024 and 7843 opcodes.
+- **zevm** has the 8037 state gas, the 8038 access costs and the 8024 opcodes.
+  What it still lacks is 7843's SLOTNUM.
 - **Proving cost.** On a mainnet block (26167511) the evmone ELF takes +3.3%
   steps on evmone v0.24 vs v0.21 (136.0M → 140.5M); zevm is unchanged.
 
@@ -129,6 +129,31 @@ Branch `glamsterdam`, `tests@v21.0.1`, evmone guest, 2026-10-11:
 The reth 2.2 → 2.7 bridge upgrade was regression-checked on the
 `tests-v5.4.0` Prague + Osaka corpus: 3,820 PASS, 274 PASS_NEG, 0 FAIL, 1 MISSING
 (the undecodable `test_contract_create` type-4 creation).
+
+### After EIP-8024
+
+zevm gets DUPN (0xe6), SWAPN (0xe7) and EXCHANGE (0xe8) in its Amsterdam
+dispatch loop, ported from evmone v0.24:
+- **Cost and pc:** each costs 3 gas and advances pc by 2.
+- **Immediate:** a one-byte immediate past the end of code reads as 0.
+- **Forbidden immediates** (0x5b–0x7f; 0x52–0x7f for EXCHANGE) are an
+  undefined instruction. Because of them an immediate is never JUMPDEST or a
+  PUSH opcode, so JUMPDEST analysis doesn't change.
+
+There is no host change; evmone already had the opcodes.
+
+| Set | zevm before | zevm after |
+|---|---:|---:|
+| `for_amsterdam/amsterdam`, 8024 | 190 / 288 | 288 / 288 |
+| `for_amsterdam/amsterdam`, all | 4,863 / 4,982 | 4,961 / 4,982 |
+| rest of `for_amsterdam`, FAIL | 13 | 4 |
+| fork transition, FAIL | 8 | 2 |
+
+All of zevm's remaining failures are SLOTNUM (7843): 21 of its 23 blocks, the 4
+opcode-enumeration blocks and the 2 transition blocks. FAIL_NEG stays 0.
+- **Prague + Osaka on zevm:** identical block for block (3,820 / 274 / 1).
+- **ELF:** the zevm ELF (GCC 14) matches the host on 288/288 8024 blocks.
+- **Mainnet block 26176606:** the zevm ELF takes 94.22M steps, unchanged.
 
 ### After EIP-8038
 

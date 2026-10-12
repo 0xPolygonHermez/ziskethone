@@ -229,6 +229,9 @@ template <evmc_revision Rev>
             OP(0xa2, log_ops, op_log2)
             OP(0xa3, log_ops, op_log3)
             OP(0xa4, log_ops, op_log4)
+            OPG(0xe6, EVMC_AMSTERDAM, stack_ops, op_dupn)
+            OPG(0xe7, EVMC_AMSTERDAM, stack_ops, op_swapn)
+            OPG(0xe8, EVMC_AMSTERDAM, stack_ops, op_exchange)
             OP(0xf0, system_ops, op_create)
             OP(0xf1, system_ops, op_call)
             OP(0xf2, system_ops, op_callcode)
@@ -278,8 +281,8 @@ void run_dispatch(evmc_revision rev, EvmState& s) {
         case EVMC_CANCUN:
         case EVMC_PRAGUE:                                    dispatch_loop<EVMC_CANCUN>(s);         break;
         case EVMC_OSAKA:                                     dispatch_loop<EVMC_OSAKA>(s);          break;
-        // Amsterdam: same opcode set as Osaka until DUPN/SWAPN/EXCHANGE
-        // (EIP-8024) and SLOTNUM (EIP-7843) land.
+        // Amsterdam: Osaka + DUPN / SWAPN / EXCHANGE (EIP-8024); SLOTNUM
+        // (EIP-7843) is still to come.
         case EVMC_AMSTERDAM:                                 dispatch_loop<EVMC_AMSTERDAM>(s);      break;
     }
 }

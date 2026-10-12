@@ -1,6 +1,7 @@
 #pragma once
-// stack.cpp — stack-shuffling opcodes: DUP1..DUP16 (0x80..0x8f) and
-// SWAP1..SWAP16 (0x90..0x9f). POP lives in control.cpp.
+// stack.cpp — stack-shuffling opcodes: DUP1..DUP16 (0x80..0x8f),
+// SWAP1..SWAP16 (0x90..0x9f) and, from Amsterdam, DUPN / SWAPN / EXCHANGE
+// (0xe6..0xe8, EIP-8024). POP lives in control.cpp.
 //
 // DUPn copies the n-th item from the top onto the top (depth + 1); SWAPn swaps
 // the top with the (n+1)-th item (depth unchanged). Each costs GAS_VERYLOW. The
@@ -347,6 +348,74 @@ bool op_swap16(EvmState& s, Regs& R) {
     const U256 t = R.top[0];
     R.top[0]      = R.top[16];
     R.top[16] = t;
+    return true;
+}
+
+// ----- EIP-8024 (Amsterdam): DUPN / SWAPN / EXCHANGE -----
+//
+// Each takes a one-byte immediate (pc advances by 2; costs GAS_VERYLOW). The
+// forbidden immediate ranges keep it from ever being JUMPDEST (0x5b) or a PUSH
+// opcode, so JUMPDEST analysis is unchanged; a forbidden immediate is an
+// undefined instruction. An immediate past the end of code reads as 0 (evmone
+// pads code with zeros). Decoding follows evmone's decode_*_imm.
+
+// The immediate byte after the opcode at pc.
+inline uint8_t imm_byte(const EvmState& s, const Regs& R) {
+    const size_t p = R.pc + 1;
+    return p < s.codeSize ? s.code[p] : 0;
+}
+
+// DUPN / SWAPN: n in [17, 235], or 0 for a forbidden immediate (0x5b..0x7f).
+inline unsigned decode_dupn_swapn(uint8_t imm) {
+    if (imm >= 0x5b && imm <= 0x7f) return 0;
+    return static_cast<uint8_t>(imm + 0x91);
+}
+
+// 0xe6 DUPN — duplicate the n-th item from the top.
+bool op_dupn(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    const unsigned n = decode_dupn_swapn(imm_byte(s, R));
+    if (n == 0) { s.status = EVMC_UNDEFINED_INSTRUCTION; return false; }
+    if (depth_lt(R, n)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    if (stack_full(s, R.top)) { s.status = EVMC_STACK_OVERFLOW; return false; }
+    R.top[-1] = R.top[n - 1];
+    --R.top;
+    R.pc += 2;
+    return true;
+}
+
+// 0xe7 SWAPN — swap the top with the (n+1)-th item.
+bool op_swapn(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    const unsigned n = decode_dupn_swapn(imm_byte(s, R));
+    if (n == 0) { s.status = EVMC_UNDEFINED_INSTRUCTION; return false; }
+    if (depth_lt(R, n + 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 t = R.top[0];
+    R.top[0] = R.top[n];
+    R.top[n] = t;
+    R.pc += 2;
+    return true;
+}
+
+// 0xe8 EXCHANGE — swap the (n+1)-th and (m+1)-th items, 1 <= n < m, n + m <= 30.
+// The immediate is forbidden in 0x52..0x7f; otherwise k = imm ^ 0x8f splits into
+// q = k / 16, r = k % 16 and (n, m) = q < r ? (q+1, r+1) : (r+1, 29-q).
+bool op_exchange(EvmState& s, Regs& R) {
+    if (R.gas < GAS_VERYLOW) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_VERYLOW;
+    const uint8_t imm = imm_byte(s, R);
+    if (imm >= 0x52 && imm <= 0x7f) { s.status = EVMC_UNDEFINED_INSTRUCTION; return false; }
+    const unsigned k = imm ^ 0x8fu;
+    const unsigned q = k / 16, r = k % 16;
+    const unsigned n = q < r ? q + 1 : r + 1;
+    const unsigned m = q < r ? r + 1 : 29 - q;
+    if (depth_lt(R, m + 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+    const U256 t = R.top[n];
+    R.top[n] = R.top[m];
+    R.top[m] = t;
+    R.pc += 2;
     return true;
 }
 
