@@ -243,6 +243,12 @@ private:
                         const evmc::address& to,
                         const evmc::uint256be& value) noexcept;
 
+    // EIP-7708 (Amsterdam): log a non-zero ETH move between two distinct
+    // accounts. A no-op before Amsterdam. Rolled back with the frame.
+    void emit_transfer_log(const evmc::address& from,
+                           const evmc::address& to,
+                           const evmc::uint256be& value) noexcept;
+
     // CREATE-family handler used by `call()` for EVMC_CREATE /
     // EVMC_CREATE2 / EVMC_EOFCREATE. Owns the new-address derivation,
     // sender-nonce bump, EIP-684 collision check, value transfer,

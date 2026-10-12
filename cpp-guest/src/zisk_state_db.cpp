@@ -387,6 +387,7 @@ bool ZiskStateDB::selfdestruct(const evmc::address& addr,
                              intx::be::store<evmc::uint256be>(dst_u + src_u),
                              tx_counter_);
     accounts_.set_balance_at(src_idx, evmc::uint256be{}, tx_counter_);
+    emit_transfer_log(addr, beneficiary, intx::be::store<evmc::uint256be>(src_u));
 
     if (should_destroy) {
         // Defer destruction to end-of-tx per Yellow Paper.
@@ -935,6 +936,20 @@ void ZiskStateDB::transfer_value(const evmc::address& from,
     accounts_.set_balance_at(to_idx,
                              intx::be::store<evmc::uint256be>(to_u   + v_u),
                              tx_counter_);
+    emit_transfer_log(from, to, value);
+}
+
+void ZiskStateDB::emit_transfer_log(const evmc::address& from,
+                                    const evmc::address& to,
+                                    const evmc::uint256be& value) noexcept {
+    if (!is_amsterdam_or_later() || from == to ||
+        intx::be::load<intx::uint256>(value) == 0) {
+        return;
+    }
+    evmc::bytes32 topics[3] = {kTransferEventTopic, {}, {}};
+    std::memcpy(topics[1].bytes + 12, from.bytes, 20);
+    std::memcpy(topics[2].bytes + 12, to.bytes, 20);
+    emit_log(kSystemAddress, value.bytes, sizeof(value.bytes), topics, 3);
 }
 
 evmc::Result ZiskStateDB::call_create(const evmc_message& msg,

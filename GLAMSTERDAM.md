@@ -59,8 +59,8 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
 
 | EIP | Title | Fixture dir | Fixtures / blocks | Status |
 |---|---|---|---|---|
-| [2780](https://eips.ethereum.org/EIPS/eip-2780) | Resource-based intrinsic tx gas | `eip2780_reduce_intrinsic_tx_gas` | 61 / 283 | done (rest need 7708 / 7976 / 7981) |
-| [7708](https://eips.ethereum.org/EIPS/eip-7708) | ETH transfers emit a log | `eip7708_eth_transfer_logs` | 40 / 77 | todo |
+| [2780](https://eips.ethereum.org/EIPS/eip-2780) | Resource-based intrinsic tx gas | `eip2780_reduce_intrinsic_tx_gas` | 61 / 283 | done (rest need 7976 / 7981 / 8246) |
+| [7708](https://eips.ethereum.org/EIPS/eip-7708) | ETH transfers emit a log | `eip7708_eth_transfer_logs` | 40 / 77 | done (rest need 7981) |
 | [7778](https://eips.ethereum.org/EIPS/eip-7778) | Block gas accounting without refunds | `eip7778_block_gas_accounting_without_refunds` | 9 / 117 | todo |
 | [7843](https://eips.ethereum.org/EIPS/eip-7843) | SLOTNUM opcode (+ `slot_number` header field) | `eip7843_slotnum` | 10 / 23 | todo |
 | [7928](https://eips.ethereum.org/EIPS/eip-7928) | Block-level access lists (+ `block_access_list_hash` header field) | `eip7928_block_level_access_lists` | 211 / 1,248 | todo |
@@ -83,8 +83,8 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
   and check its hash against the input.
 - **The gas EIPs are entangled.** Most fixtures of one gas EIP also exercise
   the others: 8037 fixtures use 2780's intrinsic gas (e.g. a 15,000-gas plain
-  call); 2780 fixtures need 7708's transfer logs for any value-moving tx and
-  7976 / 7981 for the calldata floor and access-list prices. 8037's block
+  call); 2780 and 7708 fixtures need 7976 / 7981 for the calldata floor and
+  access-list prices. 8037's block
   accounting is also EIP-7778's rule (no refund in the block's gas).
 - **evmone v0.24 already has the in-VM parts** of 8038 (access costs), 7843
   (SLOTNUM), 8024 (DUPN / SWAPN / EXCHANGE) and 7954 (code size) for
@@ -125,6 +125,42 @@ Branch `glamsterdam`, `tests@v21.0.1`, evmone guest, 2026-10-11:
 The reth 2.2 → 2.7 bridge upgrade was regression-checked on the
 `tests-v5.4.0` Prague + Osaka corpus: 3,820 PASS, 274 PASS_NEG, 0 FAIL, 1 MISSING
 (the undecodable `test_contract_create` type-4 creation).
+
+### After EIP-7708
+
+EIP-7708 logs every non-zero ETH move between two distinct accounts (tx value,
+CALL, CREATE endowment, SELFDESTRUCT to another account) as a LOG3 from
+`0xff…fe`. Same fixtures and guests as below:
+
+| EIP | Blocks | evmone pass | zevm pass | FAIL_NEG (evmone) |
+|---|---:|---:|---:|---:|
+| 2780 | 283 | 237 | 224 | 7 |
+| 7708 | 77 | 73 | 22 | 0 |
+| 7778 | 117 | 98 | 48 | 0 |
+| 7843 | 23 | 23 | 0 | 0 |
+| 7928 | 1,248 | 767 | 352 | 100 |
+| 7954 | 58 | 28 | 6 | 0 |
+| 7976 | 543 | 201 | 190 | 142 |
+| 7981 | 189 | 9 | 9 | 26 |
+| 7997 | 40 | 38 | 0 | 0 |
+| 8024 | 288 | 288 | 176 | 0 |
+| 8037 | 834 | 765 | 253 | 6 |
+| 8038 | 263 | 175 | 29 | 4 |
+| 8246 | 663 | 533 | 1 | 0 |
+| 8282 | 356 | 129 | 85 | 6 |
+| **total** | **4,982** | **3,364** | **1,395** | **291** |
+
+- **Remaining 2780 / 7708 failures** all belong to other EIPs:
+  - the 7976 calldata floor: expected − actual gas is 64 × the input bytes;
+  - 7981 access-list prices: typed txs, and access-listed recipients and
+    delegates;
+  - one self-destruct-to-self with value that expects the balance kept (8246).
+- **zevm's 7708 gap is 8038:** on the same blocks zevm charges the Osaka
+  call costs (e.g. 36 gas short).
+- **FAIL_NEG 233 → 291:** 52 of the 58 new ones are 7928 blocks that expect
+  `INVALID_BLOCK_ACCESS_LIST` / `BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED`; the other 6 are
+  8282 blocks that expect `SYSTEM_CONTRACT_CALL_FAILED`. They used to be
+  rejected only because of a missing transfer log, and close with those EIPs.
 
 ### After EIP-8037 and EIP-2780
 
