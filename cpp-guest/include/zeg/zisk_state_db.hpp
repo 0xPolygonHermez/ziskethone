@@ -200,6 +200,8 @@ public:
     //   type 0x00 → deposit requests        (EIP-6110)
     //   type 0x01 → withdrawal requests     (EIP-7002)
     //   type 0x02 → consolidation requests  (EIP-7251)
+    //   type 0x03 → builder deposit requests (EIP-8282)
+    //   type 0x04 → builder exit requests    (EIP-8282)
     // Empty queues add no entry.
     std::span<const std::vector<uint8_t>> requests() const noexcept { return requests_; }
 
@@ -514,6 +516,14 @@ private:
     void collect_deposit_requests()           noexcept;  // EIP-6110
     void collect_withdrawal_requests()        noexcept;  // EIP-7002
     void collect_consolidation_requests()     noexcept;  // EIP-7251
+    void collect_builder_requests()           noexcept;  // EIP-8282
+    // Shared body of the system-contract request collectors: the
+    // predeploy must have code, the empty-calldata call must succeed,
+    // and a non-empty output is appended as `type || output`.
+    void collect_system_requests(const evmc::address& addr,
+                                 uint8_t              type,
+                                 const char*          empty_msg,
+                                 const char*          failed_msg) noexcept;
 
     // Pectra system-call helper used by `pre_execute_block` (EIP-4788
     // beacon roots, EIP-2935 block-hash history) and
@@ -606,6 +616,11 @@ private:
     // applied + cleared at every tx boundary in
     // `process_transactions` after the tx completes.
     std::unordered_set<size_t> pending_destruct_{};
+
+    // True while `system_call` runs a system contract. Logs it emits are
+    // discarded: they reach no receipt and no bloom (execution-specs
+    // process_system_transaction; EEST test_system_contract_logs).
+    bool in_system_call_ = false;
 
     // Per-tx receipts (finalized at end-of-tx; logs filled by emit_log
     // during execution).

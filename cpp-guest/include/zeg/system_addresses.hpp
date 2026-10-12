@@ -59,6 +59,19 @@ constexpr evmc::address kConsolidationRequestsAddress{{
     0x42, 0xfb, 0x57, 0x9F, 0x8B, 0x00, 0xf3, 0xa5,
     0x90, 0x00, 0x72, 0x51,
 }};
+// EIP-8282 (Amsterdam): builder deposit- and exit-request predeploys.
+// Same queue design as 7002/7251; drained with empty calldata at
+// end-of-block, output opaque.
+constexpr evmc::address kBuilderDepositRequestsAddress{{
+    0x00, 0x00, 0xBF, 0xF4, 0x69, 0x84, 0xE3, 0x72,
+    0x56, 0x91, 0xFA, 0x54, 0x0A, 0x8C, 0x75, 0x89,
+    0x30, 0x0D, 0x82, 0x82,
+}};
+constexpr evmc::address kBuilderExitRequestsAddress{{
+    0x00, 0x00, 0x64, 0xD6, 0x78, 0x50, 0x5A, 0xD4,
+    0x8F, 0x8C, 0xCB, 0x09, 0x3B, 0xC6, 0x56, 0x13,
+    0x80, 0x0E, 0x82, 0x82,
+}};
 constexpr int64_t kSystemCallGas = 30'000'000;
 
 // EIP-6110: deposits are extracted from event logs emitted by the
@@ -76,6 +89,8 @@ constexpr evmc::address kDepositContractAddress{{
 constexpr uint8_t kRequestTypeDeposit       = 0x00;
 constexpr uint8_t kRequestTypeWithdrawal    = 0x01;
 constexpr uint8_t kRequestTypeConsolidation = 0x02;
+constexpr uint8_t kRequestTypeBuilderDeposit = 0x03;  // EIP-8282
+constexpr uint8_t kRequestTypeBuilderExit    = 0x04;  // EIP-8282
 
 // ===== EIP-4844 blob-gas constants =====
 

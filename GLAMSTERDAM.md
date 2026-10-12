@@ -73,7 +73,7 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
 | [8038](https://eips.ethereum.org/EIPS/eip-8038) | State access gas cost increase | `eip8038_state_access_gas_cost_increase` | 88 / 263 | todo |
 | [8070](https://eips.ethereum.org/EIPS/eip-8070) | eth/72 sparse blobpool | — | — | n/a (networking only) |
 | [8246](https://eips.ethereum.org/EIPS/eip-8246) | Remove SELFDESTRUCT burn | `eip8246_selfdestruct_no_burn` | 9 / 663 | done |
-| [8282](https://eips.ethereum.org/EIPS/eip-8282) | Builder execution requests | `eip8282_builder_execution_requests` | 22 / 356 | todo |
+| [8282](https://eips.ethereum.org/EIPS/eip-8282) | Builder execution requests | `eip8282_builder_execution_requests` | 22 / 356 | done |
 
 ### Open items that span EIPs
 
@@ -125,6 +125,46 @@ Branch `glamsterdam`, `tests@v21.0.1`, evmone guest, 2026-10-11:
 The reth 2.2 → 2.7 bridge upgrade was regression-checked on the
 `tests-v5.4.0` Prague + Osaka corpus: 3,820 PASS, 274 PASS_NEG, 0 FAIL, 1 MISSING
 (the undecodable `test_contract_create` type-4 creation).
+
+### After EIP-8282
+
+At the end of every Amsterdam block, after 7002 and 7251, the builder deposit
+(`0x0000BFF4…8282`, type `0x03`) and builder exit (`0x000064D6…8282`, type
+`0x04`) predeploys are called. The rules are the same as 7002 / 7251:
+- an empty contract or a failed call makes the block invalid;
+- the output is appended to the requests as opaque bytes.
+
+Logs that a system contract emits are now discarded in every fork. They
+used to land in the last tx's receipt, or, at block start, write past an
+empty receipt list.
+
+| EIP | Blocks | evmone pass | zevm pass | FAIL_NEG (evmone) |
+|---|---:|---:|---:|---:|
+| 2780 | 283 | 283 | 270 | 0 |
+| 7708 | 77 | 77 | 26 | 0 |
+| 7778 | 117 | 117 | 56 | 0 |
+| 7843 | 23 | 23 | 0 | 0 |
+| 7928 | 1,248 | 1,148 | 524 | 100 |
+| 7954 | 58 | 34 | 6 | 0 |
+| 7976 | 543 | 543 | 531 | 0 |
+| 7981 | 189 | 189 | 173 | 0 |
+| 7997 | 40 | 40 | 0 | 0 |
+| 8024 | 288 | 288 | 176 | 0 |
+| 8037 | 834 | 831 | 291 | 0 |
+| 8038 | 263 | 263 | 49 | 0 |
+| 8246 | 663 | 663 | 5 | 0 |
+| 8282 | 356 | 356 | 145 | 0 |
+| **total** | **4,982** | **4,855** | **2,252** | **100** |
+
+**evmone failures left:**
+- **7928:** the 100 FAIL_NEG. They are invalid block-level access lists,
+  which the guest doesn't check yet.
+- **7954** (code size): 24 blocks, plus 3 8037 code-deposit / oversized-initcode
+  blocks.
+
+**Fork transition** (`for_bpo2toamsterdamattime15k`):
+- 355 PASS, 34 PASS_NEG, 2 MISSING;
+- the 11 FAIL are 7954 and the 1 FAIL_NEG is 7928's BAL size check.
 
 ### After EIP-8246
 

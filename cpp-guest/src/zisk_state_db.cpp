@@ -672,6 +672,9 @@ void ZiskStateDB::emit_log(const evmc::address& addr,
     // start of the iteration in process_transactions; we just append
     // the log here. Owned copies so the EVM is free to release its
     // buffers after this returns.
+    if (in_system_call_) {
+        return;
+    }
     LogEntry entry;
     entry.address = addr;
     entry.topics.assign(topics, topics + topics_count);
@@ -2412,10 +2415,13 @@ void ZiskStateDB::post_execute_block() noexcept {
     // behavior.
     if (is_prague_or_later()) {
         // Order matters: deposit requests must be pushed first so requests_
-        // stays in EIP-7685 type-byte order (0x00 → 0x01 → 0x02).
+        // stays in EIP-7685 type-byte order (0x00 → … → 0x04).
         collect_deposit_requests();           // EIP-6110
         collect_withdrawal_requests();        // EIP-7002
         collect_consolidation_requests();     // EIP-7251
+        if (is_amsterdam_or_later()) {
+            collect_builder_requests();       // EIP-8282
+        }
     }
 }
 
@@ -2498,32 +2504,12 @@ void ZiskStateDB::collect_withdrawal_requests() noexcept {
     // validity rule, so a modified predeploy (EEST
     // test_modified_withdrawal_contract fixtures) that returns a
     // different size is still hashed verbatim and the block stays
-    // valid as long as requests_hash matches the header.
-    //
-    // EIP-7002 validity: once the fork is active the request predeploy MUST
-    // be present. If it has no code at end-of-block the block is invalid
-    // (BlockException.SYSTEM_CONTRACT_EMPTY). Calling empty code would
-    // otherwise "succeed" as a no-op and silently accept the block. EEST
-    // test_system_contract_deployment (deploy_after_fork) exercises this.
-    if (get_code_size(kWithdrawalRequestsAddress) == 0) {
-        fatal("EIP-7002: withdrawal system contract empty (invalid block)");
-    }
-    auto result = system_call(kWithdrawalRequestsAddress, {});
-    // A failed call (revert, OOG, ...) also makes the block invalid
-    // (execution-specs process_checked_system_transaction,
-    // BlockException.SYSTEM_CONTRACT_CALL_FAILED).
-    if (result.status_code != EVMC_SUCCESS) {
-        fatal("EIP-7002: withdrawal system contract call failed (invalid block)");
-    }
-    if (result.output_size == 0) {
-        return;
-    }
-    std::vector<uint8_t> req;
-    req.reserve(1 + result.output_size);
-    req.push_back(kRequestTypeWithdrawal);
-    req.insert(req.end(), result.output_data,
-                          result.output_data + result.output_size);
-    requests_.push_back(std::move(req));
+    // valid as long as requests_hash matches the header. Validity rules
+    // (empty code, failed call) are in collect_system_requests().
+    collect_system_requests(
+        kWithdrawalRequestsAddress, kRequestTypeWithdrawal,
+        "EIP-7002: withdrawal system contract empty (invalid block)",
+        "EIP-7002: withdrawal system contract call failed (invalid block)");
 }
 
 void ZiskStateDB::collect_consolidation_requests() noexcept {
@@ -2532,24 +2518,51 @@ void ZiskStateDB::collect_consolidation_requests() noexcept {
     // sees opaque bytes. See collect_withdrawal_requests() for the
     // rationale on accepting any size (test_modified_consolidation_
     // contract / test_extra_consolidations).
-    //
-    // EIP-7251 validity: empty consolidation system contract at end-of-block
-    // ⇒ invalid block (BlockException.SYSTEM_CONTRACT_EMPTY); see
-    // collect_withdrawal_requests() for the rationale.
-    if (get_code_size(kConsolidationRequestsAddress) == 0) {
-        fatal("EIP-7251: consolidation system contract empty (invalid block)");
+    collect_system_requests(
+        kConsolidationRequestsAddress, kRequestTypeConsolidation,
+        "EIP-7251: consolidation system contract empty (invalid block)",
+        "EIP-7251: consolidation system contract call failed (invalid block)");
+}
+
+void ZiskStateDB::collect_builder_requests() noexcept {
+    // EIP-8282 (Amsterdam): the builder deposit (0x03) and builder exit
+    // (0x04) predeploys, called in that order after 7002/7251, with the
+    // same empty-code and failed-call validity rules.
+    collect_system_requests(
+        kBuilderDepositRequestsAddress, kRequestTypeBuilderDeposit,
+        "EIP-8282: builder deposit system contract empty (invalid block)",
+        "EIP-8282: builder deposit system contract call failed (invalid block)");
+    collect_system_requests(
+        kBuilderExitRequestsAddress, kRequestTypeBuilderExit,
+        "EIP-8282: builder exit system contract empty (invalid block)",
+        "EIP-8282: builder exit system contract call failed (invalid block)");
+}
+
+void ZiskStateDB::collect_system_requests(const evmc::address& addr,
+                                          uint8_t              type,
+                                          const char*          empty_msg,
+                                          const char*          failed_msg) noexcept {
+    // Validity: once the fork is active the request predeploy MUST be
+    // present. If it has no code at end-of-block the block is invalid
+    // (BlockException.SYSTEM_CONTRACT_EMPTY). Calling empty code would
+    // otherwise "succeed" as a no-op and silently accept the block. EEST
+    // test_system_contract_deployment (deploy_after_fork) exercises this.
+    if (get_code_size(addr) == 0) {
+        fatal(empty_msg);
     }
-    auto result = system_call(kConsolidationRequestsAddress, {});
-    // Failed call ⇒ invalid block; see collect_withdrawal_requests().
+    auto result = system_call(addr, {});
+    // A failed call (revert, OOG, ...) also makes the block invalid
+    // (execution-specs process_checked_system_transaction,
+    // BlockException.SYSTEM_CONTRACT_CALL_FAILED).
     if (result.status_code != EVMC_SUCCESS) {
-        fatal("EIP-7251: consolidation system contract call failed (invalid block)");
+        fatal(failed_msg);
     }
     if (result.output_size == 0) {
         return;
     }
     std::vector<uint8_t> req;
     req.reserve(1 + result.output_size);
-    req.push_back(kRequestTypeConsolidation);
+    req.push_back(type);
     req.insert(req.end(), result.output_data,
                           result.output_data + result.output_size);
     requests_.push_back(std::move(req));
@@ -2591,10 +2604,12 @@ evmc::Result ZiskStateDB::system_call(const evmc::address&     target,
     const auto cp = checkpoint();
     evmc::bytes32 entry_code_hash{};
     const auto entry_code = code_and_hash(target, entry_code_hash);
+    in_system_call_ = true;
     auto result = evmc::Result{vm2_->execute2(
         &vm2_->base, &evmc::Host::get_interface(), to_context(),
         active_revision(), &msg, entry_code.data(), entry_code.size(),
         analysis_for(entry_code_hash))};
+    in_system_call_ = false;
     if (result.status_code != EVMC_SUCCESS) {
         rollback(cp);
     }
