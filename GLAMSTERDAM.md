@@ -59,14 +59,14 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
 
 | EIP | Title | Fixture dir | Fixtures / blocks | Status |
 |---|---|---|---|---|
-| [2780](https://eips.ethereum.org/EIPS/eip-2780) | Resource-based intrinsic tx gas | `eip2780_reduce_intrinsic_tx_gas` | 61 / 283 | done (rest need 7976 / 7981 / 8246) |
-| [7708](https://eips.ethereum.org/EIPS/eip-7708) | ETH transfers emit a log | `eip7708_eth_transfer_logs` | 40 / 77 | done (rest need 7981) |
-| [7778](https://eips.ethereum.org/EIPS/eip-7778) | Block gas accounting without refunds | `eip7778_block_gas_accounting_without_refunds` | 9 / 117 | todo |
+| [2780](https://eips.ethereum.org/EIPS/eip-2780) | Resource-based intrinsic tx gas | `eip2780_reduce_intrinsic_tx_gas` | 61 / 283 | done (1 left needs 8246) |
+| [7708](https://eips.ethereum.org/EIPS/eip-7708) | ETH transfers emit a log | `eip7708_eth_transfer_logs` | 40 / 77 | done |
+| [7778](https://eips.ethereum.org/EIPS/eip-7778) | Block gas accounting without refunds | `eip7778_block_gas_accounting_without_refunds` | 9 / 117 | done (rule landed with 8037) |
 | [7843](https://eips.ethereum.org/EIPS/eip-7843) | SLOTNUM opcode (+ `slot_number` header field) | `eip7843_slotnum` | 10 / 23 | todo |
 | [7928](https://eips.ethereum.org/EIPS/eip-7928) | Block-level access lists (+ `block_access_list_hash` header field) | `eip7928_block_level_access_lists` | 211 / 1,248 | todo |
 | [7954](https://eips.ethereum.org/EIPS/eip-7954) | Increase max contract size | `eip7954_increase_max_contract_size` | 22 / 58 | todo |
-| [7976](https://eips.ethereum.org/EIPS/eip-7976) | Increase calldata floor cost | `eip7976_increase_calldata_floor_cost` | 21 / 543 | todo |
-| [7981](https://eips.ethereum.org/EIPS/eip-7981) | Increase access list cost | `eip7981_increase_access_list_cost` | 19 / 189 | todo |
+| [7976](https://eips.ethereum.org/EIPS/eip-7976) | Increase calldata floor cost | `eip7976_increase_calldata_floor_cost` | 21 / 543 | done |
+| [7981](https://eips.ethereum.org/EIPS/eip-7981) | Increase access list cost | `eip7981_increase_access_list_cost` | 19 / 189 | done |
 | [7997](https://eips.ethereum.org/EIPS/eip-7997) | Deterministic factory contract | `eip7997_deterministic_factory_contract` | 21 / 40 | todo |
 | [8024](https://eips.ethereum.org/EIPS/eip-8024) | DUPN / SWAPN / EXCHANGE | `eip8024_dupn_swapn_exchange` | 66 / 288 | todo |
 | [8037](https://eips.ethereum.org/EIPS/eip-8037) | State creation gas cost increase (state-gas reservoir) | `eip8037_state_creation_gas_cost_increase` | 270 / 834 | done |
@@ -82,10 +82,10 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
   (`TODO(EIP-7928)` in `run.cpp`). EIP-7928 must build the BAL during execution
   and check its hash against the input.
 - **The gas EIPs are entangled.** Most fixtures of one gas EIP also exercise
-  the others: 8037 fixtures use 2780's intrinsic gas (e.g. a 15,000-gas plain
-  call); 2780 and 7708 fixtures need 7976 / 7981 for the calldata floor and
-  access-list prices. 8037's block
-  accounting is also EIP-7778's rule (no refund in the block's gas).
+  the others, so 2780, 7708, 7778, 7976, 7981 and 8037 were only measurable
+  together. 8037's block accounting is EIP-7778's rule (no refund in the
+  block's gas). 7981's access-list item price includes 8038's
+  `COLD_* − WARM_ACCESS` (2,900 / 2,000).
 - **evmone v0.24 already has the in-VM parts** of 8038 (access costs), 7843
   (SLOTNUM), 8024 (DUPN / SWAPN / EXCHANGE) and 7954 (code size) for
   `EVMC_AMSTERDAM`; the host parts of those EIPs, and all of them in zevm, are
@@ -125,6 +125,46 @@ Branch `glamsterdam`, `tests@v21.0.1`, evmone guest, 2026-10-11:
 The reth 2.2 → 2.7 bridge upgrade was regression-checked on the
 `tests-v5.4.0` Prague + Osaka corpus: 3,820 PASS, 274 PASS_NEG, 0 FAIL, 1 MISSING
 (the undecodable `test_contract_create` type-4 creation).
+
+### After EIP-7976 and EIP-7981
+
+- **EIP-7976:** the calldata floor is 64 gas per byte, zero or not.
+- **EIP-7981:** the floor also counts access-list bytes (20 per address, 32
+  per key) at the same rate. Access-list items cost 2,900 + 20 × 64 per
+  address and 2,000 + 32 × 64 per key.
+- **EIP-7778** needed no new code: its rule came with 8037. Its last 19 blocks
+  were calldata-floor and access-list cases.
+
+| EIP | Blocks | evmone pass | zevm pass | FAIL_NEG (evmone) |
+|---|---:|---:|---:|---:|
+| 2780 | 283 | 282 | 269 | 0 |
+| 7708 | 77 | 77 | 26 | 0 |
+| 7778 | 117 | 117 | 56 | 0 |
+| 7843 | 23 | 23 | 0 | 0 |
+| 7928 | 1,248 | 1,131 | 518 | 100 |
+| 7954 | 58 | 34 | 6 | 0 |
+| 7976 | 543 | 543 | 531 | 0 |
+| 7981 | 189 | 189 | 173 | 0 |
+| 7997 | 40 | 40 | 0 | 0 |
+| 8024 | 288 | 288 | 176 | 0 |
+| 8037 | 834 | 811 | 286 | 2 |
+| 8038 | 263 | 262 | 48 | 0 |
+| 8246 | 663 | 533 | 1 | 0 |
+| 8282 | 356 | 134 | 90 | 6 |
+| **total** | **4,982** | **4,464** | **2,180** | **108** |
+
+**evmone failures left outside 7928 / 8246 / 8282:**
+- **7954** (code size): 24 blocks.
+- **8246** (SELFDESTRUCT no longer burns): 2780's last block, 8038's last
+  block, and 7 8037 blocks (calls to an account self-destructed in the same
+  tx, self-destruct in a create tx).
+- **8037 system-call boundaries:** 8 blocks plus 2 FAIL_NEG
+  (`system_call_execution_*`, `system_call_reservoir_boundary`).
+- **8037 code-deposit and oversized-initcode cases:** 3 blocks, which reach
+  7954's new size limits.
+
+zevm still trails on everything that runs in-VM 8038 / 7843 / 8024 / 7954
+costs or opcodes.
 
 ### After EIP-7708
 

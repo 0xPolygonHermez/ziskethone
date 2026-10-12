@@ -38,9 +38,6 @@ int64_t compute_intrinsic_gas(const Transactions::View& tx,
     const auto data = tx.data();
     const auto nonzero = static_cast<int64_t>(count_nonzero_bytes(data));
     gas += static_cast<int64_t>(data.size()) * 4 + nonzero * 12;
-    if (calldata_floor != nullptr) {
-        *calldata_floor = base + (static_cast<int64_t>(data.size()) + nonzero * 3) * 10;
-    }
     // EIP-3860 (Shanghai): 2 gas per 32-byte word of init code on
     // creation txs. Pre-Shanghai (Berlin/London/Paris) doesn't
     // charge this — applying it over-charges 14 gas on a 222-byte
@@ -51,6 +48,13 @@ int64_t compute_intrinsic_gas(const Transactions::View& tx,
 
     // EIP-2930 access list. Typed txs always carry one (possibly
     // empty, i.e. just `0xc0`); legacy txs don't.
+    // Amsterdam: EIP-8038's per-item access cost (COLD_* − WARM_ACCESS:
+    // 2900 / 2000) plus EIP-7981's 64 gas per access-list byte (20 per
+    // address, 32 per key).
+    const int64_t al_address_cost = amsterdam ? 2900 + 20 * 64 : 2400;
+    const int64_t al_key_cost     = amsterdam ? 2000 + 32 * 64 : 1900;
+    int64_t al_addresses = 0;
+    int64_t al_keys      = 0;
     if (tx.type() != TxType::Legacy) {
         const auto outer = rlp::decode_item(tx.access_list_rlp());
         if (outer.kind != rlp::ItemKind::List) {
@@ -65,7 +69,7 @@ int64_t compute_intrinsic_gas(const Transactions::View& tx,
             rlp::ListIter eit{entry.payload};
             if (!eit.has_next()) fatal("access_list entry missing address");
             (void)eit.next();
-            gas += 2400;  // ACCESS_LIST_ADDRESS_COST
+            ++al_addresses;
             if (!eit.has_next()) fatal("access_list entry missing keys");
             const auto keys = eit.next();
             if (keys.kind != rlp::ItemKind::List) {
@@ -74,9 +78,22 @@ int64_t compute_intrinsic_gas(const Transactions::View& tx,
             rlp::ListIter kit{keys.payload};
             while (kit.has_next()) {
                 (void)kit.next();
-                gas += 1900;  // ACCESS_LIST_STORAGE_KEY_COST
+                ++al_keys;
             }
         }
+    }
+
+    gas += al_addresses * al_address_cost + al_keys * al_key_cost;
+
+    // EIP-7623 calldata floor: 10 per token (zero byte 1, non-zero 4).
+    // Amsterdam: EIP-7976 makes every byte 4 tokens at 16 (64 gas per
+    // byte), and EIP-7981 adds the access-list bytes at the same rate.
+    if (calldata_floor != nullptr) {
+        *calldata_floor =
+            amsterdam
+                ? base + 64 * (static_cast<int64_t>(data.size()) +
+                               20 * al_addresses + 32 * al_keys)
+                : base + (static_cast<int64_t>(data.size()) + nonzero * 3) * 10;
     }
 
     // EIP-7702 authorization list. View already counted entries while
