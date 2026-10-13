@@ -6,7 +6,7 @@
 //! stable across alloy major versions; only the typed wrappers
 //! diverge).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use alloy_consensus::BlockHeader as _;
 use alloy_eips::eip2718::{Decodable2718, Encodable2718};
@@ -22,8 +22,8 @@ use serde_json::Value;
 use crate::executor::ExecutedBlock;
 use crate::fixture::{Account as EestAccount, BlockchainTest, Header as EestHeader};
 use crate::manifest::{
-    AccountPrestate, ExecutionWitness as ManifestExecutionWitness, ManifestSources, Prestate,
-    PrestateDiff,
+    AccountPrestate, ExecutionWitness as ManifestExecutionWitness,
+    ManifestSources, Prestate, PrestateDiff,
 };
 use reth_chainspec::{ChainSpec, EthChainSpec, EthereumHardforks};
 use std::sync::Arc;
@@ -447,6 +447,8 @@ fn reth_block_to_value(rb: &RecoveredBlock<RethBlock>) -> Value {
     if let Some(v) = header.excess_blob_gas() { m.insert("excessBlobGas".into(), json!(u64_hex(v))); }
     if let Some(v) = header.parent_beacon_block_root() { m.insert("parentBeaconBlockRoot".into(), json!(hex(&v.0))); }
     if let Some(v) = header.requests_hash() { m.insert("requestsHash".into(), json!(hex(&v.0))); }
+    if let Some(v) = header.block_access_list_hash() { m.insert("blockAccessListHash".into(), json!(hex(&v.0))); }
+    if let Some(v) = header.slot_number() { m.insert("slotNumber".into(), json!(u64_hex(v))); }
     if let Some(wds) = rb.body().withdrawals.as_ref() {
         m.insert("withdrawals".into(), serde_json::to_value(wds).unwrap_or(json!([])));
     }
@@ -482,6 +484,8 @@ fn eest_header_to_block_value(h: &EestHeader, txs: &[Value]) -> Value {
     if let Some(v) = h.excess_blob_gas { m.insert("excessBlobGas".into(), json!(u64_hex(v.to::<u64>()))); }
     if let Some(v) = h.parent_beacon_block_root { m.insert("parentBeaconBlockRoot".into(), json!(hex(&v.0))); }
     if let Some(v) = h.requests_hash { m.insert("requestsHash".into(), json!(hex(&v.0))); }
+    if let Some(v) = h.block_access_list_hash { m.insert("blockAccessListHash".into(), json!(hex(&v.0))); }
+    if let Some(v) = h.slot_number { m.insert("slotNumber".into(), json!(u64_hex(v.to::<u64>()))); }
     block
 }
 
@@ -542,3 +546,4 @@ fn u64_hex(v: u64) -> String {
 fn u256_hex(v: &U256) -> String {
     format!("0x{:x}", v)
 }
+

@@ -54,9 +54,26 @@ sized to a multiple of 8, so the next section starts 8-byte aligned.
 | Offset | Size | Field     | Description |
 |-------:|-----:|-----------|-------------|
 |      0 |    4 | `magic`   | ASCII `"ZEG0"` (`0x3047455A` little-endian, see [`binary_format.hpp`](cpp-guest/include/zeg/binary_format.hpp)) |
-|      4 |    4 | `version` | `u32` little-endian format version (`kVersion`, currently `7`). Also keeps the cursor 8-byte aligned for everything that follows |
+|      4 |    4 | `version` | `u32` little-endian format version (`kVersion`, currently `12`). Also keeps the cursor 8-byte aligned for everything that follows |
 
 The guest fatals on magic mismatch or on a `version` other than `kVersion`.
+Version `12` made every key the block loads a StateRoot leaf: an account or
+slot that doesn't exist is an empty-valued leaf placed where it would sit, so
+the parent-root check proves its absence and the guest halts on any load of
+a key without a row (no row is appended at run time). Sorted-order links
+replaced the BalHint section: the StateRoot header gained
+`firstSortedAccount`, a state `Leaf` `nextSortedAccount` +
+`firstSortedStorage`, a storage `Leaf` `nextSortedStorage` (see Section 7).
+Version `11` (EIP-7928) dropped `block_access_list_hash` from ConsensusInfo
+(prefix 408 → 376 B, `slot_number` moves to 368) — the guest builds the
+block-level access list and computes the hash itself — and appended the
+BalHint section (Section 8).
+Version `10` added the Amsterdam header fields (`block_access_list_hash`,
+`slot_number`) to ConsensusInfo (prefix 368 → 408 B) and to the
+PreviousBlocks records (728 → 768 B).
+Version `9` compacted the StateRoot branch encoding (see Section 7).
+Version `8` added `target_blob_gas_per_block` / `max_blob_gas_per_block` to
+ConsensusInfo; version `5` added `blob_base_fee_update_fraction`.
 Version `4` made the StateRoot trie hints **witness-only**: the encoder
 transcribes the pre-state MPT straight from the execution witness and no
 longer pre-emits leaves for keys created during the block — the guest
@@ -77,7 +94,7 @@ Per-block consensus-layer inputs for the **current** block (the one
 being executed). Schema at
 [`consensus_info.hpp`](cpp-guest/include/zeg/consensus_info.hpp).
 
-### Fixed 344-byte header prefix
+### Fixed 376-byte header prefix
 
 | Offset | Size | Field                       | Type / encoding         |
 |-------:|-----:|-----------------------------|-------------------------|
@@ -98,8 +115,15 @@ being executed). Schema at
 |    264 |   32 | `difficulty`                | `uint256be` — pre-Merge PoW value; `0` post-Merge |
 |    296 |    8 | `nonce`                     | 8-byte fixed-width — pre-Merge PoW nonce; `0` post-Merge |
 |    304 |   32 | `ommers_hash`               | `bytes32` — `kEmptyOmmersHash` post-Merge |
-|    336 |    8 | `fork_id`                   | `u64` — hardfork identity (see [`zeg/fork.hpp`](cpp-guest/include/zeg/fork.hpp)). The guest derives both the EVM revision and the header field count from it. `0` (= Unknown) ⇒ Prague (mainnet default). Distinguishes Osaka from Prague, which share a header layout |
-|    344 |      | **end of fixed prefix**     |                         |
+|    336 |    8 | `fork_id`                   | `u64` — hardfork identity (see [`zeg/fork.hpp`](cpp-guest/include/zeg/fork.hpp)). The guest derives both the EVM revision and the header field count from it. `0` (= Unknown) ⇒ Prague (mainnet default). Distinguishes Osaka from Prague, which share a header layout. Values: 1 Berlin, 2 London, 3 Paris, 4 Shanghai, 5 Cancun, 6 Prague, 7 Osaka, 8 Amsterdam |
+|    344 |    8 | `blob_base_fee_update_fraction` | `u64` — BLOB_BASE_FEE_UPDATE_FRACTION of the block's blob schedule; `0` ⇒ current-mainnet default |
+|    352 |    8 | `target_blob_gas_per_block` | `u64` — TARGET_BLOB_GAS_PER_BLOCK of the block's blob schedule (`0` pre-Cancun) |
+|    360 |    8 | `max_blob_gas_per_block`    | `u64` — MAX_BLOB_GAS_PER_BLOCK of the block's blob schedule (`0` pre-Cancun) |
+|    368 |    8 | `slot_number`               | `u64` (EIP-7843; zero pre-Amsterdam) |
+|    376 |      | **end of fixed prefix**     |                         |
+
+The header's `block_access_list_hash` (EIP-7928) is not an input: the guest
+builds the block-level access list during execution and hashes it.
 
 `chain_id` is **not** in the stream. It is compile-time pinned to `1`
 (Ethereum mainnet) in [`zeg/config.hpp`](cpp-guest/include/zeg/config.hpp).
@@ -198,13 +222,13 @@ BLOCKHASH). Schema at
 | Offset | Size            | Field   |
 |-------:|----------------:|---------|
 |      0 |               8 | `count` |
-|      8 | `count` × 728   | records |
+|      8 | `count` × 768   | records |
 
 Index 0 = the parent, index `i` = the i-th ancestor. The guest
-recomputes each block's hash from canonical Pectra-era header RLP and
+recomputes each block's hash from the canonical header RLP of its fork and
 verifies the `parent_hash` chain.
 
-### PreviousBlocks record (728 bytes)
+### PreviousBlocks record (768 bytes)
 
 All fields are at 8-byte-aligned offsets:
 
@@ -213,7 +237,7 @@ All fields are at 8-byte-aligned offsets:
 |      0 |   32 | `parent_hash`               | `bytes32` (block hash of the parent) |
 |     32 |   32 | `ommers_hash`               | `bytes32` |
 |     64 |   20 | `coinbase`                  | address  |
-|     84 |    4 | pad                         | zero     |
+|     84 |    4 | `field_count`               | `u32` — header fields to RLP-encode (15/16/17/20/21/23); `0` ⇒ 21 |
 |     88 |   32 | `state_root`                | `bytes32` |
 |    120 |   32 | `transactions_root`         | `bytes32` |
 |    152 |   32 | `receipts_root`             | `bytes32` |
@@ -233,7 +257,9 @@ All fields are at 8-byte-aligned offsets:
 |    656 |    8 | `excess_blob_gas`           | `u64` |
 |    664 |   32 | `parent_beacon_block_root`  | `bytes32` |
 |    696 |   32 | `requests_hash`             | `bytes32` |
-|    728 |      | end of record               |          |
+|    728 |   32 | `block_access_list_hash`    | `bytes32` (zero pre-Amsterdam) |
+|    760 |    8 | `slot_number`               | `u64` (zero pre-Amsterdam) |
+|    768 |      | end of record               |          |
 
 ## Section 7 — `StateRoot` trie hints
 
@@ -243,13 +269,14 @@ against original values, post-execution against modified values). As of
 version `3` this section is also where the guest builds its Accounts and
 Storages tables — one row per keyed leaf.
 
-### Header (3 × `u64`)
+### Header (4 × `u64`)
 
 | Offset | Field              | Description |
 |-------:|--------------------|-------------|
 |      0 | `numberOfNodes`    | Node count. Up to v8 the encoder emitted `stream_len / 8`, sound because every node cost at least one 8-byte opcode word; a v9 tagged `Empty` child costs zero bytes, so the encoder now counts nodes explicitly. The guest uses it as a cache-overflow ceiling, so any value ≥ the true count is safe. |
 |      8 | `numberOfAccounts` | Exact number of state-trie leaves = Accounts table size. Pre-sizes the table. |
 |     16 | `numberOfStorages` | Exact number of storage-trie leaves = Storages table size. Pre-sizes the table. |
+|     24 | `firstSortedAccount` | Row index of the account with the lowest address, heading the sorted-order links (`u64::MAX` if there are no accounts). v12. |
 
 The opcode stream follows the header. The format is an opcode-tagged
 depth-first walk. Each opcode is a `u64` (so consumed reads stay 8-byte
@@ -260,9 +287,9 @@ aligned), followed by an opcode-specific payload:
 |            0 | `Empty`         | — (zero payload) |
 |            1 | `Hash`          | 32 B `bytes32` (a subtree's already-known root hash). Stands in for an UNTOUCHED subtree only — one with no table rows under it — so it appends no rows and leaves the guest's leaf counters unchanged. |
 |            2 | `ExtensionHash` | `u64 nibbles_count` + the nibbles packed **two per byte** (high nibble first), zero-padded to the next 8-byte boundary + 32 B `bytes32` |
-|            3 | `Leaf`          | **v7 (hybrid: suffix nibbles + plaintext key):** the leaf's own remaining path nibbles AND its plaintext key AND block-start values. Payload begins with `suffix_len` (`u64`) then the suffix nibbles packed **two per byte** (high nibble first), zero-padded to the next 8-byte boundary; the guest reconstructs the 32-byte trie key hash as `keccak(addr)`/`keccak(slot)` = `pack(walked_prefix ++ suffix)` (must total 64 nibbles) with NO preimage — so it stays stateless. The plaintext key then follows so the guest can key its runtime tables by plaintext (fast hot path), and the guest asserts `keccak(plaintext) == pack(walked ++ suffix)`. **State leaf**: suffix-prefix, then `address` (20 B) + 4 B zero pad, then `balance` (`uint256be`, 32 B) + `nonce` (`u64`) + `code_hash` (32 B); then the nested storage subtree follows as a recursive node. **Storage leaf** (under a state leaf's subtree): suffix-prefix, then `position` (32 B) + `value` (32 B) (the owning address comes from the enclosing account leaf). The guest appends one Accounts/Storages row per leaf, keyed by plaintext, indexed by trie-walk order. Leaves whose preimage is missing from `witness.keys` are emitted as `PhantomLeaf` instead. |
+|            3 | `Leaf`          | **v7 (hybrid: suffix nibbles + plaintext key):** the leaf's own remaining path nibbles AND its plaintext key AND block-start values. Payload begins with `suffix_len` (`u64`) then the suffix nibbles packed **two per byte** (high nibble first), zero-padded to the next 8-byte boundary; the guest reconstructs the 32-byte trie key hash as `keccak(addr)`/`keccak(slot)` = `pack(walked_prefix ++ suffix)` (must total 64 nibbles) with NO preimage — so it stays stateless. The plaintext key then follows so the guest can key its runtime tables by plaintext (fast hot path), and the guest asserts `keccak(plaintext) == pack(walked ++ suffix)`. **State leaf**: suffix-prefix, then `address` (20 B) + 4 B zero pad, then `balance` (`uint256be`, 32 B) + `nonce` (`u64`) + `code_hash` (32 B) + `nextSortedAccount` (`u64`) + `firstSortedStorage` (`u64`); then the nested storage subtree follows as a recursive node. **Storage leaf** (under a state leaf's subtree): suffix-prefix, then `position` (32 B) + `value` (32 B) + `nextSortedStorage` (`u64`) (the owning address comes from the enclosing account leaf). The links are row indices (see *Sorted-order links* below). The guest appends one Accounts/Storages row per leaf, keyed by plaintext, indexed by trie-walk order. Leaves whose preimage is missing from `witness.keys` are emitted as `PhantomLeaf` instead. |
 |            4 | `Branch`        | `u64 child_tags` + the children's payloads in nibble order. `child_tags` holds **two bits per child** at bit `2k`: `0` = `Empty`, `1` = `Hash`, `2` = a full node. A tagged `Empty` child contributes **no bytes at all** and a tagged `Hash` child only its 32, because neither carries an opcode word — a tag `2` child is a complete node, opcode included. Children reached outside a branch (the trie root, and each account leaf's storage subtree) still carry their own opcode word. |
-|            5 | `PhantomLeaf`   | `u64 nibbles_count` + the remaining path nibbles packed **two per byte** (high nibble first, zero-padded to 8 B) + `u64 value_len` + `value_len` bytes + zero pad to the next 8-byte boundary. A keyless sibling leaf (its preimage is missing from `witness.keys`), so it gets no table row — it contributes its hash but is never indexed. **Pre-funded exception:** a keyless *state* phantom with a non-zero balance is a CREATE2 target funded in a prior block; the guest records `keccak(addr) → balance` so that if the block CREATEs a contract there, `ensure_account` seeds the new row from that balance (Yellow Paper: CREATE preserves any pre-existing balance) and the new-root pass supersedes the stale phantom leaf. |
+|            5 | `PhantomLeaf`   | `u64 nibbles_count` + the remaining path nibbles packed **two per byte** (high nibble first, zero-padded to 8 B) + `u64 value_len` + `value_len` bytes + zero pad to the next 8-byte boundary. A keyless sibling leaf (no preimage), so it gets no table row — it contributes its hash but is never indexed. Every key the block loads has a preimage, so a phantom is only ever a sibling the block doesn't touch. |
 
 The walk consumes exactly as many bytes as the trie requires; the
 trailing byte of the last payload is also the last byte of the file
@@ -280,14 +307,32 @@ two passes differ:
   trusted parent anchor by the caller; a missing or misplaced row makes
   that match fail, so a complete, correctly-placed witness is required.
 * **Post-execution (new-root) pass** — re-walks against the post-block
-  values to recompute the root, and **inserts keys created during the
-  block**. As of v4 the encoder is witness-only and does not pre-emit
-  leaves for created keys; the guest navigates `keccak256(key)` in the node
-  array and places the leaf at an `Empty` slot or splits a colliding sibling
-  into a fresh branch. Deletion is not structural — a zeroed account/slot
-  becomes empty and the branch folds. (A child referencing the empty-trie
-  root is emitted as `Op::Empty`, so a first write into empty storage is an
-  insert, not a fatal.)
+  values to recompute the root. Nothing is inserted: every key the block
+  loaded, including one created during the block, is already a leaf. A leaf
+  that became empty becomes `Empty` and its branch folds; an empty leaf that
+  became non-empty is hashed in place.
+
+**Keys that don't exist (v12).** Every account and slot the block loads is a
+leaf, and the guest halts on a load of any key without a row (its
+block-start value would be unproven). A key that doesn't exist is emitted as
+a `Leaf` with empty values — account: balance 0, nonce 0, empty code hash,
+`Empty` storage subtree; slot: value 0 — placed where it would sit in the
+trie: in an `Empty` child, or, when its path diverges from an existing leaf,
+as a sibling under a new branch (with a single-child branch per shared
+nibble). An empty leaf hashes as `Empty` and the branches fold back, so the
+old root is unchanged and the parent-root check proves the absence. Warming
+a key (EIP-2929 / EIP-2930) is not a load and needs no row.
+
+**Sorted-order links (v12).** The links order the rows for the EIP-7928
+block-level access list: `firstSortedAccount` → `nextSortedAccount` visits
+the accounts by increasing address, and each account's
+`firstSortedStorage` → `nextSortedStorage` its slots by increasing position;
+`u64::MAX` ends a list. Indices are the walk-order row indices. At the end
+of an Amsterdam block the guest walks them, checking that addresses (and
+each account's positions) strictly increase, that every slot belongs to its
+account, and that every row is visited — so the walk is exactly the rows,
+in order — and encodes the accessed ones. Pre-Amsterdam inputs carry the
+links too; the guest doesn't read them.
 
 Read-only-ness is **derived dynamically**, not declared on the wire:
 a leaf is read-only iff its original value equals its current value; a

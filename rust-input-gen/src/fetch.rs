@@ -51,6 +51,20 @@ pub(crate) async fn fetch_offline_sources_online(
         "fetched execution witness",
     );
 
+    // Every account and slot the block accesses must become a leaf in the
+    // StateRoot section (an empty one if it doesn't exist), so the guest can
+    // halt on anything else. reth's `witness.keys` lists each account that
+    // exists after the block followed by its slots, but drops accessed
+    // accounts that never existed; the prestate tracer lists every account
+    // and slot the transactions touch, including those. The witness already
+    // carries their absence proofs.
+    let accessed = accessed_keys(client, block_hash, &witness, &current).await?;
+    info!(
+        accounts = accessed.len(),
+        slots = accessed.values().map(|s| s.len()).sum::<usize>(),
+        "collected accessed keys",
+    );
+
     // Parent header comes from the WITNESS, not a separate RPC: reth's witness
     // carries every ancestor header the block touched (parent + deeper
     // BLOCKHASH targets) in `witness.headers`, and its state trie root IS the
@@ -60,20 +74,25 @@ pub(crate) async fn fetch_offline_sources_online(
     let parent = parent_from_witness(&witness, parent_hash)?;
     info!(parent_state_root = %parent.header.state_root, "recovered parent header from witness");
 
-    // Fork schedule is COMPILED IN (mainnet), not fetched — reth's client does
+    // Fork schedule is COMPILED IN per chain, not fetched — reth's client does
     // the same (baked chain config selected by chain id), so we drop the
-    // per-block `eth_config` RPC. This online path is mainnet-replay only (EEST
-    // uses the manifest path, which carries its own fork_id/blob fraction), so
-    // the mainnet constants below are authoritative. `is_osaka` and the blob
+    // per-block `eth_config` RPC (EEST uses the manifest path, which carries
+    // its own fork_id/blob fraction). `is_osaka` and the blob
     // BASE_FEE_UPDATE_FRACTION are resolved from the block timestamp against
-    // that schedule. NB: update `mainnet_fork_params` at each mainnet fork/BPO.
+    // the node's chain's schedule. NB: update `fork_params` at each fork/BPO.
+    let chain_id = client.chain_id().await?;
     let (
         is_osaka,
         blob_base_fee_update_fraction,
         target_blob_gas_per_block,
         max_blob_gas_per_block,
-    ) = mainnet_fork_params(current.header.timestamp);
-    if is_osaka {
+    ) = fork_params(chain_id, current.header.timestamp)?;
+    if current.header.block_access_list_hash.is_some() {
+        info!(
+            timestamp = current.header.timestamp,
+            "block runs under Amsterdam"
+        );
+    } else if is_osaka {
         info!(
             timestamp = current.header.timestamp,
             "block runs under Osaka"
@@ -81,7 +100,8 @@ pub(crate) async fn fetch_offline_sources_online(
     }
     info!(
         blob_base_fee_update_fraction,
-        "resolved blob base-fee update fraction (compiled-in mainnet schedule)"
+        chain_id,
+        "resolved blob base-fee update fraction (compiled-in schedule)"
     );
 
     {
@@ -136,50 +156,114 @@ pub(crate) async fn fetch_offline_sources_online(
         blob_base_fee_update_fraction,
         target_blob_gas_per_block,
         max_blob_gas_per_block,
+        accessed,
     })
 }
 
-/// Compiled-in MAINNET fork schedule — returns `(is_osaka, blob
-/// BASE_FEE_UPDATE_FRACTION, TARGET_BLOB_GAS_PER_BLOCK, MAX_BLOB_GAS_PER_BLOCK)`
-/// for a block at `timestamp`. Mirrors reth's baked chain config: the online
-/// replay path is mainnet-only, so we don't fetch `eth_config`. Entries are
-/// (fork activation unix time, base_fee_update_fraction, target_blob_count,
-/// max_blob_count), newest first; pick the newest whose activation <= timestamp.
+/// The accounts and slots the block accesses: the prestate tracer's accounts
+/// and slots, reth's witness keys (an address followed by its slots), and the
+/// coinbase and withdrawal recipients the block credits outside any tx.
+async fn accessed_keys(
+    client: &rpc::Client,
+    block_hash: B256,
+    witness: &rpc::ExecutionWitness,
+    current: &alloy::rpc::types::Block,
+) -> Result<crate::state_root::Accessed> {
+    use alloy::primitives::Address;
+
+    let mut accessed = crate::state_root::Accessed::new();
+    for (addr, acc) in client.prestate_by_hash(block_hash).await? {
+        accessed.entry(addr).or_default().extend(acc.storage.keys().copied());
+    }
+    let mut owner: Option<Address> = None;
+    for key in &witness.keys {
+        match key.len() {
+            20 => {
+                let addr = Address::from_slice(key);
+                accessed.entry(addr).or_default();
+                owner = Some(addr);
+            }
+            32 => {
+                let Some(addr) = owner else {
+                    anyhow::bail!("witness.keys: slot before any address");
+                };
+                accessed.entry(addr).or_default().insert(B256::from_slice(key));
+            }
+            n => anyhow::bail!("witness.keys: unexpected key length {n}"),
+        }
+    }
+    accessed.entry(current.header.beneficiary).or_default();
+    for wd in current.withdrawals.iter().flat_map(|w| w.iter()) {
+        accessed.entry(wd.address).or_default();
+    }
+    Ok(accessed)
+}
+
+/// Compiled-in fork schedule of the chain `chain_id` — returns `(is_osaka,
+/// blob BASE_FEE_UPDATE_FRACTION, TARGET_BLOB_GAS_PER_BLOCK,
+/// MAX_BLOB_GAS_PER_BLOCK)` for a block at `timestamp`. Mirrors reth's baked
+/// chain config. Entries are (fork activation unix time,
+/// base_fee_update_fraction, target_blob_count, max_blob_count), newest
+/// first; pick the newest whose activation <= timestamp.
 ///
-/// UPDATE THIS at each mainnet fork / blob-schedule (BPO) change.
+/// UPDATE THIS at each fork / blob-schedule (BPO) change.
+///
+/// Mainnet (chain id 1):
 /// - BPO2   : 2026-01-07 (activationTime 1767747671), fraction 11684671, target 14, max 21
 /// - BPO1   : 2025-12-09 (1765290071),                fraction 8346193,  target 10, max 15
 /// - Prague : 2025-05-07 (1746612311),                fraction 5007716,  target 6,  max 9
 /// - Cancun : 2024-03-13 (1710338135),                fraction 3338477,  target 3,  max 6
 ///
+/// Sepolia (chain id 11155111). The Amsterdam row is the node's `eth_config`
+/// (`current`); the earlier rows are the published Sepolia schedule. This
+/// path only replays blocks within the node's recent-state window, so only
+/// the newest row is exercised.
+/// - Amsterdam : 1791294816, fraction 11684671, target 14, max 21
+/// - BPO2      : 1761607008, fraction 11684671, target 14, max 21
+/// - BPO1      : 1761017184, fraction 8346193,  target 10, max 15
+/// - Osaka     : 1760427360 (blob schedule unchanged from Prague)
+/// - Prague    : 1741159776, fraction 5007716,  target 6,  max 9
+/// - Cancun    : 1706655072, fraction 3338477,  target 3,  max 6
+///
 /// `is_osaka` (EVM-revision dispatch) is tracked separately from the blob
-/// schedule rows above — Osaka/Fusaka itself doesn't change the blob
-/// target/fraction (only the later BPO forks do); it's approximated here to
-/// BPO2's activation for simplicity, which is immaterial in practice since
-/// this path only ever replays blocks within the node's ~32-block recent
-/// window (see CLAUDE.md), long past both Osaka's and BPO1's activation.
-fn mainnet_fork_params(timestamp: u64) -> (bool, u64, u64, u64) {
-    const OSAKA_ACTIVATION: u64 = 1767747671;
+/// schedule rows — Osaka itself doesn't change the blob target/fraction (only
+/// the later BPO forks do). On mainnet it's approximated to BPO2's activation,
+/// which is immaterial in practice since this path only ever replays blocks
+/// within the node's ~32-block recent window (see CLAUDE.md). Amsterdam needs
+/// no flag: the guest detects it from the header's block_access_list_hash.
+fn fork_params(chain_id: u64, timestamp: u64) -> Result<(bool, u64, u64, u64)> {
     const GAS_PER_BLOB: u64 = 131_072;
-    // (activation_time, base_fee_update_fraction, target_blob_count, max_blob_count), newest first.
-    const SCHEDULE: &[(u64, u64, u64, u64)] = &[
-        (1767747671, 11684671, 14, 21), // BPO2
-        (1765290071, 8346193, 10, 15),  // BPO1
-        (1746612311, 5007716, 6, 9),    // Prague
-        (1710338135, 3338477, 3, 6),    // Cancun
-    ];
-    let is_osaka = timestamp >= OSAKA_ACTIVATION;
-    let (fraction, target_blobs, max_blobs) = SCHEDULE
+    // (osaka_activation, schedule) per chain; schedule rows are
+    // (activation_time, base_fee_update_fraction, target_blob_count, max_blob_count).
+    let (osaka_activation, schedule): (u64, &[(u64, u64, u64, u64)]) = match chain_id {
+        1 => (
+            1767747671,
+            &[
+                (1767747671, 11684671, 14, 21), // BPO2
+                (1765290071, 8346193, 10, 15),  // BPO1
+                (1746612311, 5007716, 6, 9),    // Prague
+                (1710338135, 3338477, 3, 6),    // Cancun
+            ],
+        ),
+        11155111 => (
+            1760427360,
+            &[
+                (1791294816, 11684671, 14, 21), // Amsterdam
+                (1761607008, 11684671, 14, 21), // BPO2
+                (1761017184, 8346193, 10, 15),  // BPO1
+                (1741159776, 5007716, 6, 9),    // Prague
+                (1706655072, 3338477, 3, 6),    // Cancun
+            ],
+        ),
+        id => anyhow::bail!("no compiled-in fork schedule for chain id {id}"),
+    };
+    let is_osaka = timestamp >= osaka_activation;
+    let (fraction, target_blobs, max_blobs) = schedule
         .iter()
         .find(|(act, _, _, _)| timestamp >= *act)
         .map(|(_, f, t, m)| (*f, *t, *m))
         .unwrap_or((0, 0, 0)); // pre-Cancun: no blob schedule → guest default
-    (
-        is_osaka,
-        fraction,
-        target_blobs * GAS_PER_BLOB,
-        max_blobs * GAS_PER_BLOB,
-    )
+    Ok((is_osaka, fraction, target_blobs * GAS_PER_BLOB, max_blobs * GAS_PER_BLOB))
 }
 
 /// Recover the parent `Block` from `witness.headers` — the RLP header whose

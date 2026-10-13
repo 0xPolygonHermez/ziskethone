@@ -26,7 +26,9 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
+#include <memory>
 #include <cstdint>
 #include <cstring>
 #include <span>
@@ -39,9 +41,10 @@
 #include "zeg/evmc2.h"          // backend-agnostic VM interface (prepare/execute2)
 
 #include "zeg/accounts.hpp"
+#include "zeg/block_access_list.hpp"
 #include "zeg/consensus_info.hpp"
 #include "zeg/contracts.hpp"
-#include "zeg/dynamic_storage.hpp"
+#include "zeg/warm_keys.hpp"
 #include "zeg/journal.hpp"
 #include "zeg/previous_blocks.hpp"
 #include "zeg/receipt.hpp"           // LogEntry, TxReceipt
@@ -94,6 +97,7 @@ public:
                                const evmc::bytes32& key,
                                const evmc::bytes32& value) noexcept override;
     evmc::uint256be get_balance(const evmc::address& addr) const noexcept override;
+    uint64_t get_nonce(const evmc::address& addr) const noexcept override;
     size_t get_code_size(const evmc::address& addr) const noexcept override;
     evmc::bytes32 get_code_hash(const evmc::address& addr) const noexcept override;
     size_t copy_code(const evmc::address& addr,
@@ -172,9 +176,12 @@ public:
     // (no txs) yields the well-known empty-trie root.
     const evmc::bytes32& receipts_root() const noexcept { return receipts_root_; }
 
-    // Cumulative gas used across every tx processed in this block —
-    // matches the block header's `gasUsed` field.
-    uint64_t gas_used() const noexcept { return cumulative_gas_used_; }
+    // The block header's `gasUsed`: the larger of the block's regular
+    // and state gas (EIP-8037, Amsterdam). Before Amsterdam the state
+    // dimension stays 0 and this is the sum of the txs' gas used.
+    uint64_t gas_used() const noexcept {
+        return std::max(block_regular_gas_used_, block_state_gas_used_);
+    }
 
     // Canonical withdrawals trie root (EIP-4895). Empty list yields the
     // well-known empty-trie root.
@@ -195,6 +202,8 @@ public:
     //   type 0x00 → deposit requests        (EIP-6110)
     //   type 0x01 → withdrawal requests     (EIP-7002)
     //   type 0x02 → consolidation requests  (EIP-7251)
+    //   type 0x03 → builder deposit requests (EIP-8282)
+    //   type 0x04 → builder exit requests    (EIP-8282)
     // Empty queues add no entry.
     std::span<const std::vector<uint8_t>> requests() const noexcept { return requests_; }
 
@@ -202,6 +211,10 @@ public:
     // ...) over the type-prefixed request blobs in `requests_`. Empty
     // list collapses to sha256("") per the EIP.
     const evmc::bytes32& requests_hash() const noexcept { return requests_hash_; }
+
+    // EIP-7928 (Amsterdam): the hash of the BAL built while executing,
+    // available after `execute_block` (zero before Amsterdam).
+    const evmc::bytes32& block_access_list_hash() const noexcept { return bal_hash_; }
 
     // ----- block execution driver -----
     //
@@ -220,16 +233,33 @@ public:
 private:
     // ===== Private methods =====
 
-    // Return the Accounts index of `addr`, appending an empty (non-existent)
-    // row into the table's slack if the witness didn't include it (a key
-    // created/credited this block). Sound: an absent address has empty
-    // block-state (a non-empty one would fail the parent anchor).
-    size_t ensure_account(const evmc::address& addr) noexcept;
+    // The Accounts row of `addr`. Every account the block loads is a row —
+    // the input places an empty leaf for one that doesn't exist, which the
+    // parent-root check proves absent — so a load of an address without a
+    // row halts: its block-start value is unproven.
+    size_t account_row(const evmc::address& addr) const noexcept;
+    // The Storages row of (addr, key); halts if it has none (same reason).
+    size_t storage_row(const evmc::address& addr, const evmc::bytes32& key) const noexcept;
+    // The row of `addr` for a pending BAL access, or kMissingRow.
+    size_t pending_row(const evmc::address& addr) const noexcept;
 
-    // Commit surviving fresh-account slots from `dynamic_storage_` into the
-    // static `Storages` table at tx-end, then clear it. Called once per tx
-    // after `apply_pending_destructs`.
-    void commit_dynamic_storage() noexcept;
+    // EIP-7928: put `addr` in the BAL (Amsterdam only) — for loads that
+    // don't go through the touching Accounts readers or a write, e.g. a
+    // precompile CALL or a system-call target without code.
+    void bal_load(const evmc::address& addr) noexcept;
+    // EIP-7928: commit the account of the last `access_account` as loaded
+    // (a later host callback in the frame, or the frame ending normally,
+    // means its gas was paid).
+    void bal_commit_pending() const noexcept;
+    // Run one EVM frame; settles a pending BAL access the frame ended on.
+    evmc_result run_frame(const evmc_message* msg, const uint8_t* code,
+                          size_t code_size, evmc2_pre_execution* analysis) noexcept;
+    // EIP-7928: the BAL slot record for (addr, key), marked accessed.
+    BlockAccessList::Slot& bal_slot(size_t storage_idx) noexcept;
+    // EIP-7928: walk the rows in sorted order (the input's links, checked to
+    // cover every row exactly once), close every open period, encode the
+    // accessed ones and hash. End of block.
+    evmc::bytes32 build_block_access_list_hash() noexcept;
 
     // Move `value` ether from `from` to `to`, logging both pre-write
     // balances to the journal first so a later rollback restores them.
@@ -237,6 +267,12 @@ private:
     void transfer_value(const evmc::address& from,
                         const evmc::address& to,
                         const evmc::uint256be& value) noexcept;
+
+    // EIP-7708 (Amsterdam): log a non-zero ETH move between two distinct
+    // accounts. A no-op before Amsterdam. Rolled back with the frame.
+    void emit_transfer_log(const evmc::address& from,
+                           const evmc::address& to,
+                           const evmc::uint256be& value) noexcept;
 
     // CREATE-family handler used by `call()` for EVMC_CREATE /
     // EVMC_CREATE2 / EVMC_EOFCREATE. Owns the new-address derivation,
@@ -261,24 +297,15 @@ private:
 
     // ----- CREATE-family sub-helpers (used by call_create) -----
 
-    // Derive the new contract address per the kind on `msg`. CREATE
-    // uses sender + sender_nonce; CREATE2 / EOFCREATE use sender +
-    // salt + keccak(init).
-    evmc::address derive_create_address(const evmc_message& msg,
-                                        uint64_t            sender_nonce_pre,
-                                        const uint8_t*      init_code,
-                                        std::size_t         init_size) noexcept;
-
     // EIP-684 collision check + initialize the new account
     // (nonce = 1, value transfer). Returns false on collision. Both
     // mutations are journaled.
     bool init_create_account(const evmc::address& new_addr,
                              const evmc_message&  msg) noexcept;
 
-    // EIP-7610: true iff `addr` has any non-zero storage slot (static
-    // witness table or the per-tx dynamic scratchpad). An address with
-    // nonce==0 and empty code but non-empty storage (a leftover
-    // "phantom" leaf) must still block CREATE/CREATE2.
+    // EIP-7610: true iff `addr` has any non-zero storage slot. An address
+    // with nonce==0 and empty code but non-empty storage must still block
+    // CREATE/CREATE2.
     bool address_has_storage(const evmc::address& addr) const noexcept;
 
     // EIP-7610: true iff row `idx` had a non-empty storage trie at block
@@ -312,18 +339,6 @@ private:
     // don't need their own journal entries — they're terminal.
     void apply_pending_destructs() noexcept;
 
-    // True iff `addr` was CREATEd in the current tx (per
-    // `created_this_tx_idx_`). Routing predicate for the dynamic
-    // storage path: SSTORE/SLOAD/access_storage on such addresses go
-    // through `dynamic_storage_` rather than the static `storages_`
-    // table, since reth's witness may not contain their slots.
-    bool is_fresh_account(const evmc::address& addr) const noexcept {
-        if (!accounts_.contains(addr)) return false;
-        const size_t idx = accounts_.index_of(addr);
-        return created_this_tx_idx_.count(idx) != 0
-            || delegated_this_tx_idx_.count(idx) != 0;
-    }
-
     // Map ConsensusInfo.fork_id to an `evmc_revision` so the EVM
     // dispatch (exec(), is_precompile, call_precompile) runs at the
     // correct fork. cpp-guest historically hard-coded EVMC_OSAKA
@@ -354,6 +369,17 @@ private:
     bool is_osaka_or_later() const noexcept {
         return active_revision() >= EVMC_OSAKA;
     }
+
+    // Amsterdam (Glamsterdam's execution layer). Gated on the fork id, not
+    // the revision, so it holds whatever revision Amsterdam maps to.
+    bool is_amsterdam_or_later() const noexcept {
+        return consensus_.fork_id() >= ForkId::Amsterdam;
+    }
+
+    // EIP-170 / EIP-3860 size limits, raised by EIP-7954 (Amsterdam) to
+    // 64 KiB of deployed code and 128 KiB of init code.
+    size_t max_code_size() const noexcept;
+    size_t max_initcode_size() const noexcept;
 
     // Cancun added the EIP-4788 beacon-roots predeploy system call in
     // pre_execute_block. Pre-Cancun blocks must skip it — the predeploy
@@ -408,13 +434,12 @@ private:
 
     // Build the per-tx evmc_tx_context from `tx_context_` (block-level
     // fields filled by pre_execute_block) + per-tx fields from `tx`.
-    // `blob_hashes` and `initcodes_vec` are scratch buffers the caller
-    // owns; pointers into them are written into the returned ctx so
-    // they must outlive any subsequent execute2 call.
+    // `blob_hashes` is a scratch buffer the caller owns; a pointer into
+    // it is written into the returned ctx so it must outlive any
+    // subsequent execute2 call.
     evmc_tx_context build_per_tx_context(
-        const Transactions::View&        tx,
-        std::vector<evmc::bytes32>&      blob_hashes,
-        std::vector<evmc_tx_initcode>&   initcodes_vec) noexcept;
+        const Transactions::View&   tx,
+        std::vector<evmc::bytes32>& blob_hashes) noexcept;
 
     // check_transaction, then bump sender nonce and debit upfront gas
     // + blob fee. Returns the tx's intrinsic gas (also used as the EVM
@@ -428,36 +453,76 @@ private:
     int64_t check_transaction(const Transactions::View& tx,
                               size_t sender_idx) noexcept;
 
+    // A tx's gas after intrinsic gas: the regular gas left and the
+    // EIP-8037 state-gas reservoir (left + spilled). Amsterdam's EIP-2780
+    // runtime gas phase (authorizations, then the first frame's charges)
+    // draws from it; `runtime_oog` records that the phase ran out of gas.
+    struct TxGas {
+        int64_t        gas;
+        evmc::StateGas state_gas;
+        bool           runtime_oog = false;
+    };
+
+    // Per-tx bookkeeping for the Amsterdam (EIP-2780) authorization
+    // charges; defined in zisk_state_db.cpp.
+    struct AuthCharges;
+
     // Walk the EIP-7702 authorization_list (no-op for non-SetCode
     // txs). For each valid auth, bumps the signer's nonce and writes
     // the 0xef0100 || delegate code_hash on the signer. Returns the
     // accumulated refund (12500 per auth whose signer was non-empty).
-    int64_t apply_authorization_list(const Transactions::View& tx) noexcept;
+    // Amsterdam (EIP-2780): no refund; each applied auth charges `g`
+    // instead, and the walk stops at the first unaffordable charge
+    // (g.runtime_oog). The writes are journaled so that can be undone.
+    int64_t apply_authorization_list(const Transactions::View& tx,
+                                     size_t sender_idx, TxGas& g) noexcept;
 
     // Per-auth helper: parse one RLP-encoded authorization entry,
     // recover the signer from its signature (ecrecover), and (on
     // success) bump the signer's nonce + write the 0xef0100 ||
     // delegate code_hash. Returns the refund delta — 12500 if the
     // signer was non-empty before the mutation, else 0; returns 0 on
-    // any validity failure (silently skipped per the EIP).
-    int64_t process_single_authorization(const rlp::Item& auth_item) noexcept;
+    // any validity failure (silently skipped per the EIP). With
+    // `charges` (Amsterdam) the auth is charged instead of refunded.
+    int64_t process_single_authorization(const rlp::Item& auth_item,
+                                         AuthCharges*     charges) noexcept;
 
-    // Build the top-level evmc_message and dispatch CREATE vs CALL.
-    // Caller is responsible for the surrounding checkpoint/rollback.
+    // The first frame's EIP-2780 charges (Amsterdam), then the frame
+    // itself. Returns an OOG halt without running anything when the
+    // runtime gas phase ran out (g.runtime_oog, set here or by the
+    // authorizations). Caller is responsible for the surrounding
+    // checkpoint/rollback.
     evmc::Result execute_top_level_frame(const Transactions::View& tx,
                                          size_t sender_idx,
-                                         int64_t intrinsic_gas) noexcept;
+                                         TxGas& g) noexcept;
+    // The frame itself, with its regular gas and state-gas reservoir.
+    evmc::Result execute_top_level_message(const Transactions::View& tx,
+                                           size_t  sender_idx,
+                                           int64_t gas,
+                                           int64_t state_gas) noexcept;
+
+    // A tx's gas, as settle_tx_gas splits it. `gas_used` is what the
+    // sender pays and the receipt records. `block_regular` and
+    // `block_state` are its share of the block's two gas dimensions
+    // (EIP-8037; refunds don't reduce them, EIP-7778). Before Amsterdam
+    // `block_regular == gas_used` and `block_state == 0`.
+    struct TxGasUsed {
+        uint64_t gas_used;
+        uint64_t block_regular;
+        uint64_t block_state;
+    };
 
     // Post-EVM gas settlement: EIP-3529 refund cap, sender refund,
-    // coinbase priority-fee credit. Returns the final tx gas_used.
-    uint64_t settle_tx_gas(const Transactions::View& tx,
+    // coinbase priority-fee credit.
+    TxGasUsed settle_tx_gas(const Transactions::View& tx,
                            const evmc::Result&       result,
                            size_t                    sender_idx,
                            int64_t                   auth_refund) noexcept;
 
     // Compute the per-tx logs bloom from the (post-rollback) surviving
-    // logs, OR into the block bloom, set the tx's status and cumGas.
-    void finalize_receipt(const evmc::Result& result, uint64_t gas_used) noexcept;
+    // logs, OR into the block bloom, set the tx's status and cumGas,
+    // and add the tx to the block's gas dimensions.
+    void finalize_receipt(const evmc::Result& result, const TxGasUsed& used) noexcept;
 
     // ----- Per-block post-execution phases (called by post_execute_block) -----
 
@@ -466,6 +531,14 @@ private:
     void collect_deposit_requests()           noexcept;  // EIP-6110
     void collect_withdrawal_requests()        noexcept;  // EIP-7002
     void collect_consolidation_requests()     noexcept;  // EIP-7251
+    void collect_builder_requests()           noexcept;  // EIP-8282
+    // Shared body of the system-contract request collectors: the
+    // predeploy must have code, the empty-calldata call must succeed,
+    // and a non-empty output is appended as `type || output`.
+    void collect_system_requests(const evmc::address& addr,
+                                 uint8_t              type,
+                                 const char*          empty_msg,
+                                 const char*          failed_msg) noexcept;
 
     // Pectra system-call helper used by `pre_execute_block` (EIP-4788
     // beacon roots, EIP-2935 block-hash history) and
@@ -500,15 +573,9 @@ private:
     // tx_counter_. TSTORE writes are journaled so revert restores
     // (or erases) the entry.
     TransientStorage      transient_{};
-    // Per-tx scratchpad of storage slots for accounts that were
-    // freshly CREATEd in the current tx. reth's witness recorder
-    // drops storage entries for accounts that end up destroyed
-    // (CREATE+SELFDESTRUCT same tx), so the static `Storages` table
-    // built from the manifest can't satisfy SLOAD/SSTORE on those
-    // slots. Routed via `is_fresh_account(addr)` — see
-    // `dynamic_storage.hpp` for the security argument. Reset at every
-    // tx boundary alongside `created_this_tx_idx_`.
-    DynamicStorage        dynamic_storage_{};
+    // EIP-2929 warmth of keys with no table row (warming isn't a load).
+    // Journaled; never reset (a `last_tx_idx` from an earlier tx reads cold).
+    WarmKeys              warm_keys_{};
 
     // Monotonic counter incremented at the start of each tx in
     // process_transactions. Passed to Storages for per-tx warm/cold
@@ -537,14 +604,6 @@ private:
     // `set_code` in the current transaction. Same lifecycle as
     // `created_this_tx_idx_` — populated by the auth-application loop
     // and cleared at every tx boundary in `process_transactions`.
-    // Routes SSTORE/SLOAD/access_storage on these accounts to
-    // `dynamic_storage_` for witness-absent slots: the EOA had no
-    // parent-state code (delegation indicator is set THIS tx),
-    // therefore no parent-state storage, so any value the EVM
-    // SSTOREs / SLOADs on it during 7702-delegated execution is on
-    // a slot whose block-original is implicitly 0 — uncontestable
-    // by a malicious prover (same dynamic-routing safety argument
-    // as freshly-CREATEd accounts).
     std::unordered_set<size_t> delegated_this_tx_idx_{};
 
     // SELFDESTRUCT registers an account for destruction at end-of-tx,
@@ -559,11 +618,33 @@ private:
     // `process_transactions` after the tx completes.
     std::unordered_set<size_t> pending_destruct_{};
 
+    // True while `system_call` runs a system contract. Logs it emits are
+    // discarded: they reach no receipt and no bloom (execution-specs
+    // process_system_transaction; EEST test_system_contract_logs).
+    bool in_system_call_ = false;
+
+    // EIP-7928 (Amsterdam): the block-level access list under construction
+    // (null before Amsterdam, so every hook is one predictable branch), the
+    // number of txs (for the post-execution index n+1), and the final hash.
+    std::unique_ptr<BlockAccessList> bal_;
+    static constexpr size_t          kNoBalPending = SIZE_MAX;
+    // A pending access to an address without a row: committing it halts.
+    static constexpr size_t          kMissingRow   = SIZE_MAX - 1;
+    mutable size_t                   bal_pending_  = kNoBalPending;
+    uint32_t                         bal_tx_count_ = 0;
+    evmc::bytes32                    bal_hash_{};
+
     // Per-tx receipts (finalized at end-of-tx; logs filled by emit_log
     // during execution).
     std::vector<TxReceipt>   tx_receipts_{};
-    // Cumulative gas used across all processed txs in this block.
+    // Cumulative gas used across all processed txs in this block (the
+    // receipts' cumulativeGasUsed).
     uint64_t                 cumulative_gas_used_{0};
+    // The block's regular and state gas (EIP-8037). Tx admission checks
+    // each one against the block gas limit; the header's gasUsed is
+    // their max. Before Amsterdam regular == cumulative_gas_used_.
+    uint64_t                 block_regular_gas_used_{0};
+    uint64_t                 block_state_gas_used_{0};
     // OR-aggregation of every tx's logs_bloom; matches the block
     // header's logsBloom field.
     std::array<uint8_t, 256> block_bloom_filter_{};
@@ -583,6 +664,10 @@ private:
     // Current tx's EIP-7623 calldata floor, from check_transaction
     // (one calldata scan per tx); settle_tx_gas charges at least it.
     int64_t  tx_floor_gas_{0};
+    // Current tx's EIP-8037 state-gas reservoir: the gas limit above
+    // the EIP-7825 cap (Amsterdam), from check_transaction. 0 before
+    // Amsterdam.
+    int64_t  tx_state_gas_limit_{0};
 
     // EIP-7685 requests collected from the Pectra predeploys (one
     // entry per non-empty request type; entries are type-prefixed).

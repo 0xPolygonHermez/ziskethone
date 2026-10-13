@@ -14,6 +14,7 @@ namespace {
 // passes the fork in `h.fork_id` and the encoder derives the field
 // count from it via `fork_field_count` (fork.hpp):
 //
+//   Amsterdam    → 23 (adds block_access_list_hash, slot_number)
 //   Prague/Osaka → 21 (adds requests_hash)
 //   Cancun       → 20 (adds blob_gas_used, excess_blob_gas,
 //                       parent_beacon_block_root)
@@ -104,6 +105,11 @@ rlp::Bytes encode_block_header_rlp(const BlockHeader& h) {
     if (field_count >= 21) {
         append(rlp::encode(BytesView{h.requests_hash.bytes,
                                      sizeof(h.requests_hash.bytes)}));
+    }
+    if (field_count >= 23) {
+        append(rlp::encode(BytesView{h.block_access_list_hash.bytes,
+                                     sizeof(h.block_access_list_hash.bytes)}));
+        append(rlp::encode_u64(h.slot_number));
     }
 
     return rlp::encode_list_payload(

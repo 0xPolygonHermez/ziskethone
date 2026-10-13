@@ -9,7 +9,7 @@
 //                           primitives for a portable software baseline (same
 //                           result, no accelerators); both run on ziskemu.
 //   host (!ZEG_ZISK)      : superaccelerated — delegates to evmone's
-//                           evmmax::secp256k1::secp256k1_ecdsa_recover (intx,
+//                           evmone::crypto::secp256k1::secp256k1_ecdsa_recover (intx,
 //                           projective coords). The host only needs a correct
 //                           fast answer (it proves nothing), and evmone is the
 //                           reference implementation, so it doubles as the
@@ -59,7 +59,8 @@ extern "C" int secp256k1_ecdsa_recover(const uint64_t* z, const uint64_t* r,
     limbs_to_be(s, sb);
     // evmone validates r,s in [1,n-1] and returns nullopt when no point exists —
     // identical precompile semantics to the ZisK path below.
-    const auto pt = evmmax::secp256k1::secp256k1_ecdsa_recover(zb, rb, sb, recid != 0);
+    const auto pt = evmone::crypto::secp256k1::secp256k1_ecdsa_recover(
+        zb, rb, sb, recid != 0, evmone::crypto::secp256k1::RecoveryMode::malleable);
     if (!pt.has_value())
         return 1;  // not recoverable
     uint8_t pk[64];
@@ -619,7 +620,7 @@ inline void fp_sqrt_hint(const u64 alpha[4], u64 parity, u64* is_qr, u64 y[4]) {
 // recovery id recid (0 or 1 — i.e. EVM v of 27 or 28), recover the signing
 // public key into pubkey_out (x[4] || y[4], little-endian limbs). Returns 0 on
 // success, non-zero when the signature is not recoverable (caller emits the
-// empty ECRECOVER output). Mirrors evmmax::secp256k1::ecrecover semantics.
+// empty ECRECOVER output). Mirrors evmone::crypto::secp256k1::ecrecover semantics.
 //
 //   R = (r, y) with y ≡ recid (mod 2), y = sqrt(r^3 + 7) mod P
 //   Q = r^{-1} (s·R − z·G) = (-z·r^{-1})·G + (s·r^{-1})·R

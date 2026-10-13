@@ -1,9 +1,11 @@
 // Tx intrinsic gas (Yellow Paper §6.2):
-//   base
+//   base (21000, +32000 for creates; EIP-2780 decomposes it in Amsterdam)
 //   + sum over calldata: 4 (zero byte) or 16 (non-zero, EIP-2028)
 //   + EIP-3860 initcode word cost for creates
 //   + EIP-2930 access-list cost: 2400/addr + 1900/storage-key
-//   + EIP-7702 auth-list cost: PER_EMPTY_ACCOUNT_COST per auth
+//   + EIP-7702 auth-list cost: PER_EMPTY_ACCOUNT_COST per auth (Amsterdam:
+//     EIP-2780's state-independent REGULAR_PER_AUTH_BASE_COST; the rest is
+//     charged as the authorizations are applied)
 //
 // Pure function over a parsed `Transactions::View`. Aborts via
 // zeg::fatal on malformed typed-tx access-list RLP.
@@ -13,6 +15,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+
+#include <evmc/evmc.h>
 
 #include "zeg/transactions.hpp"
 
@@ -42,17 +46,16 @@ inline size_t count_nonzero_bytes(std::span<const uint8_t> data) {
     return nz;
 }
 
-// `is_shanghai_or_later` gates the EIP-3860 initcode-word-cost charge
-// (2 gas per 32 bytes of init code for creation txs). EIP-3860
-// activates in Shanghai — pre-Shanghai EEST fixtures (Berlin/London/
-// Paris) would be over-charged otherwise, producing a state-root
-// divergence on every creation tx.
+// `rev` gates the fork-dependent parts: the EIP-3860 initcode-word-cost
+// charge (Shanghai; pre-Shanghai EEST fixtures would be over-charged
+// otherwise) and the EIP-2780 decomposed base (Amsterdam).
 //
 // If `calldata_floor` is given, it receives the EIP-7623 (Prague)
-// calldata floor, 21000 + 10 per token (tokens = zero_bytes +
-// 4 * non_zero_bytes), from the same non-zero-byte count.
+// calldata floor, base + 10 per token (tokens = zero_bytes +
+// 4 * non_zero_bytes), from the same non-zero-byte count. The base is
+// 21000, or the EIP-2780 base in Amsterdam.
 int64_t compute_intrinsic_gas(const Transactions::View& tx,
-                              bool is_shanghai_or_later,
+                              evmc_revision rev,
                               int64_t* calldata_floor = nullptr);
 
 } // namespace zeg

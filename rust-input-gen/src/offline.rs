@@ -94,6 +94,14 @@ pub struct OfflineSources {
     /// `excess_blob_gas` formula.
     #[serde(default)]
     pub max_blob_gas_per_block: u64,
+    /// Accounts and slots the block accesses (online: the prestate tracer
+    /// plus reth's witness keys). Each becomes a leaf in the StateRoot
+    /// section — an empty one if the key doesn't exist — so the guest can
+    /// halt on any access to a key that isn't. The manifest path derives the
+    /// same set from `prestate`. `serde(default)` keeps older manifests
+    /// decoding.
+    #[serde(default)]
+    pub accessed: state_root::Accessed,
 }
 
 /// Encode an `OfflineSources` bundle to the cpp-guest's binary
@@ -172,11 +180,16 @@ pub fn encode_binary(sources: &OfflineSources) -> Result<Vec<u8>> {
     // transcribes the pre-state MPT straight from `witness.state` +
     // `witness.keys`, emitting every revealed leaf and leaving created keys
     // for the guest to insert. It no longer consumes prestate/diff/touch.
+    let mut accessed = sources.accessed.clone();
+    for (addr, acc) in &prestate {
+        accessed.entry(*addr).or_default().extend(acc.storage.keys().copied());
+    }
     state_root::write(
         &mut w,
         sources.parent.header.state_root,
         &sources.witness.state,
         &sources.witness.keys,
+        &accessed,
     )?;
 
     Ok(w.into_bytes())

@@ -1,7 +1,7 @@
 // secp256r1_p256.cpp — secp256r1 / P-256 ECDSA precompile (p256verify 0x100,
 // RIP-7212 / EIP-7951) for the ZisK self-contained guest.
 //
-// Provides evmmax::secp256r1::verify (the symbol p256verify_execute calls) on the
+// Provides evmone::crypto::secp256r1::verify (the symbol p256verify_execute calls) on the
 // self-contained P-256 port (secp256r1/p256.hpp) running on the ZisK secp256r1
 // precompiles + fcall hints. Replaces evmone's software secp256r1.cpp (excluded
 // from the build). Inputs are big-endian (hash256 / intx::uint256); convert to
@@ -16,7 +16,7 @@ inline void to_limbs(const intx::uint256& v, uint64_t o[4]) {
 }
 }  // namespace
 
-namespace evmmax::secp256r1 {
+namespace evmone::crypto::secp256r1 {
 
 bool verify(const ethash::hash256& h, const uint256& r, const uint256& s, const uint256& qx,
     const uint256& qy) noexcept {
@@ -29,4 +29,4 @@ bool verify(const ethash::hash256& h, const uint256& r, const uint256& s, const 
     return zeg::r1::ecdsa_verify(pk, z, rr, ss);
 }
 
-}  // namespace evmmax::secp256r1
+}  // namespace evmone::crypto::secp256r1

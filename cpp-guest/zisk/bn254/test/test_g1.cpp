@@ -8,11 +8,11 @@
 #include <cstdint>
 #include <cstring>
 #include <optional>
-#include "bn254.hpp"          // evmone evmmax::bn254
+#include "bn254.hpp"          // evmone evmone::crypto::bn254
 #include "../g1.hpp"          // zeg::bn
 
 using namespace zeg::bn;
-namespace ev = evmmax::bn254;
+namespace ev = evmone::crypto::bn254;
 static int g_fail = 0;
 static void check(bool ok, const char* n){ std::printf("%s %s\n", ok?"ok  ":"FAIL", n); if(!ok)++g_fail; }
 
@@ -49,10 +49,10 @@ int main() {
 
         // add (distinct)
         { uint8_t mine[64], ref[64]; store(g1_add_complete(a,b), mine);
-          enc(evmmax::ecc::add_affine(A,B), ref); if (std::memcmp(mine,ref,64)) add=false; }
+          enc(evmone::crypto::ecc::add_affine(A,B), ref); if (std::memcmp(mine,ref,64)) add=false; }
         // double (A+A)
         { uint8_t mine[64], ref[64]; store(g1_add_complete(a,a), mine);
-          enc(evmmax::ecc::add_affine(A,A), ref); if (std::memcmp(mine,ref,64)) dbl=false; }
+          enc(evmone::crypto::ecc::add_affine(A,A), ref); if (std::memcmp(mine,ref,64)) dbl=false; }
         // opposite (A + (-A)) == infinity
         { G1 r = g1_add_complete(a, g1_neg(a)); if (!g1_is_identity(r)) opp=false; }
         // scalar mul: our (reduced k) vs evmone mul(A, m)

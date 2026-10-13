@@ -129,6 +129,8 @@ void EvmState::reset(const evmc_message* msg,
     stackPointer  = kStackLimit;
     gas           = msg ? msg->gas : 0;
     gas_refund    = 0;
+    state_gas_left    = msg ? msg->state_gas : 0;
+    state_gas_spilled = 0;
     evmcMsg       = msg;
     evmcResult    = nullptr;
     lastResult    = nullptr;

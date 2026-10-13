@@ -52,6 +52,9 @@ const evmc::bytes32& PreviousBlocks::View::parent_beacon_block_root() const noex
 const evmc::bytes32& PreviousBlocks::View::requests_hash() const noexcept {
     return *reinterpret_cast<const evmc::bytes32*>(data + kRequestsHashOffset);
 }
+const evmc::bytes32& PreviousBlocks::View::block_access_list_hash() const noexcept {
+    return *reinterpret_cast<const evmc::bytes32*>(data + kBlockAccessListHashOffset);
+}
 
 const evmc::address& PreviousBlocks::View::coinbase() const noexcept {
     return *reinterpret_cast<const evmc::address*>(data + kCoinbaseOffset);
@@ -78,6 +81,7 @@ uint64_t PreviousBlocks::View::gas_used       () const noexcept { return u64_at(
 uint64_t PreviousBlocks::View::timestamp      () const noexcept { return u64_at(data + kTimestampOffset);      }
 uint64_t PreviousBlocks::View::blob_gas_used  () const noexcept { return u64_at(data + kBlobGasUsedOffset);    }
 uint64_t PreviousBlocks::View::excess_blob_gas() const noexcept { return u64_at(data + kExcessBlobGasOffset);  }
+uint64_t PreviousBlocks::View::slot_number    () const noexcept { return u64_at(data + kSlotNumberOffset);     }
 
 uint32_t PreviousBlocks::View::field_count() const noexcept {
     uint32_t v;
@@ -126,6 +130,8 @@ evmc::bytes32 compute_header_hash(const PreviousBlocks::View& v) {
         .excess_blob_gas          = v.excess_blob_gas(),
         .parent_beacon_block_root = v.parent_beacon_block_root(),
         .requests_hash            = v.requests_hash(),
+        .block_access_list_hash   = v.block_access_list_hash(),
+        .slot_number              = v.slot_number(),
         .fork_id                  = fork,
     });
 }

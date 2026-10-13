@@ -1,4 +1,4 @@
-// Canonical Pectra-era Ethereum block header — flat carrier of the 21
+// Canonical Ethereum block header — flat carrier of the (up to) 23
 // fields that go into the header RLP plus a free function that
 // computes keccak256(rlp(header)). Used in two places:
 //
@@ -49,10 +49,12 @@ struct BlockHeader {
     uint64_t                      excess_blob_gas;
     const evmc::bytes32&          parent_beacon_block_root;
     const evmc::bytes32&          requests_hash;
+    const evmc::bytes32&          block_access_list_hash;  // Amsterdam (EIP-7928)
+    uint64_t                      slot_number;             // Amsterdam (EIP-7843)
     // The hardfork this header belongs to. The encoder derives the
     // number of RLP fields to emit from it via `fork_field_count`
     // (see zeg/fork.hpp): Berlin → 15, London/Paris → 16, Shanghai → 17,
-    // Cancun → 20, Prague/Osaka → 21. Mixed-fork ancestor chains (e.g.
+    // Cancun → 20, Prague/Osaka → 21, Amsterdam → 23. Mixed-fork ancestor chains (e.g.
     // Cancun → Prague EEST transition fixtures) carry the right fork per
     // ancestor. The trailing struct slots can reference dummy / zero
     // data when the fork truncates them away; the encoder ignores them.

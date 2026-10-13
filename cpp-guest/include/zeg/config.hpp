@@ -8,8 +8,13 @@
 
 namespace zeg {
 
-// EVM chain id. Pinned to Ethereum mainnet (1). Consumed by the EVM
-// tx_context (CHAINID opcode) and by EIP-7702 auth validation.
+// EVM chain id: Ethereum mainnet (1), or Sepolia (11155111) when built with
+// ZEG_CHAIN=sepolia. Consumed by the EVM tx_context (CHAINID opcode) and by
+// EIP-7702 auth validation.
+#ifdef ZEG_CHAIN_SEPOLIA
+constexpr uint64_t kChainId = 11155111;
+#else
 constexpr uint64_t kChainId = 1;
+#endif
 
 } // namespace zeg

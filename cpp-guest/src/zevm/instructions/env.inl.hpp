@@ -23,8 +23,6 @@ namespace zevm {
 
 namespace env_ops {
 
-constexpr int64_t WARM_ACCESS    = 100;    // EIP-2929 warm account access (base)
-constexpr int64_t COLD_EXTRA     = 2500;   // EIP-2929 cold account surcharge
 constexpr int64_t GAS_BLOCKHASH  = 20;
 
 // ----- push helpers (overflow-checked); return false on stack overflow -----
@@ -52,12 +50,14 @@ inline evmc_address addr_arg(const U256* i) {
     return addr_from_slot(i[0]);
 }
 
-// EIP-2929 cold-account surcharge (Berlin+). Returns false on out-of-gas.
+// EIP-2929 cold-account surcharge (Berlin+; 2900 from Amsterdam, EIP-8038).
+// Returns false on out-of-gas.
 inline bool charge_account_access(EvmState& s, Regs& R, const evmc_address& addr) {
     if (s.rev >= EVMC_BERLIN &&
         s.host->access_account(s.context, &addr) == EVMC_ACCESS_COLD) {
-        if (R.gas < COLD_EXTRA) { s.status = EVMC_OUT_OF_GAS; return false; }
-        R.gas -= COLD_EXTRA;
+        const int64_t extra = additional_cold_account_access(s.rev);
+        if (R.gas < extra) { s.status = EVMC_OUT_OF_GAS; return false; }
+        R.gas -= extra;
     }
     return true;
 }
@@ -185,6 +185,14 @@ bool op_blobbasefee(EvmState& s, Regs& R) {
     if (!push_be32(s, R, tx.blob_base_fee.bytes)) return false;
     return true;
 }
+// 0x4b SLOTNUM (Amsterdam, EIP-7843) — the beacon slot number of the block.
+bool op_slotnum(EvmState& s, Regs& R) {
+    if (R.gas < GAS_BASE) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= GAS_BASE;
+    const evmc_tx_context tx = s.host->get_tx_context(s.context);
+    if (!push_u64(s, R, tx.block_slot_number)) return false;
+    return true;
+}
 bool op_calldatasize(EvmState& s, Regs& R) {
     if (R.gas < GAS_BASE) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_BASE;
@@ -248,10 +256,17 @@ bool op_balance(EvmState& s, Regs& R) {
     return true;
 }
 
+// EXTCODESIZE / EXTCODECOPY base: Amsterdam (EIP-8038) charges two warm
+// accesses, as the code is a second read.
+inline int64_t extcode_base(const EvmState& s) {
+    return s.rev >= EVMC_AMSTERDAM ? 2 * WARM_ACCESS : WARM_ACCESS;
+}
+
 // 0x3b EXTCODESIZE.
 bool op_extcodesize(EvmState& s, Regs& R) {
-    if (R.gas < WARM_ACCESS) { s.status = EVMC_OUT_OF_GAS; return false; }
-    R.gas -= WARM_ACCESS;
+    const int64_t base = extcode_base(s);
+    if (R.gas < base) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= base;
     if (depth_lt(R, 1)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     U256* const i = R.top;
     const evmc_address addr = addr_arg(i);
@@ -276,8 +291,9 @@ bool op_extcodehash(EvmState& s, Regs& R) {
 // 0x3c EXTCODECOPY — copy external code into memory; cold surcharge after the
 // memory/copy gas (evmone order), then host->copy_code + zero-pad.
 bool op_extcodecopy(EvmState& s, Regs& R) {
-    if (R.gas < WARM_ACCESS) { s.status = EVMC_OUT_OF_GAS; return false; }
-    R.gas -= WARM_ACCESS;
+    const int64_t base = extcode_base(s);
+    if (R.gas < base) { s.status = EVMC_OUT_OF_GAS; return false; }
+    R.gas -= base;
     if (depth_lt(R, 4)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
     U256* const sp = R.top;
     const evmc_address addr = addr_arg(sp);  // top

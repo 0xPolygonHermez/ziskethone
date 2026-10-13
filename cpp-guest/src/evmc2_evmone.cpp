@@ -52,11 +52,6 @@ evmc_result w_execute(evmc_vm* vm, const evmc_host_interface* host,
     return impl->execute(impl, host, ctx, rev, msg, code, code_size);
 }
 
-evmc_capabilities_flagset w_get_capabilities(evmc_vm* vm) noexcept {
-    auto* impl = wrap(vm)->impl;
-    return impl->get_capabilities(impl);
-}
-
 evmc_set_option_result w_set_option(evmc_vm* vm, char const* name,
                                     char const* value) noexcept {
     auto* impl = wrap(vm)->impl;
@@ -111,13 +106,12 @@ extern "C" evmc2_vm* evmc2_create_evmone(void) {
     auto* w = new EvmoneWrapper{
         /*v=*/ {
             /*base=*/ {
-                EVMC_ABI_VERSION,
-                "evmone-evmc2",
-                impl->version,
-                w_destroy,
-                w_execute,
-                w_get_capabilities,
-                w_set_option,
+                .abi_version = EVMC_ABI_VERSION,
+                .name        = "evmone-evmc2",
+                .version     = impl->version,
+                .destroy     = w_destroy,
+                .execute     = w_execute,
+                .set_option  = w_set_option,
             },
             /*prepare=*/ w_prepare,
             /*execute2=*/ w_execute2,

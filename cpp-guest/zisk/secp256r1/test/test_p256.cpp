@@ -2,16 +2,16 @@
 //   c++ -std=c++20 -O2 -I.. -I<evmone>/lib/evmone_precompiles -I<evmone>/include \
 //       -I<intx>/include test_p256.cpp <evmone>/lib/evmone_precompiles/secp256r1.cpp -o /tmp/t && /tmp/t
 // Software backend. Differential: our zeg::r1::ecdsa_verify must agree with
-// evmmax::secp256r1::verify on valid (pure-python-signed) vectors, tampered ones,
+// evmone::crypto::secp256r1::verify on valid (pure-python-signed) vectors, tampered ones,
 // random inputs, and boundary cases.
 
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
-#include "secp256r1.hpp"      // evmone evmmax::secp256r1::verify
+#include "secp256r1.hpp"      // evmone evmone::crypto::secp256r1::verify
 #include "../p256.hpp"        // zeg::r1
 
-namespace ev = evmmax::secp256r1;
+namespace ev = evmone::crypto::secp256r1;
 static int g_fail = 0;
 static void check(bool ok, const char* n){ std::printf("%s %s\n", ok?"ok  ":"FAIL", n); if(!ok)++g_fail; }
 
