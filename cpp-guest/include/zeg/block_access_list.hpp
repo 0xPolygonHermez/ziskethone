@@ -19,16 +19,15 @@
 //     period — and opens the new one. Writes reverted or undone within a
 //     period net out by construction. The final pass closes what is still
 //     open.
-//   * Order: the prover supplies the BAL's keys in order (the BalHint input
-//     section); `ZiskStateDB::block_access_list_hash` checks the hint against
-//     the accessed set in one linear pass (strictly increasing, every key
-//     accessed, counts equal ⇒ exactly the accessed set) and encodes the RLP
-//     in that order. No sort.
+//   * Order: every key the block loads is a table row, and the input links
+//     the rows in sorted order (accounts by address, each account's slots by
+//     position). `ZiskStateDB::build_block_access_list_hash` walks the links
+//     in one linear pass — strictly increasing, every row exactly once — and
+//     encodes the accessed rows in that order. No sort.
 //
-// Account side data is indexed by the Accounts row (rows never move). Witness
-// slots keep their record id in `Storages::Mods`; slots the witness doesn't
-// have (DynamicStorage, whose entries come and go with reverts and
-// self-destructs) are found through `dyn_ids_`, keyed by (address, slot).
+// Account side data is indexed by the Accounts row (rows never move). Slots
+// keep their record id in `Storages::Mods` (every slot the block loads is a
+// row).
 
 #pragma once
 
@@ -36,7 +35,6 @@
 #include <cstdint>
 #include <cstring>
 #include <span>
-#include <unordered_map>
 #include <vector>
 
 #include <evmc/evmc.hpp>
@@ -105,14 +103,9 @@ public:
     const Account& account(std::size_t row) const noexcept { return accounts_[row]; }
 
     // ----- slots -----
-    // Record for a witness slot whose id is kept by the caller (`id` is
-    // updated when a record is created).
+    // Record for a slot row whose id is kept by the caller (`id` is updated
+    // when a record is created).
     Slot& witness_slot(uint32_t& id, const evmc::bytes32& key);
-    // Record for a slot the witness doesn't have.
-    Slot& dynamic_slot(const evmc::address& addr, const evmc::bytes32& key);
-    // Lookup without creating; nullptr if the slot has no record.
-    Slot* find_dynamic_slot(const evmc::address& addr,
-                            const evmc::bytes32& key) noexcept;
     Slot&       slot(uint32_t id) noexcept { return slots_[id]; }
 
     void access_slot(Slot& s) noexcept {
@@ -156,59 +149,12 @@ public:
 private:
     void push(List& l, uint32_t index, const evmc::bytes32& value);
 
-    struct Key {
-        evmc::address address;
-        uint32_t      pad = 0;
-        evmc::bytes32 position;
-        Key(const evmc::address& a, const evmc::bytes32& p) noexcept
-            : address(a), position(p) {}
-    };
-    static_assert(sizeof(Key) == 24 + 32, "Key must have no tail padding");
-    struct KeyHash {
-        std::size_t operator()(const Key& k) const noexcept {
-            uint64_t a, p;
-            std::memcpy(&a, k.address.bytes + 12, 8);
-            std::memcpy(&p, k.position.bytes + 24, 8);
-            return static_cast<std::size_t>(a ^ p);
-        }
-    };
-    struct KeyEq {
-        bool operator()(const Key& x, const Key& y) const noexcept {
-            return std::memcmp(&x, &y, sizeof(Key)) == 0;
-        }
-    };
-
     uint32_t             index_ = 0;
     std::vector<Account> accounts_;
     std::vector<Slot>    slots_;
     std::vector<Change>  changes_;
-    std::unordered_map<Key, uint32_t, KeyHash, KeyEq> dyn_ids_;
     std::size_t          accessed_accounts_ = 0;
     std::size_t          accessed_slots_    = 0;
-};
-
-// BalHint — the BalHint input section (format v11): the BAL's keys in order.
-//
-//   u64 n_accounts
-//   per account: address (20 B) + u32-le n_slots + n_slots × slot (32 B BE)
-//
-// Every record is a multiple of 8 bytes. The view only parses the framing;
-// ZiskStateDB checks the keys against the accessed set.
-class BalHint {
-public:
-    struct Account {
-        const evmc::address*     address;
-        std::span<const evmc::bytes32> slots;
-    };
-
-    explicit BalHint(const uint8_t*& cursor);
-
-    std::span<const Account> accounts() const noexcept { return accounts_; }
-    std::size_t              slot_count() const noexcept { return slot_count_; }
-
-private:
-    std::vector<Account> accounts_;
-    std::size_t          slot_count_ = 0;
 };
 
 } // namespace zeg

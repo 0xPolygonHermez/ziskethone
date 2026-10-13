@@ -62,10 +62,6 @@ const NodeR* Storages::update_value(size_t idx, const PackedPath& nib) {
     return &lc.cached;
 }
 
-void Storages::set_pos_hash(size_t idx, const evmc::bytes32& pos_hash) {
-    leaf_[idx].pos_hash = pos_hash;
-}
-
 const std::vector<size_t>& Storages::slots_of(
         const evmc::address& addr) const noexcept {
     static const std::vector<size_t> kEmpty;

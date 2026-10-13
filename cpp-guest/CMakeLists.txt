@@ -145,7 +145,6 @@ set(GUEST_SOURCES
     src/consensus_info.cpp
     src/contracts.cpp
     src/create_address.cpp
-    src/dynamic_storage.cpp
     src/eip6110_deposit.cpp
     src/fake_exponential.cpp
     src/hex_prefix.cpp
@@ -188,6 +187,18 @@ list(APPEND GUEST_SOURCES zisk/secp256k1.cpp)
 set(EVM_BACKEND "evmone" CACHE STRING "EVM implementation: evmone | zevm")
 set_property(CACHE EVM_BACKEND PROPERTY STRINGS evmone zevm)
 
+# The chain the guest validates, pinned at build time (chain id and the
+# EIP-6110 deposit contract; see zeg/config.hpp). One build dir per chain.
+set(ZEG_CHAIN "mainnet" CACHE STRING "Chain: mainnet | sepolia")
+set_property(CACHE ZEG_CHAIN PROPERTY STRINGS mainnet sepolia)
+if(ZEG_CHAIN STREQUAL "sepolia")
+    set(ZEG_CHAIN_DEFS ZEG_CHAIN_SEPOLIA)
+elseif(ZEG_CHAIN STREQUAL "mainnet")
+    set(ZEG_CHAIN_DEFS "")
+else()
+    message(FATAL_ERROR "ZEG_CHAIN must be mainnet | sepolia (got ${ZEG_CHAIN})")
+endif()
+
 add_executable(zisk_eth_guest ${GUEST_SOURCES})
 
 target_include_directories(zisk_eth_guest PUBLIC include)
@@ -198,6 +209,7 @@ target_include_directories(zisk_eth_guest PRIVATE
     ${evmone_SOURCE_DIR}/lib
     ${evmone_SOURCE_DIR}/include)
 target_compile_options(zisk_eth_guest PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_definitions(zisk_eth_guest PRIVATE ${ZEG_CHAIN_DEFS})
 # intx::intx is used directly by the guest sources (e.g. fake_exponential,
 # zisk_state_db), independent of which EVM backend is linked. It used to come
 # in transitively via the `evmone` target's PUBLIC deps; the precompiles/state
@@ -244,6 +256,7 @@ target_include_directories(zeg_ffi PRIVATE
     ${evmone_SOURCE_DIR}/lib
     ${evmone_SOURCE_DIR}/include)
 target_compile_options(zeg_ffi PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_definitions(zeg_ffi PRIVATE ${ZEG_CHAIN_DEFS})
 # Re-import intx in case the executable block above (which also calls this)
 # was removed or reordered — the zevm backend drops the transitive evmone
 # link, so zeg_ffi must not rely on a sibling target having imported it.

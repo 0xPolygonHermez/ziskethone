@@ -157,18 +157,9 @@ size_t ZiskStateDB::max_initcode_size() const noexcept {
 
 bool ZiskStateDB::account_exists(const evmc::address& addr) const noexcept {
     bal_commit_pending();
-    // Witness-only model: an address absent from the table is non-existent
-    // (the witness reveals every pre-state account along an accessed path;
-    // an absent address therefore has empty block-state — a real non-empty
-    // account would change the old root and fail the parent anchor, and a
-    // prover who hides one only produces a wrong block hash, rejected
-    // externally). "Exists" semantically = non-empty (nonzero balance OR
-    // nonce OR non-empty code).
-    if (!accounts_.contains(addr)) {
-        if (bal_) const_cast<ZiskStateDB*>(this)->bal_load(addr);
-        return false;
-    }
-    const size_t idx = accounts_.index_of(addr);
+    // "Exists" = non-empty (nonzero balance OR nonce OR non-empty code).
+    // An account that doesn't exist is still a row (an empty leaf).
+    const size_t idx = account_row(addr);
     // EIP-7928: the VM asks this for a CALL / SELFDESTRUCT target's
     // new-account charge, after its cold-access charge: a load.
     const_cast<Accounts&>(accounts_).bal_access_at(idx);
@@ -190,20 +181,8 @@ bool ZiskStateDB::account_exists(const evmc::address& addr) const noexcept {
 evmc::bytes32 ZiskStateDB::get_storage(const evmc::address& addr,
                                        const evmc::bytes32& key) const noexcept {
     bal_commit_pending();
-    // A slot absent from the static `Storages` table is a key the witness
-    // didn't include — its block-original value is 0 (a non-zero original
-    // would be in the account's storage subtree and, if omitted, change the
-    // old root and fail the parent anchor). Route it through the per-tx
-    // `dynamic_storage_` scratchpad (block-original implicitly 0); surviving
-    // non-zero slots are committed to the static table at tx-end so the
-    // new-root walk inserts them.
-    const size_t idx = storages_.find(addr, key);
-    if (bal_) const_cast<ZiskStateDB*>(this)->bal_slot(idx, addr, key);
-    if (idx == Storages::npos) {
-        auto& ds = const_cast<DynamicStorage&>(dynamic_storage_);
-        ds.mark_touched(addr, key, tx_counter_);
-        return ds.value(addr, key);
-    }
+    const size_t idx = storage_row(addr, key);
+    if (bal_) const_cast<ZiskStateDB*>(this)->bal_slot(idx);
     // What `storages_.value(addr, key, tx)` does, minus its second probe of
     // the same key: touch the slot for tx_counter_ (snapshots tx_original on
     // first access, marks warm), then read. The const_cast is safe: mods_ is
@@ -218,26 +197,7 @@ evmc_storage_status ZiskStateDB::set_storage(const evmc::address& addr,
                                              const evmc::bytes32& key,
                                              const evmc::bytes32& value) noexcept {
     bal_commit_pending();
-    // See routing comment in get_storage: dynamic_storage_ holds every
-    // (addr, key) pair the witness didn't include (block-original 0).
-    const size_t idx = storages_.find(addr, key);
-    if (idx == Storages::npos) {
-        // Slot absent from witness: route through dynamic_storage_.
-        // access_storage(addr, key) was called by evmone before this,
-        // which marked the slot touched and (if absent) inserted it with
-        // a zero original. So now we can capture pre-write state and
-        // journal it.
-        const bool was_present = dynamic_storage_.contains(addr, key);
-        const auto current     = dynamic_storage_.value(addr, key);
-        const auto original    = dynamic_storage_.tx_original(addr, key, tx_counter_);
-        const auto old_tx_idx  = dynamic_storage_.last_tx_idx(addr, key);
-        if (bal_) bal_->open_slot(bal_slot(idx, addr, key), current);
-
-        journal_.log_dyn_storage(addr, key, was_present, current, old_tx_idx);
-        dynamic_storage_.set_value(addr, key, value, tx_counter_);
-
-        return compute_storage_status(original, current, value);
-    }
+    const size_t idx = storage_row(addr, key);
 
     // No explicit mark_touched_at here: on Berlin+ revisions evmone
     // always calls access_storage(addr, key) before set_storage, and
@@ -245,7 +205,7 @@ evmc_storage_status ZiskStateDB::set_storage(const evmc::address& addr,
     // we read tx_original_at below the per-tx-original is in place.
     const auto& original = storages_.tx_original_at(idx);
     const auto  current  = storages_.value_at(idx);
-    if (bal_) bal_->open_slot(bal_slot(idx, addr, key), current);
+    if (bal_) bal_->open_slot(bal_slot(idx), current);
 
     journal_.log_storage(idx, current, storages_.last_tx_idx_at(idx));
     storages_.set_value_at(idx, value, tx_counter_);
@@ -273,11 +233,6 @@ void ZiskStateDB::set_transient_storage(const evmc::address& addr,
 
 evmc::uint256be ZiskStateDB::get_balance(const evmc::address& addr) const noexcept {
     bal_commit_pending();
-    // Witness-absent address → non-existent → zero balance (see account_exists).
-    if (!accounts_.contains(addr)) {
-        if (bal_) const_cast<ZiskStateDB*>(this)->bal_load(addr);
-        return {};
-    }
     // const_cast: the per-tx warm-touch mutates accounts_.mods_,
     // which is logically scratch state. Same pattern as get_storage.
     return const_cast<Accounts&>(accounts_).balance(addr, tx_counter_);
@@ -285,19 +240,11 @@ evmc::uint256be ZiskStateDB::get_balance(const evmc::address& addr) const noexce
 
 uint64_t ZiskStateDB::get_nonce(const evmc::address& addr) const noexcept {
     // The VM asks for the creator's nonce to derive a CREATE address.
-    if (!accounts_.contains(addr)) {
-        if (bal_) const_cast<ZiskStateDB*>(this)->bal_load(addr);
-        return 0;
-    }
     return const_cast<Accounts&>(accounts_).nonce(addr, tx_counter_);
 }
 
 size_t ZiskStateDB::get_code_size(const evmc::address& addr) const noexcept {
     bal_commit_pending();
-    if (!accounts_.contains(addr)) {
-        if (bal_) const_cast<ZiskStateDB*>(this)->bal_load(addr);
-        return 0;  // non-existent account has no code
-    }
     const auto hash = const_cast<Accounts&>(accounts_).code_hash(addr, tx_counter_);
     if (hash == EMPTY_CODE_HASH) {
         return 0;
@@ -317,13 +264,6 @@ evmc::bytes32 ZiskStateDB::get_code_hash(const evmc::address& addr) const noexce
     // does `EXTCODEHASH(unused-addr) == 0` as a "is this an EOA?"
     // check; returning EMPTY_CODE_HASH instead made the check fail
     // and the tx took a different branch.
-    //
-    // We deliberately do NOT short-circuit on `!accounts_.contains(addr)`
-    // here — treating a witness-absent address as "non-existent" would
-    // let a malicious prover omit a real contract from the witness and
-    // make us return 0, taking the wrong branch for an EXTCODEHASH==0
-    // check. `account_exists` (strict: calls index_of which fatals on
-    // missing) is the gate that forces the prover to supply the addr.
     if (!account_exists(addr)) {
         return {};
     }
@@ -335,10 +275,6 @@ size_t ZiskStateDB::copy_code(const evmc::address& addr,
                               uint8_t* buffer,
                               size_t buffer_size) const noexcept {
     bal_commit_pending();
-    if (!accounts_.contains(addr)) {
-        if (bal_) const_cast<ZiskStateDB*>(this)->bal_load(addr);
-        return 0;  // non-existent account has no code
-    }
     const auto hash = const_cast<Accounts&>(accounts_).code_hash(addr, tx_counter_);
     if (hash == EMPTY_CODE_HASH) {
         return 0;
@@ -369,7 +305,7 @@ bool ZiskStateDB::selfdestruct(const evmc::address& addr,
     //
     // All field clears go through the journal so a revert of the
     // surrounding frame restores the contract intact.
-    const size_t src_idx = ensure_account(addr);
+    const size_t src_idx = account_row(addr);
     const bool same_tx_created = created_this_tx_idx_.count(src_idx) != 0;
     const bool should_destroy  = is_cancun_or_later() ? same_tx_created : true;
 
@@ -407,7 +343,7 @@ bool ZiskStateDB::selfdestruct(const evmc::address& addr,
     }
 
     // Log + transfer balance.
-    const size_t dst_idx = ensure_account(beneficiary);
+    const size_t dst_idx = account_row(beneficiary);
     journal_.log_balance(src_idx, accounts_.balance_at(src_idx),
                          accounts_.last_tx_idx_at(src_idx));
     journal_.log_balance(dst_idx, accounts_.balance_at(dst_idx),
@@ -434,49 +370,12 @@ bool ZiskStateDB::selfdestruct(const evmc::address& addr,
 
 void ZiskStateDB::apply_pending_destructs() noexcept {
     // Called once per tx after the EVM completes. Each pending entry
-    // gets its full clear (nonce + code_hash + storage + dynamic
-    // storage). No journaling needed — the tx has committed and no
-    // revert can roll these back.
+    // gets its full clear (nonce + code_hash + storage). No journaling
+    // needed — the tx has committed and no revert can roll these back.
     for (size_t idx : pending_destruct_) {
         clear_account_for_selfdestruct(idx);
     }
     pending_destruct_.clear();
-}
-
-void ZiskStateDB::commit_dynamic_storage() noexcept {
-    // Move surviving fresh-account slots into the static `Storages` table so
-    // the post-block new-root walk can insert them. The block-original of a
-    // dynamic slot is 0 (it didn't exist pre-block); only non-zero current
-    // values matter (a zero slot has no trie effect). Appended rows are
-    // "created" (index >= the witness storage count) and get inserted into
-    // their owning account's storage subtree by calculate_new_state_root.
-    // No journaling: the tx has committed and no revert crosses the boundary.
-    for (const auto& [addr, inner] : dynamic_storage_.entries()) {
-        // Skip slots whose owning account ended empty / absent: an empty
-        // account (nonce=0, balance=0, code=EMPTY) is removed by EIP-161
-        // along with its storage, so its slots must not enter the trie. An
-        // account never added to the table is empty by definition.
-        if (!accounts_.contains(addr)) {
-            continue;
-        }
-        const size_t a_idx = accounts_.index_of(addr);
-        if (is_empty_account(accounts_.nonce_at(a_idx),
-                             accounts_.balance_at(a_idx),
-                             accounts_.code_hash_at(a_idx))) {
-            continue;
-        }
-        for (const auto& [pos, slot] : inner) {
-            if (slot.value == evmc::bytes32{}) {
-                continue;
-            }
-            size_t idx = storages_.find(addr, pos);
-            if (idx == Storages::npos) {
-                idx = storages_.append(addr, pos, evmc::bytes32{});
-            }
-            storages_.set_value_at(idx, slot.value, tx_counter_);
-        }
-    }
-    dynamic_storage_.clear();
 }
 
 void ZiskStateDB::clear_account_for_selfdestruct(size_t src_idx) noexcept {
@@ -532,22 +431,6 @@ void ZiskStateDB::clear_account_for_selfdestruct(size_t src_idx) noexcept {
         }
         journal_.log_storage(i, cur, storages_.last_tx_idx_at(i));
         storages_.set_value_at(i, evmc::bytes32{}, tx_counter_);
-    }
-
-    // Dynamic-storage side: drop every slot the EVM SSTORE'd on this
-    // freshly-created address in O(1) (the nested unordered_map's
-    // erase is constant-time on the outer key). The journal records
-    // the entire snapshot so a frame revert restores it atomically.
-    if (dynamic_storage_.contains(addr)) {
-        auto snap = dynamic_storage_.erase_account(addr);
-        if (bal_) {
-            for (const auto& [pos, slot] : snap) {
-                if (auto* s = bal_->find_dynamic_slot(addr, pos)) {
-                    bal_->open_slot(*s, slot.value);
-                }
-            }
-        }
-        journal_.log_dyn_account_erase(addr, std::move(snap));
     }
 
     // The block-start storage trie (incl. preimage-less slots we couldn't
@@ -739,16 +622,22 @@ evmc_access_status ZiskStateDB::access_account(const evmc::address& addr) noexce
     // table includes them. Short-circuit here so callers don't need
     // to inject precompile entries into the prestate.
     if (evmone::state::is_precompile(active_revision(), addr)) {
-        if (bal_) bal_pending_ = ensure_account(addr);  // EIP-7928, see below
+        if (bal_) bal_pending_ = pending_row(addr);  // EIP-7928, see below
         return EVMC_ACCESS_WARM;
     }
-    // A witness-absent address is non-existent (empty) — but we still must
-    // track its EIP-2929 warm/cold state across accesses within the tx
-    // (e.g. a delegate target read twice: cold then warm). `ensure_account`
-    // gives it an empty table row so the normal warm machinery (below)
-    // applies; the empty row is skipped by the new-root walk, so it doesn't
-    // enter the trie.
-    const size_t idx      = ensure_account(addr);
+    // Warming is not a load: an address without a row (whose gas charge may
+    // then fail) only gets its warmth tracked. A load that follows needs the
+    // row.
+    if (!accounts_.contains(addr)) {
+        const uint64_t last = warm_keys_.account(addr);
+        if (last != tx_counter_) {
+            journal_.log_warm_key_account(addr, last);
+            warm_keys_.set_account(addr, tx_counter_);
+        }
+        if (bal_) bal_pending_ = kMissingRow;
+        return last == tx_counter_ ? EVMC_ACCESS_WARM : EVMC_ACCESS_COLD;
+    }
+    const size_t idx      = accounts_.index_of(addr);
     const bool   was_warm = accounts_.is_warm_at(idx, tx_counter_);
     if (!was_warm) {
         // Journal the cold→warm transition so a reverted EVM frame
@@ -768,35 +657,16 @@ evmc_access_status ZiskStateDB::access_account(const evmc::address& addr) noexce
 evmc_access_status ZiskStateDB::access_storage(const evmc::address& addr,
                                                const evmc::bytes32& key) noexcept {
     bal_commit_pending();
-    // Same routing rule as get_storage/set_storage: any slot the witness
-    // didn't include goes through dynamic_storage_ (block-original 0).
+    // Warming is not a load: a slot without a row only gets its warmth
+    // tracked; the SLOAD / SSTORE that follows needs the row.
     const size_t idx = storages_.find(addr, key);
     if (idx == Storages::npos) {
-        // Witness-absent slot: route through dynamic_storage_. We
-        // auto-insert the slot if absent
-        // (mark_touched does it) so the subsequent SLOAD/SSTORE find
-        // an entry to read/journal. For the journal: log the cold→warm
-        // transition so a revert restores the slot's prior state
-        // (which may be "absent" if this access is what created the
-        // entry).
-        const bool was_present = dynamic_storage_.contains(addr, key);
-        const bool was_warm = was_present
-            && dynamic_storage_.is_warm(addr, key, tx_counter_);
-        if (!was_warm) {
-            const uint64_t old_tx_idx = was_present
-                ? dynamic_storage_.last_tx_idx(addr, key)
-                : 0;
-            if (was_present) {
-                journal_.log_dyn_storage_warm(addr, key, old_tx_idx);
-            } else {
-                // Insertion-via-access: journal as a "was_present=false"
-                // dyn_storage entry so rollback removes the slot.
-                journal_.log_dyn_storage(addr, key, /*was_present=*/false,
-                                         evmc::bytes32{}, 0);
-            }
+        const uint64_t last = warm_keys_.slot(addr, key);
+        if (last != tx_counter_) {
+            journal_.log_warm_key_slot(addr, key, last);
+            warm_keys_.set_slot(addr, key, tx_counter_);
         }
-        dynamic_storage_.mark_touched(addr, key, tx_counter_);
-        return was_warm ? EVMC_ACCESS_WARM : EVMC_ACCESS_COLD;
+        return last == tx_counter_ ? EVMC_ACCESS_WARM : EVMC_ACCESS_COLD;
     }
 
     // EIP-2929 warm/cold: a slot is warm iff it was already touched in
@@ -822,10 +692,6 @@ std::span<const uint8_t> ZiskStateDB::code(const evmc::address& addr) const noex
 std::span<const uint8_t> ZiskStateDB::code_and_hash(
         const evmc::address& addr, evmc::bytes32& out_hash) const noexcept {
     out_hash = EMPTY_CODE_HASH;
-    if (!accounts_.contains(addr)) {
-        if (bal_) const_cast<ZiskStateDB*>(this)->bal_load(addr);
-        return {};  // non-existent account has no code
-    }
     const auto hash = const_cast<Accounts&>(accounts_).code_hash(addr, tx_counter_);
     if (hash == EMPTY_CODE_HASH) {
         return {};
@@ -861,7 +727,7 @@ ZiskStateDB::Checkpoint ZiskStateDB::checkpoint() noexcept {
 }
 
 void ZiskStateDB::rollback(Checkpoint cp) noexcept {
-    journal_.rollback(cp.journal_cp, accounts_, storages_, dynamic_storage_, transient_, pending_destruct_);
+    journal_.rollback(cp.journal_cp, accounts_, storages_, warm_keys_, transient_, pending_destruct_);
     if (!tx_receipts_.empty()) {
         tx_receipts_.back().logs.resize(cp.log_count);
     }
@@ -872,17 +738,8 @@ void ZiskStateDB::execute_block(const Transactions& transactions) noexcept {
     process_transactions(transactions);
     post_execute_block();
 
-    // EIP-7928: the BAL, before commit_dynamic_storage drops the dynamic
-    // slots its final values are read from.
+    // EIP-7928: the BAL.
     if (bal_) bal_hash_ = build_block_access_list_hash();
-
-    // Commit every surviving fresh-account slot (block-original 0) from the
-    // dynamic scratchpad into the static `Storages` table so the new-root
-    // walk inserts them. Done ONCE at block-end — captures the pre-block
-    // (EIP-2935/4788) and post-block (EIP-7002/7251) system-call writes,
-    // which run outside the tx loop. Same-tx-SELFDESTRUCT'd slots were
-    // already dropped by erase_account, so they aren't committed.
-    commit_dynamic_storage();
 
     // Receipts trie root: built from the finalized tx_receipts_, one
     // leaf per tx keyed by RLP(tx_index).
@@ -945,37 +802,28 @@ void ZiskStateDB::execute_block(const Transactions& transactions) noexcept {
 
 // ===== Private methods =====
 
-size_t ZiskStateDB::ensure_account(const evmc::address& addr) noexcept {
-    if (accounts_.contains(addr)) {
-        return accounts_.index_of(addr);
+size_t ZiskStateDB::account_row(const evmc::address& addr) const noexcept {
+    return accounts_.index_of(addr);  // halts if the address has no row
+}
+
+size_t ZiskStateDB::storage_row(const evmc::address& addr,
+                                const evmc::bytes32& key) const noexcept {
+    const size_t idx = storages_.find(addr, key);
+    if (idx == Storages::npos) {
+        // Every slot the block loads is a row (an empty leaf if it doesn't
+        // exist); one without is unproven, so halt.
+        std::fprintf(stderr, "missing slot 0x");
+        for (uint8_t b : addr.bytes) std::fprintf(stderr, "%02x", b);
+        std::fprintf(stderr, " 0x");
+        for (uint8_t b : key.bytes) std::fprintf(stderr, "%02x", b);
+        std::fprintf(stderr, "\n");
+        fatal("state key not in witness: storage slot");
     }
-    // No witness row — this address is being created or credited this block
-    // (CREATE target, value-transfer recipient, withdrawal/coinbase). Append
-    // an empty (non-existent) row into the table's slack. Its block-original
-    // is empty, so the new-root walk inserts it only if it ends non-empty.
-    // No journal entry is needed for the append itself: a frame revert
-    // restores the fields to empty via their own journal logs, rendering the
-    // row non-existent again (the now-empty row is harmless).
-    //
-    // EXCEPTION: a non-empty, preimage-less account (a CREATE2 target funded
-    // in a prior block, or simply a real contract the tracer never touched)
-    // exists only as an Op::PhantomLeaf — its fields are in the trie, not
-    // this table. StateRoot recorded keccak(addr) -> {nonce, balance,
-    // code_hash}; if this address matches, seed the row's ORIGINAL from it
-    // so any touch here (a CREATE preserving pre-existing funds, or merely an
-    // EIP-2929 access-warm probe that never mutates the account) reflects the
-    // REAL pre-state fields instead of silently reverting to an empty
-    // account. Seeding the ORIGINAL (not just current) is load-bearing: the
-    // new-root pass supersedes the phantom leaf only when original != empty,
-    // which requires the original to reflect the true pre-state fields —
-    // and a probe that never mutates the row leaves current == original, so
-    // the resurrected leaf rebuilds to the exact same RLP/hash as the
-    // phantom it replaces.
-    const evmc::bytes32 addr_hash = keccak256_bytes32(addr.bytes, sizeof(addr.bytes));
-    if (const Accounts::PhantomAccount* ph = accounts_.phantom_account(addr_hash)) {
-        return accounts_.append(addr, ph->nonce, ph->balance, ph->code_hash);
-    }
-    return accounts_.append(addr, 0, evmc::uint256be{}, EMPTY_CODE_HASH);
+    return idx;
+}
+
+size_t ZiskStateDB::pending_row(const evmc::address& addr) const noexcept {
+    return accounts_.contains(addr) ? accounts_.index_of(addr) : kMissingRow;
 }
 
 evmc_result ZiskStateDB::run_frame(const evmc_message* msg, const uint8_t* code,
@@ -994,21 +842,21 @@ evmc_result ZiskStateDB::run_frame(const evmc_message* msg, const uint8_t* code,
 
 void ZiskStateDB::bal_commit_pending() const noexcept {
     if (bal_pending_ != kNoBalPending) {
+        // The access was paid for, so the account is in the BAL — and must
+        // be a row.
+        if (bal_pending_ == kMissingRow) fatal("state key not in witness: BAL account");
         accounts_.bal_access_at(bal_pending_);
         bal_pending_ = kNoBalPending;
     }
 }
 
 void ZiskStateDB::bal_load(const evmc::address& addr) noexcept {
-    accounts_.bal_access_at(ensure_account(addr));
+    accounts_.bal_access_at(account_row(addr));
 }
 
-BlockAccessList::Slot& ZiskStateDB::bal_slot(size_t storage_idx,
-                                             const evmc::address& addr,
-                                             const evmc::bytes32& key) noexcept {
-    auto& s = storage_idx == Storages::npos
-        ? bal_->dynamic_slot(addr, key)
-        : bal_->witness_slot(storages_.bal_id_at(storage_idx), key);
+BlockAccessList::Slot& ZiskStateDB::bal_slot(size_t storage_idx) noexcept {
+    auto& s = bal_->witness_slot(storages_.bal_id_at(storage_idx),
+                                 storages_.position_at(storage_idx));
     bal_->access_slot(s);
     return s;
 }
@@ -1019,80 +867,83 @@ evmc::bytes32 ZiskStateDB::build_block_access_list_hash() noexcept {
     if (items > consensus_.gas_limit() / kBalItemCost) {
         fatal("block access list exceeds the gas limit (BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED)");
     }
-    if (bal_hint_ == nullptr) fatal("BAL: no key hint");
-    const auto hint = bal_hint_->accounts();
-    if (std::getenv("ZEG_DUMP_BAL") != nullptr) {  // DEBUG: the accessed set
-        for (size_t r = 0; r < accounts_.size(); ++r) {
-            if (!bal_->account(r).accessed) continue;
-            std::fprintf(stderr, "BAL acct 0x");
-            for (uint8_t b : accounts_.address_at(r).bytes) std::fprintf(stderr, "%02x", b);
-            std::fprintf(stderr, "\n");
-        }
-        std::fprintf(stderr, "BAL accessed accounts=%zu slots=%zu; hint accounts=%zu slots=%zu\n",
-                     bal_->accessed_accounts(), bal_->accessed_slots(), hint.size(),
-                     bal_hint_->slot_count());
-    }
-    // The hint is exactly the accessed set: every key accessed, strictly
-    // increasing (so no key twice), and as many keys as were accessed.
-    if (hint.size() != bal_->accessed_accounts() ||
-        bal_hint_->slot_count() != bal_->accessed_slots()) {
-        fatal("BAL hint: key count differs from the accessed set");
-    }
 
+    // Walk every row in sorted order. The links come from the input, so
+    // check them: addresses strictly increasing, each account's slots
+    // strictly increasing and owned by it, and every row visited — which
+    // makes the walk exactly the rows, in order. Every key the block loaded
+    // is a row, so emitting the accessed ones gives the BAL.
+    constexpr uint64_t kNoLink = Accounts::kNoLink;
+    const uint64_t n_accounts = accounts_.size();
+    const uint64_t n_storages = storages_.size();
     std::vector<const BlockAccessList::Slot*> slots;
-    slots.reserve(bal_hint_->slot_count());
+    slots.reserve(bal_->accessed_slots());
     std::vector<BlockAccessList::Entry> entries;
-    entries.reserve(hint.size());
+    entries.reserve(bal_->accessed_accounts());
+    uint64_t seen_accounts = 0;
+    uint64_t seen_storages = 0;
     const evmc::address* prev_addr = nullptr;
-    for (const auto& ha : hint) {
-        const evmc::address& addr = *ha.address;
+    for (uint64_t row = accounts_.first_sorted(); row != kNoLink;
+         row = accounts_.next_sorted_at(row)) {
+        if (row >= n_accounts || ++seen_accounts > n_accounts) {
+            fatal("BAL: bad account link");
+        }
+        const evmc::address& addr = accounts_.address_at(row);
         if (prev_addr != nullptr && std::memcmp(prev_addr->bytes, addr.bytes, 20) >= 0) {
-            fatal("BAL hint: addresses not strictly increasing");
+            fatal("BAL: account links not strictly increasing");
         }
         prev_addr = &addr;
-        if (!accounts_.contains(addr)) fatal("BAL hint: address not accessed");
-        const size_t row = accounts_.index_of(addr);
-        if (!bal_->account(row).accessed) fatal("BAL hint: address not accessed");
-        bal_->close_account(row, accounts_.balance_at(row), accounts_.nonce_at(row),
-                            accounts_.code_hash_at(row));
 
         const std::size_t first = slots.size();
         const evmc::bytes32* prev_key = nullptr;
-        for (const auto& key : ha.slots) {
+        for (uint64_t s = accounts_.first_sorted_storage_at(row); s != kNoLink;
+             s = storages_.next_sorted_at(s)) {
+            if (s >= n_storages || ++seen_storages > n_storages) {
+                fatal("BAL: bad storage link");
+            }
+            if (std::memcmp(storages_.address_at(s).bytes, addr.bytes, 20) != 0) {
+                fatal("BAL: storage link leaves its account");
+            }
+            const evmc::bytes32& key = storages_.position_at(s);
             if (prev_key != nullptr && std::memcmp(prev_key->bytes, key.bytes, 32) >= 0) {
-                fatal("BAL hint: slots not strictly increasing");
+                fatal("BAL: storage links not strictly increasing");
             }
             prev_key = &key;
-            const size_t idx = storages_.find(addr, key);
-            BlockAccessList::Slot* s = nullptr;
-            evmc::bytes32 current{};
-            if (idx != Storages::npos) {
-                if (storages_.bal_id_at(idx) != BlockAccessList::kNone) {
-                    s = &bal_->slot(storages_.bal_id_at(idx));
-                }
-                current = storages_.value_at(idx);
-            } else {
-                s = bal_->find_dynamic_slot(addr, key);
-                current = dynamic_storage_.value(addr, key);
-            }
-            if (s == nullptr || !s->accessed) fatal("BAL hint: slot not accessed");
-            bal_->close_slot(*s, current);
-            slots.push_back(s);
+            const uint32_t id = storages_.bal_id_at(s);
+            if (id == BlockAccessList::kNone || !bal_->slot(id).accessed) continue;
+            BlockAccessList::Slot& sl = bal_->slot(id);
+            bal_->close_slot(sl, storages_.value_at(s));
+            slots.push_back(&sl);
         }
+
+        if (!bal_->account(row).accessed) {
+            if (slots.size() != first) fatal("BAL: slot accessed without its account");
+            continue;
+        }
+        bal_->close_account(row, accounts_.balance_at(row), accounts_.nonce_at(row),
+                            accounts_.code_hash_at(row));
         entries.push_back(BlockAccessList::Entry{
             &addr, &bal_->account(row),
             std::span<const BlockAccessList::Slot* const>{slots.data() + first,
                                                           slots.size() - first}});
     }
-    if (std::getenv("ZEG_DUMP_BAL") != nullptr) bal_->dump(entries, contracts_);
+    if (seen_accounts != n_accounts || seen_storages != n_storages) {
+        fatal("BAL: sorted links don't cover every row");
+    }
+    // Every accessed row was visited, so these hold by construction; keep
+    // them as a cheap guard on the accessed-flag bookkeeping.
+    if (entries.size() != bal_->accessed_accounts() || slots.size() != bal_->accessed_slots()) {
+        fatal("BAL: accessed count mismatch");
+    }
+    if (std::getenv("ZEG_DUMP_BAL") != nullptr) bal_->dump(entries, contracts_);  // DEBUG
     return bal_->hash(entries, contracts_);
 }
 
 void ZiskStateDB::transfer_value(const evmc::address& from,
                                  const evmc::address& to,
                                  const evmc::uint256be& value) noexcept {
-    const size_t from_idx = ensure_account(from);
-    const size_t to_idx   = ensure_account(to);
+    const size_t from_idx = account_row(from);
+    const size_t to_idx   = account_row(to);
 
     // Self-transfer is a no-op (debit and credit cancel). Without this
     // guard the two `set_balance_at` calls below would target the same
@@ -1144,7 +995,7 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
 
     // 1. Derive the new contract address. Sender's nonce *before* the
     //    create-time increment is the input to the CREATE hash.
-    const size_t   sender_idx       = ensure_account(msg.sender);
+    const size_t   sender_idx       = account_row(msg.sender);
     const uint64_t sender_nonce_pre = accounts_.nonce_at(sender_idx);
 
     // EIP-2681: a CREATE/CREATE2 whose sender's nonce is already at the
@@ -1178,7 +1029,7 @@ evmc::Result ZiskStateDB::call_create(const evmc_message& msg,
     // the sender-nonce bump does. EIP-6780 same-tx-destruct
     // eligibility is intentionally NOT granted here — that only
     // applies to a successfully created account (see step 3 below).
-    const size_t na_idx = ensure_account(new_addr);
+    const size_t na_idx = account_row(new_addr);
     accounts_.bal_access_at(na_idx);  // EIP-7928: loaded for the collision check
     if (!accounts_.is_warm_at(na_idx, tx_counter_)) {
         journal_.log_account_warm(na_idx, accounts_.last_tx_idx_at(na_idx));
@@ -1292,38 +1143,24 @@ bool ZiskStateDB::address_has_storage(const evmc::address& addr) const noexcept 
     for (size_t i : storages_.slots_of(addr)) {
         if (!is_zero_value(storages_.value_at(i))) return true;
     }
-    const auto& outer = dynamic_storage_.entries();
-    const auto  it     = outer.find(addr);
-    if (it != outer.end()) {
-        for (const auto& [pos, slot] : it->second) {
-            if (!is_zero_value(slot.value)) return true;
-        }
-    }
     return false;
 }
 
 bool ZiskStateDB::has_block_start_storage(size_t idx) const noexcept {
     if (storage_wiped_idx_.count(idx) != 0) return false;
-    // Set by the old-root walk and left alone until the new-root pass, so
-    // during execution it's the block-start storage subtree. Any non-Empty
-    // node (even an unrevealed Hash / PhantomLeaf) means non-empty storage.
-    // Rows appended at run time default to Empty.
-    if (accounts_.storage_root_child_at(idx).type != NodeType::Empty) return true;
-    // A row seeded from a preimage-less account leaf (see ensure_account)
-    // has no subtree here; its block-start storage root came with the leaf.
-    const evmc::address& addr = accounts_.address_at(idx);
-    const Accounts::PhantomAccount* ph = accounts_.phantom_account(
-        keccak256_bytes32(addr.bytes, sizeof(addr.bytes)));
-    return ph != nullptr && ph->storage_root != kEmptyTrieRoot;
+    // The block-start storage root, recorded by the old-root walk. A subtree
+    // of absent (empty) slot leaves hashes to the empty root, so this — not
+    // the subtree's node type — says whether storage existed. Rows appended
+    // at run time have none.
+    return !accounts_.block_start_storage_empty_at(idx);
 }
 
 bool ZiskStateDB::init_create_account(const evmc::address& new_addr,
                                       const evmc_message&  msg) noexcept {
     // EIP-684 collision check (EIP-7610 clarifies storage also counts).
-    // The address may have no witness row (a brand-new contract address)
-    // — `ensure_account` appends an empty row for it. It must look empty
-    // (nonce == 0, code_hash == EMPTY, and no non-zero storage slots).
-    const size_t new_idx = ensure_account(new_addr);
+    // A brand-new contract address is a row too (an empty leaf). It must
+    // look empty (nonce == 0, code_hash == EMPTY, and no non-zero storage).
+    const size_t new_idx = account_row(new_addr);
     if (accounts_.nonce_at(new_idx) != 0 ||
         accounts_.code_hash_at(new_idx) != EMPTY_CODE_HASH ||
         address_has_storage(new_addr) || has_block_start_storage(new_idx)) {
@@ -1481,15 +1318,10 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         ++tx_counter_;
         transient_.reset();
         created_this_tx_idx_.clear();
-        delegated_this_tx_idx_.clear();
         // pending_destruct_ is also per-tx — `apply_pending_destructs`
         // at the END of the previous iteration drained it, so this
         // clear is just a paranoia guard (also handles tx 0).
         pending_destruct_.clear();
-        // `dynamic_storage_` is empty at the start of each tx: the prior
-        // tx's surviving fresh-account slots were committed to the static
-        // `Storages` table by `commit_dynamic_storage` at its end (and any
-        // same-tx-SELFDESTRUCT slots were dropped by `erase_account`).
 
         const auto& tx = transactions.at(i);
         if (bal_) bal_->set_index(static_cast<uint32_t>(i + 1));  // EIP-7928
@@ -1512,7 +1344,7 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         set_tx_context(build_per_tx_context(tx, blob_hashes));
 
         // Pre-EVM accounting (NOT journaled — survives EVM revert).
-        const size_t  sender_idx    = ensure_account(tx.sender());
+        const size_t  sender_idx    = account_row(tx.sender());
         const int64_t intrinsic_gas = apply_pre_evm_accounting(tx, sender_idx);
 
         // The tx's gas after intrinsic: regular gas, and the EIP-8037
@@ -1565,13 +1397,13 @@ void ZiskStateDB::pre_warm_for_tx(const Transactions::View& tx) noexcept {
         if (evmone::state::is_precompile(active_revision(), a)) {
             return;
         }
-        // EIP-2930 lets a tx pre-declare addrs it might touch. A
-        // witness-absent address is empty; `ensure_account` gives it a row
-        // so its warmth can be tracked (matching the static branch), so the
-        // first real access is WARM. The empty row is skipped by the
-        // new-root walk.
-        const size_t idx = ensure_account(a);
-        accounts_.mark_touched_at(idx, tx_counter_);
+        // Warming is not a load: an address the block never loads may have
+        // no row. Not journaled — pre-warming is tx-initial.
+        if (accounts_.contains(a)) {
+            accounts_.mark_touched_at(accounts_.index_of(a), tx_counter_);
+        } else {
+            warm_keys_.set_account(a, tx_counter_);
+        }
     };
 
     // tx.origin (EIP-2929) + coinbase (EIP-3651, Shanghai+) + tx.to.
@@ -1625,11 +1457,8 @@ void ZiskStateDB::pre_warm_for_tx(const Transactions::View& tx) noexcept {
                 std::memcpy(slot.bytes, k.payload.data(), 32);
                 const size_t sidx = storages_.find(a, slot);
                 if (sidx == Storages::npos) {
-                    // Witness-absent access-list slot (block-original 0):
-                    // pre-warm it in the dynamic table so its first SLOAD/
-                    // SSTORE is WARM (EIP-2930). Mirrors the static branch
-                    // (not journaled — access-list warming is tx-initial).
-                    dynamic_storage_.mark_touched(a, slot, tx_counter_);
+                    // A slot the block never loads may have no row.
+                    warm_keys_.set_slot(a, slot, tx_counter_);
                     continue;
                 }
                 storages_.mark_touched_at(sidx, tx_counter_);
@@ -1919,7 +1748,7 @@ int64_t ZiskStateDB::apply_authorization_list(const Transactions::View& tx,
     if (is_amsterdam_or_later()) {
         charges.emplace(AuthCharges{g, {sender_idx}, {}, {}});
         if (tx.to() != nullptr && intx::be::load<intx::uint256>(tx.value()) != 0) {
-            charges->written.push_back(ensure_account(*tx.to()));
+            charges->written.push_back(account_row(*tx.to()));
         }
     }
 
@@ -2054,12 +1883,10 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item& auth_item,
         return 0;
     }
 
-    // A well-formed auth signature deterministically recovers `signer`. If
-    // the witness didn't reveal it, it's a fresh authority with empty
-    // block-state — `ensure_account` appends an empty row and the new-root
-    // pass inserts it (fataling if its trie path is an unrevealed Hash, so a
-    // prover can't hide a real account behind Op::Hash to drop the auth).
-    const size_t signer_idx = ensure_account(signer);
+    // A well-formed auth signature deterministically recovers `signer`, and
+    // the authority is loaded: it must be a row (an empty leaf if it doesn't
+    // exist yet).
+    const size_t signer_idx = account_row(signer);
     accounts_.bal_access_at(signer_idx);  // EIP-7928: the authority is loaded
 
     // EIP-2780: note whether the authority was delegated at tx start,
@@ -2193,12 +2020,6 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item& auth_item,
         accounts_.set_code_hash_at(signer_idx, delegation_hash, tx_counter_);
         // EIP-7928: a BAL code change carries the code bytes.
         if (bal_) contracts_.insert(delegation_hash, delegation, sizeof(delegation));
-        // Track this EOA as a dynamic-storage routing target for the
-        // rest of the tx — see the comment on `delegated_this_tx_idx_`
-        // for the security argument. We only do this on the
-        // delegation-SET branch; the clear branch above leaves the
-        // EOA code-less again, so it doesn't need the routing.
-        delegated_this_tx_idx_.insert(signer_idx);
     }
 
     return (signer_was_non_empty && charges == nullptr) ? 12500 : 0;
@@ -2308,7 +2129,7 @@ evmc::Result ZiskStateDB::execute_top_level_message(const Transactions::View& tx
         msg.recipient = new_addr;
         const auto entry_code = tx.data();
 
-        const size_t new_idx = ensure_account(new_addr);
+        const size_t new_idx = account_row(new_addr);
         accounts_.bal_access_at(new_idx);  // EIP-7928: loaded for the collision check
         // EIP-2929: newly-created contract is added to the access list
         // as part of looking it up for the collision check below —
@@ -2554,7 +2375,7 @@ ZiskStateDB::TxGasUsed ZiskStateDB::settle_tx_gas(const Transactions::View& tx,
         const auto fee_u =
             intx::uint256{static_cast<uint64_t>(gas_used)} * priority_u;
         const size_t coinbase_idx =
-            ensure_account(consensus_.beneficiary());
+            account_row(consensus_.beneficiary());
         const auto bal_u =
             intx::be::load<intx::uint256>(accounts_.balance_at(coinbase_idx));
         accounts_.set_balance_at(coinbase_idx,
@@ -2634,7 +2455,7 @@ void ZiskStateDB::credit_block_reward() noexcept {
     if (!is_pow) return;
 
     const auto reward_u = intx::uint256{2} * intx::uint256{1'000'000'000'000'000'000ULL};
-    const size_t coinbase_idx = ensure_account(consensus_.beneficiary());
+    const size_t coinbase_idx = account_row(consensus_.beneficiary());
     const auto bal_u =
         intx::be::load<intx::uint256>(accounts_.balance_at(coinbase_idx));
     accounts_.set_balance_at(coinbase_idx,
@@ -2649,7 +2470,7 @@ void ZiskStateDB::credit_withdrawals() noexcept {
     // amounts are in gwei; balances are in wei.
     const auto gwei_to_wei = intx::uint256{1'000'000'000};
     for (const auto& w : consensus_.withdrawals()) {
-        const size_t idx = ensure_account(w.address());
+        const size_t idx = account_row(w.address());
         const auto   bal_u =
             intx::be::load<intx::uint256>(accounts_.balance_at(idx));
         const auto credit_u =

@@ -243,21 +243,16 @@ int run(const uint8_t* input, size_t len, uint8_t out[32]) {
     if (std::getenv("ZEG_DUMP_SROOT_OFFSET") != nullptr) {
         std::fprintf(stderr, "SROOT_OFFSET=%zu\n", (size_t)(cursor - file_base));
     }
-    zeg::StateRoot state_root(cursor, accounts, storages, consensus.gas_limit());
+    zeg::StateRoot state_root(cursor, accounts, storages);
     if (state_root.old_state_root() != consensus.parent_hash()) {
         zeg::fatal("pre-execution state root mismatch");
     }
-
-    // 4'. EIP-7928 BalHint: the prover's BAL keys in order (empty before
-    //     Amsterdam). Execution checks them against what it accessed.
-    const zeg::BalHint bal_hint(cursor);
 
     // 5. Construct the state DB. ZiskStateDB borrows the five
     //    collections by reference for the rest of the run; Host
     //    callbacks pass data through them (or fatal-stub for overrides
     //    that need infrastructure not yet built).
     zeg::ZiskStateDB state(accounts, consensus, contracts, previous_blocks, storages);
-    state.set_bal_hint(&bal_hint);
 
     // 6. Run the whole block: pre-block system calls, every tx, then
     //    post-block side-effects. `state` owns the evmone VM and

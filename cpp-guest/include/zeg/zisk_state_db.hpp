@@ -44,7 +44,7 @@
 #include "zeg/block_access_list.hpp"
 #include "zeg/consensus_info.hpp"
 #include "zeg/contracts.hpp"
-#include "zeg/dynamic_storage.hpp"
+#include "zeg/warm_keys.hpp"
 #include "zeg/journal.hpp"
 #include "zeg/previous_blocks.hpp"
 #include "zeg/receipt.hpp"           // LogEntry, TxReceipt
@@ -212,10 +212,8 @@ public:
     // list collapses to sha256("") per the EIP.
     const evmc::bytes32& requests_hash() const noexcept { return requests_hash_; }
 
-    // EIP-7928 (Amsterdam): the prover's BAL key hint (the BalHint input
-    // section), set before `execute_block`; and the hash of the BAL built
-    // while executing, available after it (zero before Amsterdam).
-    void set_bal_hint(const BalHint* hint) noexcept { bal_hint_ = hint; }
+    // EIP-7928 (Amsterdam): the hash of the BAL built while executing,
+    // available after `execute_block` (zero before Amsterdam).
     const evmc::bytes32& block_access_list_hash() const noexcept { return bal_hash_; }
 
     // ----- block execution driver -----
@@ -235,16 +233,19 @@ public:
 private:
     // ===== Private methods =====
 
-    // Return the Accounts index of `addr`, appending an empty (non-existent)
-    // row into the table's slack if the witness didn't include it (a key
-    // created/credited this block). Sound: an absent address has empty
-    // block-state (a non-empty one would fail the parent anchor).
-    size_t ensure_account(const evmc::address& addr) noexcept;
+    // The Accounts row of `addr`. Every account the block loads is a row —
+    // the input places an empty leaf for one that doesn't exist, which the
+    // parent-root check proves absent — so a load of an address without a
+    // row halts: its block-start value is unproven.
+    size_t account_row(const evmc::address& addr) const noexcept;
+    // The Storages row of (addr, key); halts if it has none (same reason).
+    size_t storage_row(const evmc::address& addr, const evmc::bytes32& key) const noexcept;
+    // The row of `addr` for a pending BAL access, or kMissingRow.
+    size_t pending_row(const evmc::address& addr) const noexcept;
 
     // EIP-7928: put `addr` in the BAL (Amsterdam only) — for loads that
     // don't go through the touching Accounts readers or a write, e.g. a
-    // precompile CALL, a system-call target without code, or a read of a
-    // witness-absent address. Gives the address a row if it has none.
+    // precompile CALL or a system-call target without code.
     void bal_load(const evmc::address& addr) noexcept;
     // EIP-7928: commit the account of the last `access_account` as loaded
     // (a later host callback in the frame, or the frame ending normally,
@@ -254,16 +255,11 @@ private:
     evmc_result run_frame(const evmc_message* msg, const uint8_t* code,
                           size_t code_size, evmc2_pre_execution* analysis) noexcept;
     // EIP-7928: the BAL slot record for (addr, key), marked accessed.
-    BlockAccessList::Slot& bal_slot(size_t storage_idx, const evmc::address& addr,
-                                    const evmc::bytes32& key) noexcept;
-    // EIP-7928: check the prover's key hint against the accessed set, close
-    // every open period, encode the BAL and hash it. End of block.
+    BlockAccessList::Slot& bal_slot(size_t storage_idx) noexcept;
+    // EIP-7928: walk the rows in sorted order (the input's links, checked to
+    // cover every row exactly once), close every open period, encode the
+    // accessed ones and hash. End of block.
     evmc::bytes32 build_block_access_list_hash() noexcept;
-
-    // Commit surviving fresh-account slots from `dynamic_storage_` into the
-    // static `Storages` table at tx-end, then clear it. Called once per tx
-    // after `apply_pending_destructs`.
-    void commit_dynamic_storage() noexcept;
 
     // Move `value` ether from `from` to `to`, logging both pre-write
     // balances to the journal first so a later rollback restores them.
@@ -307,10 +303,9 @@ private:
     bool init_create_account(const evmc::address& new_addr,
                              const evmc_message&  msg) noexcept;
 
-    // EIP-7610: true iff `addr` has any non-zero storage slot (static
-    // witness table or the per-tx dynamic scratchpad). An address with
-    // nonce==0 and empty code but non-empty storage (a leftover
-    // "phantom" leaf) must still block CREATE/CREATE2.
+    // EIP-7610: true iff `addr` has any non-zero storage slot. An address
+    // with nonce==0 and empty code but non-empty storage must still block
+    // CREATE/CREATE2.
     bool address_has_storage(const evmc::address& addr) const noexcept;
 
     // EIP-7610: true iff row `idx` had a non-empty storage trie at block
@@ -343,18 +338,6 @@ private:
     // no revert is possible (the tx has committed), so the clears
     // don't need their own journal entries — they're terminal.
     void apply_pending_destructs() noexcept;
-
-    // True iff `addr` was CREATEd in the current tx (per
-    // `created_this_tx_idx_`). Routing predicate for the dynamic
-    // storage path: SSTORE/SLOAD/access_storage on such addresses go
-    // through `dynamic_storage_` rather than the static `storages_`
-    // table, since reth's witness may not contain their slots.
-    bool is_fresh_account(const evmc::address& addr) const noexcept {
-        if (!accounts_.contains(addr)) return false;
-        const size_t idx = accounts_.index_of(addr);
-        return created_this_tx_idx_.count(idx) != 0
-            || delegated_this_tx_idx_.count(idx) != 0;
-    }
 
     // Map ConsensusInfo.fork_id to an `evmc_revision` so the EVM
     // dispatch (exec(), is_precompile, call_precompile) runs at the
@@ -590,15 +573,9 @@ private:
     // tx_counter_. TSTORE writes are journaled so revert restores
     // (or erases) the entry.
     TransientStorage      transient_{};
-    // Per-tx scratchpad of storage slots for accounts that were
-    // freshly CREATEd in the current tx. reth's witness recorder
-    // drops storage entries for accounts that end up destroyed
-    // (CREATE+SELFDESTRUCT same tx), so the static `Storages` table
-    // built from the manifest can't satisfy SLOAD/SSTORE on those
-    // slots. Routed via `is_fresh_account(addr)` — see
-    // `dynamic_storage.hpp` for the security argument. Reset at every
-    // tx boundary alongside `created_this_tx_idx_`.
-    DynamicStorage        dynamic_storage_{};
+    // EIP-2929 warmth of keys with no table row (warming isn't a load).
+    // Journaled; never reset (a `last_tx_idx` from an earlier tx reads cold).
+    WarmKeys              warm_keys_{};
 
     // Monotonic counter incremented at the start of each tx in
     // process_transactions. Passed to Storages for per-tx warm/cold
@@ -627,14 +604,6 @@ private:
     // `set_code` in the current transaction. Same lifecycle as
     // `created_this_tx_idx_` — populated by the auth-application loop
     // and cleared at every tx boundary in `process_transactions`.
-    // Routes SSTORE/SLOAD/access_storage on these accounts to
-    // `dynamic_storage_` for witness-absent slots: the EOA had no
-    // parent-state code (delegation indicator is set THIS tx),
-    // therefore no parent-state storage, so any value the EVM
-    // SSTOREs / SLOADs on it during 7702-delegated execution is on
-    // a slot whose block-original is implicitly 0 — uncontestable
-    // by a malicious prover (same dynamic-routing safety argument
-    // as freshly-CREATEd accounts).
     std::unordered_set<size_t> delegated_this_tx_idx_{};
 
     // SELFDESTRUCT registers an account for destruction at end-of-tx,
@@ -656,11 +625,11 @@ private:
 
     // EIP-7928 (Amsterdam): the block-level access list under construction
     // (null before Amsterdam, so every hook is one predictable branch), the
-    // prover's key hint, the number of txs (for the post-execution index
-    // n+1), and the final hash.
+    // number of txs (for the post-execution index n+1), and the final hash.
     std::unique_ptr<BlockAccessList> bal_;
-    const BalHint*                   bal_hint_ = nullptr;
     static constexpr size_t          kNoBalPending = SIZE_MAX;
+    // A pending access to an address without a row: committing it halts.
+    static constexpr size_t          kMissingRow   = SIZE_MAX - 1;
     mutable size_t                   bal_pending_  = kNoBalPending;
     uint32_t                         bal_tx_count_ = 0;
     evmc::bytes32                    bal_hash_{};

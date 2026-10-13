@@ -107,10 +107,6 @@ public:
     const NodeR* cached_at(size_t idx) const noexcept { return &leaf_[idx].cached; }
     const evmc::bytes32& pos_hash_at(size_t idx) const noexcept { return leaf_[idx].pos_hash; }
 
-    // Set by the new-root insert phase for a created slot (appended at
-    // run-time, not via build_value).
-    void set_pos_hash(size_t idx, const evmc::bytes32& pos_hash);
-
     // True iff the slot value did not change since block start.
     bool value_unchanged_at(size_t idx) const noexcept {
         return value_orig_at(idx) == value_at(idx);
@@ -174,6 +170,13 @@ public:
     // EIP-7928: id of the row's BlockAccessList slot record (UINT32_MAX until
     // the slot is first loaded in an Amsterdam block).
     uint32_t& bal_id_at(size_t idx) noexcept { return mods_[idx].bal_id; }
+
+    // Sorted-order link (v12, from the StateRoot input): the row of the next
+    // slot of the same account in position order, or kNoLink. Checked when
+    // the EIP-7928 BAL is built (see ZiskStateDB::build_block_access_list_hash).
+    static constexpr uint64_t kNoLink = UINT64_MAX;
+    void     set_next_sorted(size_t idx, uint64_t next) noexcept { leaf_[idx].next_sorted = next; }
+    uint64_t next_sorted_at(size_t idx) const noexcept { return leaf_[idx].next_sorted; }
 
     // All storage indices belonging to `addr`, in table order. Built once
     // at construction. Used by SELFDESTRUCT (EIP-6780 full-destroy) to
@@ -284,6 +287,7 @@ private:
     struct LeafCache {
         NodeR         cached{};    // storage-leaf NodeR result
         evmc::bytes32 pos_hash{};  // keccak(position) — for the leaf path
+        uint64_t      next_sorted = kNoLink;  // next slot of the account by position
     };
 
     // Owned backing buffer for the original records. Pre-sized exactly by

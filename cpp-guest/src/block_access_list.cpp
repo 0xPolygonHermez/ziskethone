@@ -94,23 +94,6 @@ BlockAccessList::Slot& BlockAccessList::witness_slot(uint32_t& id, const evmc::b
     return slots_[id];
 }
 
-BlockAccessList::Slot& BlockAccessList::dynamic_slot(const evmc::address& addr,
-                                                     const evmc::bytes32& key) {
-    auto [it, inserted] = dyn_ids_.try_emplace(Key{addr, key},
-                                               static_cast<uint32_t>(slots_.size()));
-    if (inserted) {
-        slots_.push_back(Slot{});
-        slots_.back().key = key;
-    }
-    return slots_[it->second];
-}
-
-BlockAccessList::Slot* BlockAccessList::find_dynamic_slot(
-        const evmc::address& addr, const evmc::bytes32& key) noexcept {
-    const auto it = dyn_ids_.find(Key{addr, key});
-    return it == dyn_ids_.end() ? nullptr : &slots_[it->second];
-}
-
 // ----- encoding --------------------------------------------------------------
 //
 // AccountChanges = [address, storage_changes, storage_reads, balance_changes,
@@ -263,25 +246,6 @@ void BlockAccessList::dump(std::span<const Entry> entries,
         list("B", e.account->balance, false);
         list("N", e.account->nonce, false);
         list("C", e.account->code, true);
-    }
-}
-
-// ----- BalHint ---------------------------------------------------------------
-
-BalHint::BalHint(const uint8_t*& cursor) {
-    uint64_t n;
-    std::memcpy(&n, cursor, 8);
-    cursor += 8;
-    accounts_.reserve(n);
-    for (uint64_t i = 0; i < n; ++i) {
-        const auto* addr = reinterpret_cast<const evmc::address*>(cursor);
-        uint32_t ns;
-        std::memcpy(&ns, cursor + 20, 4);
-        cursor += 24;
-        const auto* slots = reinterpret_cast<const evmc::bytes32*>(cursor);
-        cursor += static_cast<std::size_t>(ns) * 32;
-        accounts_.push_back(Account{addr, {slots, ns}});
-        slot_count_ += ns;
     }
 }
 

@@ -12,10 +12,11 @@ in place, and the EIPs are being implemented one by one (Status column below).
   parameters from the fixture's `blobSchedule`. It also writes the new header
   fields (`blockAccessListHash`, `slotNumber`) into the manifest.
 - `input-gen` emits `fork_id = 8` (Amsterdam) for any header that carries
-  `block_access_list_hash`. The binary format is v11 (see `BINARY_FORMAT.md`):
+  `block_access_list_hash`. The binary format is v12 (see `BINARY_FORMAT.md`):
   - ConsensusInfo carries `slot_number`;
   - the BAL hash is not an input, because the guest computes it;
-  - a trailing BalHint section lists the BAL's keys in order.
+  - every key the block loads is a StateRoot leaf (an empty one if it doesn't
+    exist), and sorted-order links over the rows give the BAL's order.
 - The guest accepts Amsterdam: `ForkId::Amsterdam` → `EVMC_AMSTERDAM`, the
   23-field header for the current block and its ancestors, SLOTNUM's
   `block_slot_number` in the tx context, and `is_amsterdam_or_later()`.
@@ -90,9 +91,12 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
   shows it paid the access cost: by making another host call in the frame, or
   by the frame ending normally. That reproduces revm skipping a cold load it
   can't pay for. zevm follows the same host-call pattern as evmone.
-- **BAL for Amsterdam mainnet blocks.** Online `input-gen` writes an empty
-  BalHint, because mainnet is pre-Amsterdam. An Amsterdam mainnet block will
-  need its BAL keys from the node.
+- **BAL order comes from the witness.** There is no BAL input: every key the
+  block loads is a leaf, and the StateRoot rows carry sorted-order links (see
+  "Every loaded key is a leaf" below). Online `input-gen` needs the node's
+  prestate tracer on top of the witness, because reth's `witness.keys` omits
+  accounts that were loaded but don't exist (`docs/reth-witness-absent-keys.patch`
+  fixes that in reth).
 - **The gas EIPs are entangled.** Most fixtures of one gas EIP also exercise
   the others, so 2780, 7708, 7778, 7976, 7981 and 8037 were only measurable
   together. 8037's block accounting is EIP-7778's rule (no refund in the
@@ -135,6 +139,63 @@ Branch `glamsterdam`, `tests@v21.0.1`, evmone guest, 2026-10-11:
 The reth 2.2 → 2.7 bridge upgrade was regression-checked on the
 `tests-v5.4.0` Prague + Osaka corpus: 3,820 PASS, 274 PASS_NEG, 0 FAIL, 1 MISSING
 (the undecodable `test_contract_create` type-4 creation).
+
+### Every loaded key is a leaf (format v12)
+
+The BAL order no longer comes from a hint, and the witness proves every key
+the block reads.
+
+- **Before:** the guest made up an empty row for any address it couldn't find
+  (`ensure_account`), and read 0 for any missing slot (`DynamicStorage`). A key
+  that was only read, never written, was never checked: a prover could hide an
+  existing account or slot behind an `Op::Hash` subtree.
+- **Now:** every account and slot the block loads is a StateRoot leaf. A key
+  that doesn't exist is an empty-valued leaf placed where it would sit; it
+  hashes as `Empty`, so the parent-root check proves the absence. A load of
+  any other key halts ("state key not in witness"). Warming (EIP-2929 / 2930)
+  isn't a load and is tracked by plaintext (`WarmKeys`). No row is appended at
+  run time; `DynamicStorage`, phantom-account seeding and the new-root insert
+  pass are gone.
+- **An account leaf with empty fields is absent only if its storage root is
+  empty too.** Otherwise a prover could hang slots under an absent account
+  unseen by the root. Such an account is now hashed as a real leaf.
+- **BAL order:** each row carries a sorted-order link (accounts by address,
+  each account's slots by position). At the end of an Amsterdam block the guest
+  walks them, checking strict order, ownership and that every row is visited,
+  and encodes the accessed ones. The BalHint section is gone.
+- **Where the keys come from:**
+  - online `input-gen`: reth's `witness.keys` (an address followed by its
+    slots) plus the prestate tracer, because reth drops loaded accounts that
+    don't exist (3–5 per mainnet block; `docs/reth-witness-absent-keys.patch`
+    fixes that in reth);
+  - `eest-witness-gen`: its touched sets plus a per-tx state hook, which still
+    has the slots of an account created and self-destructed in the same tx
+    (the cache and the bundle drop them).
+
+**Results** (both backends unless noted):
+
+| Set | Result |
+|---|---|
+| `for_amsterdam/amsterdam` | 4,982 / 4,982 (7928: 1,248 / 1,248 with no hint) |
+| rest of `for_amsterdam` | identical block for block (22,523 PASS, 5,215 PASS_NEG) |
+| fork transition | 366 PASS, 35 PASS_NEG, 0 FAIL |
+| tests-v5.4.0 + InvalidBlocks | identical except 2 NA_NEG → PASS_NEG |
+| mainnet, 7 blocks at head-3 | correct hash, host builds; ELFs on one block |
+
+- The 2 NA_NEG → PASS_NEG are `shanghaiWithoutWithdrawalsRLP`: an undecodable
+  block, so the generator has no keys for it and the guest halts on the
+  withdrawal recipient. That rejection is no evidence of an RLP check.
+- **Negative tests (mainnet, scratch encoder):** leaving out an accessed absent
+  account halts; presenting an existing account as empty, or hanging a
+  non-zero slot under an absent account, fails the old root.
+- **Proving cost** (block 26182405, same block, v11 → v12): zevm ELF
+  66,774,341 → 66,787,855 steps (+0.02%), evmone ELF 59,138,994 → 59,131,144
+  (−0.01%). The input grows 1% (6.58 → 6.65 MB): mainnet blocks carry 7–50
+  absent accounts and 137–803 absent slots.
+- **Sepolia:** `ZEG_CHAIN=sepolia` builds (chain id 11155111, deposit contract
+  0x7f02…295d; the system contracts match `eth_config`), and `input-gen`
+  picks the fork schedule by chain id. Not run on a block yet: no public
+  Sepolia endpoint serves `debug_executionWitness` from reth.
 
 ### After EIP-7843
 
@@ -259,7 +320,9 @@ hash into the header. The input no longer carries the hash.
 - **Order from the prover.** The BalHint input lists the keys in BAL order. The
   guest checks it in one pass: strictly increasing, every key accessed, and the
   counts equal to the accessed counts, so it is exactly the accessed set. It
-  then encodes the RLP in that order and hashes it once.
+  then encodes the RLP in that order and hashes it once. (Replaced in v12 by
+  sorted-order links over the StateRoot rows; see "Every loaded key is a
+  leaf".)
 - **Size limit.** `accounts + slots ≤ gas_limit / 2000`, or the block is
   invalid.
 

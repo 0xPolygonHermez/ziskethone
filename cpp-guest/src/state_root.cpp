@@ -552,9 +552,7 @@ uint32_t aux_emplace(BuildCtx& ctx, Args&&... args) {
 // nested storage subtree). Out of line, so the common Hash/ExtensionHash calls
 // don't pay a frame sized for them. `noinline` is what survives -O2.
 __attribute__((noinline)) Child build_phantom_leaf_node(const uint8_t*& cursor,
-                                                        BuildCtx& ctx,
-                                                        TreeKind kind,
-                                                        WalkPath& walked);
+                                                        BuildCtx& ctx);
 __attribute__((noinline)) Child build_leaf_node(const uint8_t*& cursor,
                                                 BuildCtx& ctx,
                                                 TreeKind kind,
@@ -599,7 +597,7 @@ Child build_node(const uint8_t*& cursor,
         }
 
         case Op::PhantomLeaf:
-            return build_phantom_leaf_node(cursor, ctx, kind, walked);
+            return build_phantom_leaf_node(cursor, ctx);
 
         case Op::Leaf:
             return build_leaf_node(cursor, ctx, kind, walked, owning_address);
@@ -679,9 +677,7 @@ Child build_branch_node(const uint8_t*& cursor,
 }
 
 Child build_phantom_leaf_node(const uint8_t*& cursor,
-                              BuildCtx& ctx,
-                              TreeKind kind,
-                              WalkPath& walked)
+                              BuildCtx& ctx)
 {
     {
             PackedPath path = read_nibbles(cursor);
@@ -693,42 +689,6 @@ Child build_phantom_leaf_node(const uint8_t*& cursor,
             cursor += value_len;
             align_to_u64(cursor, value_len);
 
-            // A preimage-less STATE account (a pre-funded CREATE2 target, or
-            // simply a real contract the tracer never touched) has its full
-            // field set only in this phantom leaf, never in the Accounts
-            // table. Record keccak(addr) -> {nonce, balance, code_hash} so a
-            // later resurrection (a CREATE landing here, or merely an
-            // EIP-2929 access-warm touch) inherits the REAL fields instead of
-            // silently reverting to nonce=0/EMPTY_CODE_HASH, and the new-root
-            // pass supersedes the phantom. Account RLP = [nonce, balance,
-            // storageRoot, codeHash].
-            if (kind == TreeKind::State) {
-                const evmc::bytes32 key_hash = pack_key_hash(walked, path);
-                rlp::ListIter it(rlp::decode_item(rlp::BytesView{value}).payload);
-                const uint64_t nonce = rlp::as_u64(it.next());
-                const evmc::uint256be bal = rlp::as_u256(it.next());
-                const rlp::Item sroot_item = it.next();  // storageRoot
-                evmc::bytes32 sroot{};
-                if (sroot_item.payload.size() == sizeof(sroot.bytes))
-                    std::memcpy(sroot.bytes, sroot_item.payload.data(), sizeof(sroot.bytes));
-                const rlp::Item code_hash_item = it.next();
-                evmc::bytes32 code_hash{};
-                if (code_hash_item.payload.size() == sizeof(code_hash.bytes)) {
-                    std::memcpy(code_hash.bytes, code_hash_item.payload.data(),
-                               sizeof(code_hash.bytes));
-                } else if (!code_hash_item.payload.empty()) {
-                    fatal("state_root: phantom leaf code hash has unexpected length");
-                }
-                // EMPTY_CODE_HASH itself RLP-encodes as a 32-byte string (RLP
-                // byte-strings aren't leading-zero-trimmed like integers), so
-                // an empty payload here only happens for the hash of an
-                // all-zero 32-byte value, which keccak256("") never is —
-                // `code_hash` is already correctly {0}-initialized for that
-                // case regardless.
-                if (nonce != 0 || bal != evmc::uint256be{} || code_hash != kEmptyCodeHash) {
-                    ctx.accounts.record_phantom_account(key_hash, nonce, bal, code_hash, sroot);
-                }
-            }
             return Child{NodeType::PhantomLeaf,
                          aux_emplace<PhantomLeafR>(ctx, std::move(path),
                                                    std::move(value))};
@@ -760,6 +720,8 @@ Child build_leaf_node(const uint8_t*& cursor,
                 evmc::bytes32 code_hash;
                 std::memcpy(code_hash.bytes, cursor, sizeof(code_hash.bytes));
                 cursor += sizeof(code_hash.bytes);
+                const uint64_t next_sorted          = read_u64_le(cursor);
+                const uint64_t first_sorted_storage = read_u64_le(cursor);
 
                 const evmc::bytes32 addr_hash = pack_key_hash(walked, suffix);
                 if (keccak256_bytes32(addr.bytes, sizeof(addr.bytes)) != addr_hash) {
@@ -769,6 +731,7 @@ Child build_leaf_node(const uint8_t*& cursor,
                 const size_t idx = ctx.next_state_idx++;
                 const size_t a = ctx.accounts.append(addr, nonce, balance, code_hash);
                 if (a != idx) fatal("state_root: account append index desync");
+                ctx.accounts.set_sorted_links(idx, next_sorted, first_sorted_storage);
 
                 // Build the per-account storage subtree (`addr` is a stable
                 // local for the duration of the nested walk).
@@ -794,6 +757,7 @@ Child build_leaf_node(const uint8_t*& cursor,
                 evmc::bytes32 value;
                 std::memcpy(value.bytes, cursor, sizeof(value.bytes));
                 cursor += sizeof(value.bytes);
+                const uint64_t next_sorted = read_u64_le(cursor);
 
                 const evmc::bytes32 pos_hash = pack_key_hash(walked, suffix);
                 if (keccak256_bytes32(position.bytes, sizeof(position.bytes)) != pos_hash) {
@@ -803,6 +767,7 @@ Child build_leaf_node(const uint8_t*& cursor,
                 const size_t idx = ctx.next_storage_idx++;
                 const size_t a = ctx.storages.append(*owning_address, position, value);
                 if (a != idx) fatal("state_root: storage append index desync");
+                ctx.storages.set_next_sorted(idx, next_sorted);
 
                 auto nib = path_from_key(pos_hash, walked.size());
                 ctx.storages.build_value(idx, nib, pos_hash);
@@ -898,36 +863,23 @@ std::pair<const NodeR*, bool> eval_node(const Child& c, EvalCtx& ctx, std::size_
 
 StateRoot::StateRoot(const uint8_t*& cursor,
                      Accounts& accounts,
-                     Storages& storages,
-                     uint64_t gas_limit)
+                     Storages& storages)
     : accounts_(accounts),
       storages_(storages)
 {
-    // Section header: three u64 counts. numberOfAccounts / numberOfStorages
-    // are exact WITNESS counts; numberOfNodes is a conservative upper bound
-    // (the encoder emits stream_len/8) used as the node-array ceiling.
+    // Section header: four u64s. numberOfAccounts / numberOfStorages are the
+    // exact row counts — every key the block loads is a leaf, so no row is
+    // appended at run time; numberOfNodes is a conservative upper bound used
+    // as the node-array ceiling; firstSortedAccount heads the sorted-order
+    // links (v12).
     const uint64_t num_nodes    = read_u64_le(cursor);
     const uint64_t num_accounts = read_u64_le(cursor);
     const uint64_t num_storages = read_u64_le(cursor);
-    node_limit_           = num_nodes;
-    num_witness_accounts_ = num_accounts;
-    num_witness_storages_ = num_storages;
-
-    // Pre-size each table to the witness count PLUS a slack for rows
-    // appended during execution, so they append in-place (no realloc →
-    // stable View / leaf pointers). Rows are appended for keys CREATED this
-    // block and for witness-absent accounts merely ACCESSED (an empty row,
-    // so EIP-2929 warmth can be tracked). The cheapest such event is a cold
-    // account access (~2600 gas), and total gas <= gas_limit, so
-    // gas_limit/2500 is a sound upper bound — BUT test fixtures set absurd
-    // gas_limits (e.g. 1e14), so cap the slack at a value no realistic block
-    // reaches. `append` still fatals if the slack is somehow exceeded, plus
-    // a small constant floor for tiny-gas blocks.
-    constexpr uint64_t kMaxCreatedSlack = 1u << 16;  // 65536
-    const uint64_t slack =
-        std::min<uint64_t>(gas_limit / 2500 + 64, kMaxCreatedSlack);
-    accounts_.reserve(num_accounts + slack);
-    storages_.reserve(num_storages + slack);
+    const uint64_t first_sorted = read_u64_le(cursor);
+    node_limit_ = num_nodes;
+    accounts_.reserve(num_accounts);
+    storages_.reserve(num_storages);
+    accounts_.set_first_sorted(first_sorted);
     aux_.reserve(num_nodes);  // aux nodes are only Hash/ExtensionHash/PhantomLeaf
 
     BuildCtx ctx{accounts_, storages_, branch_nodes_, aux_,
@@ -946,162 +898,11 @@ StateRoot::StateRoot(const uint8_t*& cursor,
     // plus each leaf's keccak(key) == path-hash bind (in build_node).
 }
 
-// ===== new-root insert (Stage 3) ============================================
-
-uint8_t StateRoot::existing_leaf_nibble(Child leaf, std::size_t d,
-                                        std::size_t depth) const {
-    switch (leaf.type) {
-        case NodeType::Account:
-            return nibble_at(accounts_.addr_hash_at(leaf.idx), d);
-        case NodeType::Storage:
-            return nibble_at(storages_.pos_hash_at(leaf.idx), d);
-        case NodeType::PhantomLeaf:
-            // The phantom's stored path is relative to where it sits (depth).
-            return std::get<PhantomLeafR>(aux_[leaf.idx]).path_nibbles.at(d - depth);
-        default:
-            fatal("state_root: existing_leaf_nibble on a non-leaf node");
-    }
-}
-
-Child StateRoot::split_leaf(Child existing, const evmc::bytes32& key_hash,
-                            Child leaf, std::size_t depth) {
-    // First nibble at which the new key and the existing leaf's key diverge.
-    std::size_t d = depth;
-    while (true) {
-        if (d >= 64) {
-            // Identical key. The ONLY sound reason two leaves share a full key
-            // is a created account materializing a pre-funded phantom leaf at
-            // the same keccak(addr): the created row supersedes the phantom, so
-            // return it. Any other identical-key collision is a real bug (a
-            // genuine keccak collision or a double-insert) — keep the abort.
-            if (existing.type == NodeType::PhantomLeaf) {
-                return leaf;
-            }
-            fatal("state_root: insert collides with an identical key");
-        }
-        if (nibble_at(key_hash, d) != existing_leaf_nibble(existing, d, depth)) break;
-        ++d;
-    }
-    const uint8_t existing_nib = existing_leaf_nibble(existing, d, depth);
-
-    // A keyless PhantomLeaf carries its path inline, so shorten it to its new
-    // (deeper) position d+1. Keyed leaves recompute their path from depth in
-    // the eval pass, so they need no surgery here.
-    if (existing.type == NodeType::PhantomLeaf) {
-        std::get<PhantomLeafR>(aux_[existing.idx]).path_nibbles.drop_front(d + 1 - depth);
-    }
-
-    // 2-child branch at depth d holding both leaves.
-    BranchNode bd;
-    bd.children[nibble_at(key_hash, d)] = leaf;
-    bd.children[existing_nib]           = existing;
-    branch_nodes_.push_back(std::move(bd));
-    Child cur{NodeType::Branch, static_cast<uint32_t>(branch_nodes_.size() - 1)};
-
-    // Single-child branches for the shared nibbles depth..d-1 (reduce_branch
-    // folds the chain into an extension at hash time).
-    for (std::size_t dd = d; dd > depth; --dd) {
-        BranchNode b;
-        b.children[nibble_at(key_hash, dd - 1)] = cur;
-        branch_nodes_.push_back(std::move(b));
-        cur = Child{NodeType::Branch, static_cast<uint32_t>(branch_nodes_.size() - 1)};
-    }
-    return cur;
-}
-
-Child StateRoot::insert_into(Child node, const evmc::bytes32& key_hash,
-                             Child leaf, std::size_t depth) {
-    switch (node.type) {
-        case NodeType::Empty:
-            return leaf;
-        case NodeType::Branch: {
-            const uint8_t nib = nibble_at(key_hash, depth);
-            const Child child = branch_nodes_[node.idx].children[nib];  // copy
-            const Child newchild = insert_into(child, key_hash, leaf, depth + 1);
-            // Re-index after the recursion (which may have grown branch_nodes_).
-            branch_nodes_[node.idx].children[nib] = newchild;
-            return node;
-        }
-        case NodeType::Account:
-        case NodeType::Storage:
-        case NodeType::PhantomLeaf:
-            return split_leaf(node, key_hash, leaf, depth);
-        case NodeType::Hash:
-        case NodeType::ExtensionHash:
-            fatal("state_root: insert into an unrevealed (Hash) subtree — "
-                  "witness incomplete");
-    }
-    fatal("state_root: insert_into invalid node type");
-}
-
 evmc::bytes32 StateRoot::calculate_new_state_root() {
-    // ----- Phase 1: insert keys CREATED during execution -----
-    // Rows appended beyond the witness counts are created keys. Splice them
-    // into the node array (index-based, so branch_nodes_ may grow freely).
-
-    // Initialise each created account's leaf metadata (appended at run-time
-    // via ensure_account, not through build_value). Created rows are keyed by
-    // plaintext, so derive the trie key hash here (once, cold).
-    for (std::size_t i = num_witness_accounts_; i < accounts_.size(); ++i) {
-        const evmc::address& a = accounts_.address_at(i);
-        accounts_.set_addr_hash(i, keccak256_bytes32(a.bytes, sizeof(a.bytes)));
-        accounts_.set_storage_root_child(i, Child{NodeType::Empty, 0});
-    }
-
-    // Insert created storage slots into their owning account's subtree first,
-    // so the account leaf's storage root reflects them when evaluated.
-    for (std::size_t i = num_witness_storages_; i < storages_.size(); ++i) {
-        if (is_zero_value(storages_.value_at(i))) {
-            continue;  // a zeroed slot has no trie effect
-        }
-        const evmc::bytes32& pos = storages_.position_at(i);
-        const evmc::bytes32 pos_hash =
-            keccak256_bytes32(pos.bytes, sizeof(pos.bytes));
-        storages_.set_pos_hash(i, pos_hash);
-        const std::size_t acct = accounts_.index_of(storages_.address_at(i));
-        const Child new_root = insert_into(
-            accounts_.storage_root_child_at(acct), pos_hash,
-            Child{NodeType::Storage, static_cast<uint32_t>(i)}, 0);
-        accounts_.set_storage_root_child(acct, new_root);
-    }
-
-    // Insert created accounts into the state trie. Skip ones that ended empty —
-    // UNLESS they superseded a phantom leaf: those are inserted even when empty
-    // so insert_into replaces the phantom (updating the branch child type
-    // Phantom->Account, so eval re-hashes instead of reusing the cached phantom
-    // hash). ensure_account seeded the row's ORIGINAL from the phantom's fields,
-    // so eval sees original != current and re-hashes correctly.
-    for (std::size_t i = num_witness_accounts_; i < accounts_.size(); ++i) {
-        const bool empty = is_empty_account(accounts_.nonce_at(i),
-                                            accounts_.balance_at(i),
-                                            accounts_.code_hash_at(i));
-        const evmc::bytes32& ah = accounts_.addr_hash_at(i);
-        const Accounts::PhantomAccount* ph = accounts_.phantom_account(ah);
-        const bool superseded_phantom = ph != nullptr;
-        if (superseded_phantom && ph->storage_root != kEmptyTrieRoot) {
-            // A resurrected phantom is rebuilt above with storage_root_child =
-            // Empty (Phase-1 loop), which the account leaf will hash as an
-            // empty storage root. That is only correct when the phantom's
-            // block-start storage was itself empty. A non-empty storage root
-            // here means the row lost the account's real storage — and we
-            // cannot rebuild it (a preimage-less phantom ships no storage
-            // subtree in the witness). This never arises from a faithful reth
-            // witness: any account whose storage the block touches has its
-            // storage nodes revealed, so it arrives as a real Op::Leaf, not a
-            // phantom; and a phantom that is merely balance-credited or
-            // access-warmed has its storage untouched. Refuse rather than emit
-            // a silently-wrong root.
-            fatal("state_root: resurrected phantom has non-empty storage "
-                  "(witness lacks its storage subtree)");
-        }
-        if (empty && !superseded_phantom) {
-            continue;
-        }
-        root_ = insert_into(root_, ah,
-                            Child{NodeType::Account, static_cast<uint32_t>(i)}, 0);
-    }
-
-    // ----- Phase 2: evaluate the augmented node array against current values.
+    // Every key the block loaded is already a leaf in the node array — one
+    // that didn't exist as an empty leaf — so there is nothing to insert:
+    // evaluate the array against the current values. An empty leaf becomes
+    // Empty and its branch folds; one that became non-empty is a leaf.
     EvalCtx ctx{accounts_, storages_, branch_nodes_, aux_};
     const auto [root_res, root_ro] = eval_node(root_, ctx, 0);
     (void)root_ro;

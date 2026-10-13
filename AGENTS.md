@@ -43,3 +43,22 @@ BLK=$(( HEAD - 3 ))
 ./cpp-guest/build-zevm/zisk_eth_guest build/block_input.bin | tail -1   # must match:
 ./cpp-guest/build/zisk_eth_guest     build/block_input.bin | tail -1
 ```
+
+`input-gen` calls `debug_executionWitness` and `debug_traceBlockByHash`
+(prestateTracer): reth's witness `keys` omit accounts that were loaded but don't
+exist, and every loaded key must be a leaf in the input — the guest halts on any
+other ("state key not in witness").
+
+## Sepolia
+
+The chain is a build-time choice (`ZEG_CHAIN`, default `mainnet`): chain id and
+deposit contract. Use separate build dirs:
+
+```bash
+cmake -S cpp-guest -B cpp-guest/build-sepolia      -DEVM_BACKEND=evmone -DZEG_CHAIN=sepolia
+cmake -S cpp-guest -B cpp-guest/build-zevm-sepolia -DEVM_BACKEND=zevm   -DZEG_CHAIN=sepolia
+```
+
+`input-gen` picks the fork schedule from the node's chain id. It needs a Sepolia
+reth node with the `debug` namespace (public endpoints such as publicnode
+don't serve `debug_executionWitness`); the same 32-block rule applies.

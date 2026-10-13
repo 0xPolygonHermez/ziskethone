@@ -110,12 +110,28 @@ public:
 
     const NodeR* cached_at(size_t idx) const noexcept { return &leaf_[idx].cached; }
     Child storage_root_child_at(size_t idx) const noexcept { return leaf_[idx].storage_root; }
-    const evmc::bytes32& addr_hash_at(size_t idx) const noexcept { return leaf_[idx].addr_hash; }
+    // Sorted-order links (v12, from the StateRoot input): accounts by
+    // address from `first_sorted()`, and each account's slots by position
+    // (see Storages::next_sorted_at). kNoLink ends a list. Checked when the
+    // EIP-7928 BAL is built (see ZiskStateDB::build_block_access_list_hash).
+    static constexpr uint64_t kNoLink = UINT64_MAX;
+    void set_sorted_links(size_t idx, uint64_t next, uint64_t first_storage) noexcept {
+        leaf_[idx].next_sorted          = next;
+        leaf_[idx].first_sorted_storage = first_storage;
+    }
+    uint64_t next_sorted_at(size_t idx) const noexcept { return leaf_[idx].next_sorted; }
+    uint64_t first_sorted_storage_at(size_t idx) const noexcept {
+        return leaf_[idx].first_sorted_storage;
+    }
+    void     set_first_sorted(uint64_t idx) noexcept { first_sorted_ = idx; }
+    uint64_t first_sorted() const noexcept { return first_sorted_; }
 
-    // Setters used by the new-root insert phase to wire a created account's
-    // leaf metadata (it was appended at run-time, not via build_value).
-    void set_addr_hash(size_t idx, const evmc::bytes32& addr_hash);
-    void set_storage_root_child(size_t idx, Child storage_root);
+    // Whether the row's block-start storage root is the empty trie. A subtree
+    // made only of empty (absent) slot leaves still hashes to it.
+    bool block_start_storage_empty_at(size_t idx) const noexcept {
+        return leaf_[idx].storage_empty;
+    }
+    const evmc::bytes32& addr_hash_at(size_t idx) const noexcept { return leaf_[idx].addr_hash; }
 
     // True iff none of nonce / balance / code_hash changed since block start.
     bool fields_unchanged_at(size_t idx) const noexcept {
@@ -153,37 +169,6 @@ public:
     bool contains(const evmc::address& addr) const noexcept {
         return index_.find(addr) != index_.end();
     }
-
-    // ----- non-empty phantom accounts (preimage-less, but not "empty") -----
-    //
-    // A pre-state account with no witness key-preimage arrives as an
-    // Op::PhantomLeaf (trie-only, never in this table) — this includes both
-    // pre-funded CREATE2 targets AND ordinary contracts the tracer never
-    // touched. If anything later resurrects the row (a CREATE lands there, or
-    // it's merely EIP-2929 access-warmed by a call that never dispatches),
-    // the row must inherit the phantom's FULL field set — not just balance —
-    // or the resurrected leaf's RLP (and hash) silently loses the account's
-    // real nonce/code. StateRoot records keccak(addr) -> {nonce, balance,
-    // code_hash} at build (whenever the phantom isn't the fully-empty
-    // account); ensure_account seeds the created row from it, and
-    // calculate_new_state_root supersedes the stale phantom leaf (a non-null
-    // lookup here means "this created row superseded a phantom").
-    struct PhantomAccount {
-        uint64_t        nonce;
-        evmc::uint256be balance;
-        evmc::bytes32   code_hash;
-        // The phantom's block-start storage root. A resurrected phantom is
-        // rebuilt with EMPTY storage (the witness ships no storage subtree for
-        // a preimage-less account), which is only correct when this root is
-        // itself empty. calculate_new_state_root fatals otherwise — see there.
-        evmc::bytes32   storage_root;
-    };
-    void record_phantom_account(const evmc::bytes32& addr_hash,
-                                uint64_t nonce,
-                                const evmc::uint256be& balance,
-                                const evmc::bytes32& code_hash,
-                                const evmc::bytes32& storage_root);
-    const PhantomAccount* phantom_account(const evmc::bytes32& addr_hash) const;
 
     // ----- per-tx warm/cold tracking (EIP-2929) -----
     //
@@ -299,6 +284,9 @@ private:
         NodeR         cached{};        // account-leaf NodeR result
         evmc::bytes32 addr_hash{};     // keccak(address) — for the leaf path
         Child         storage_root{};  // link to the storage-subtree root node
+        bool          storage_empty = true;  // block-start storage root == empty trie
+        uint64_t      next_sorted = kNoLink;           // next account by address
+        uint64_t      first_sorted_storage = kNoLink;  // its first slot by position
     };
 
     // Owned backing buffer for the original records. Pre-sized exactly by
@@ -312,25 +300,8 @@ private:
     std::vector<LeafCache> leaf_;
     std::unordered_map<evmc::address, size_t, AddressHash, AddressEq> index_;
 
-    // keccak(addr) -> full field set for non-empty phantom (preimage-less)
-    // accounts. See record_phantom_account(). Keyed by hash (the plaintext is
-    // unknown); the addr_hash bytes are uniform keccak output, so splice the
-    // first 8.
-    struct AddrHashHash {
-        size_t operator()(const evmc::bytes32& h) const noexcept {
-            uint64_t v; std::memcpy(&v, h.bytes, sizeof(v));
-            return static_cast<size_t>(v);
-        }
-    };
-    struct AddrHashEq {
-        bool operator()(const evmc::bytes32& x, const evmc::bytes32& y) const noexcept {
-            return std::memcmp(x.bytes, y.bytes, sizeof(x.bytes)) == 0;
-        }
-    };
-    std::unordered_map<evmc::bytes32, PhantomAccount, AddrHashHash, AddrHashEq>
-        phantom_accounts_;
-
     BlockAccessList* bal_ = nullptr;
+    uint64_t         first_sorted_ = kNoLink;
 };
 
 } // namespace zeg

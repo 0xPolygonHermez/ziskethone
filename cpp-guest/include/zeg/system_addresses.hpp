@@ -76,13 +76,20 @@ constexpr int64_t kSystemCallGas = 30'000'000;
 
 // EIP-6110: deposits are extracted from event logs emitted by the
 // beacon-deposit contract during regular tx execution (no system
-// call). Address is the canonical mainnet value; testnets that use a
-// different deposit contract will need this configurable.
+// call). The chain's deposit contract (see ZEG_CHAIN in zeg/config.hpp).
+#ifdef ZEG_CHAIN_SEPOLIA
+constexpr evmc::address kDepositContractAddress{{  // 0x7f02...295d
+    0x7f, 0x02, 0xC3, 0xE3, 0xc9, 0x8b, 0x13, 0x30,
+    0x55, 0xB8, 0xB3, 0x48, 0xB2, 0xAc, 0x62, 0x56,
+    0x69, 0xEd, 0x29, 0x5D,
+}};
+#else
 constexpr evmc::address kDepositContractAddress{{
     0x00, 0x00, 0x00, 0x00, 0x21, 0x9a, 0xb5, 0x40,
     0x35, 0x6c, 0xBB, 0x83, 0x9C, 0xbe, 0x05, 0x30,
     0x3d, 0x77, 0x05, 0xFa,
 }};
+#endif
 
 // ===== EIP-7685 request type bytes =====
 

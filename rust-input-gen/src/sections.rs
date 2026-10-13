@@ -19,6 +19,11 @@ use crate::writer::Writer;
 
 /// On-wire format version, written in the 4 bytes after the magic.
 /// Must match the guest's `kVersion` in `cpp-guest/include/zeg/binary_format.hpp`.
+/// v12: every key the block loads is a StateRoot leaf (an empty one where a
+/// key that doesn't exist would sit), so the guest halts on any other load.
+/// Sorted-order links replace the BalHint section: the StateRoot header gains
+/// first_sorted_account, a state Leaf next_sorted_account +
+/// first_sorted_storage, a storage Leaf next_sorted_storage (u64 each).
 /// v11: EIP-7928 — block_access_list_hash leaves ConsensusInfo (prefix
 /// 408 → 376 B, slot_number moves to 368; the guest computes the hash), and a
 /// trailing BalHint section after StateRoot lists the BAL's keys in order.
@@ -51,7 +56,7 @@ use crate::writer::Writer;
 /// derives read-only-ness dynamically (original == current).
 /// v1: StateRoot `Op::Leaf` carries no index (keccak-sorted tables +
 /// counter-derived index in the guest).
-pub const FORMAT_VERSION: u32 = 11;
+pub const FORMAT_VERSION: u32 = 12;
 
 /// File magic prefix (8 bytes): 4 B ASCII `"ZEG0"` + 4 B little-endian
 /// format version, which also keeps the cursor 8-byte aligned for the
@@ -183,7 +188,7 @@ pub fn write_consensus_info(
     w.u64_le(max_blob_gas_per_block);
     // 368..376 slot_number (EIP-7843; zero pre-Amsterdam). End of fixed
     // prefix: 376. The EIP-7928 block_access_list_hash is not written: the
-    // guest builds the BAL and computes it (see write_bal_hint).
+    // guest builds the BAL and computes it.
     w.u64_le(h.slot_number.unwrap_or(0));
     w.assert_aligned();
 
@@ -501,33 +506,4 @@ pub fn write_previous_blocks(w: &mut Writer, ancestors: &[Block]) {
 
         w.assert_aligned();
     }
-}
-
-/// Section 7 — `BalHint` (v11, EIP-7928). The keys of the block-level access
-/// list in BAL order: accounts strictly increasing by address, each with its
-/// accessed storage slots (changed or read) strictly increasing. The guest
-/// checks this skeleton against what execution actually accessed (order,
-/// membership and counts) and fills in the values itself, so the hint only
-/// saves it a sort. Empty before Amsterdam.
-///
-///   u64 n_accounts
-///   per account: address (20 B) + u32-le n_slots + n_slots × slot (32 B BE)
-pub fn write_bal_hint(w: &mut Writer, hint: &[BalHintAccount]) {
-    w.u64_le(hint.len() as u64);
-    for a in hint {
-        w.bytes(a.address.as_slice());
-        w.u32_le(a.slots.len() as u32);
-        for s in &a.slots {
-            w.bytes(&s.to_be_bytes::<32>());
-        }
-    }
-    w.assert_aligned();
-}
-
-/// One account of the BAL hint: its address and its accessed slots, both in
-/// BAL order.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct BalHintAccount {
-    pub address: Address,
-    pub slots: Vec<U256>,
 }

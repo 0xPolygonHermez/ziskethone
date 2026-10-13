@@ -77,9 +77,31 @@ pub struct ExecutedBlock {
 /// and the witness recorder, it keeps the slots of an account that
 /// SELFDESTRUCTs (pre-Cancun destroy), which both drop.
 #[derive(Debug)]
+/// `OnStateHook` that records every account and slot in each state change.
+#[derive(Clone, Default)]
+struct KeyRecorder(Arc<std::sync::Mutex<BTreeMap<Address, BTreeSet<B256>>>>);
+
+impl reth_evm::OnStateHook for KeyRecorder {
+    fn on_state(&mut self, state: revm::state::EvmState) {
+        let mut keys = self.0.lock().unwrap();
+        for (addr, account) in &state {
+            keys.entry(*addr)
+                .or_default()
+                .extend(account.storage.keys().map(|k| B256::from(k.to_be_bytes::<32>())));
+        }
+    }
+}
+
 struct RecordingDb<DB> {
     inner: DB,
     reads: Rc<RefCell<BTreeSet<(Address, B256)>>>,
+}
+
+// The executor's `Database` bound wants Debug; the inner provider has none.
+impl<DB> std::fmt::Debug for RecordingDb<DB> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RecordingDb")
+    }
 }
 
 impl<DB: Database> Database for RecordingDb<DB> {
@@ -369,7 +391,7 @@ pub fn run_fixture(
             .with_bundle_update()
             .build();
 
-        let block_executor = executor_provider.executor(&mut state);
+        let mut block_executor = executor_provider.executor(&mut state);
         // Also capture every address the EVM TOUCHED (loaded into
         // state.cache.accounts), even ones with `account.account ==
         // None` (= account doesn't exist in trie). reth's witness
@@ -392,8 +414,18 @@ pub fn run_fixture(
         // materialized there (step 4).
         let mut exec_witness = None;
         let mode = ExecutionWitnessMode::Canonical;
-        let output = block_executor
-            .execute_with_state_closure(&recovered, |statedb: &reth_revm::db::State<_>| {
+        // Every key each tx (and system call) touched, from its EvmState
+        // before commit: that still has the slots of an account created and
+        // self-destructed in the same tx, which the State cache and the
+        // BundleState drop and a fresh account's storage never reaches the
+        // DB for. The guest loads them, so they must be leaves.
+        let hooked = KeyRecorder::default();
+        let result = block_executor
+            .execute_one_with_state_hook(&recovered, hooked.clone())
+            .with_context(|| format!("execute block {idx}"))?;
+        let mut statedb_owned = block_executor.into_state();
+        {
+            let statedb = &statedb_owned;
                 for (addr, cached) in &statedb.cache.accounts {
                     all_cached_addrs.insert(*addr);
                     if let Some(acc) = &cached.account {
@@ -409,8 +441,15 @@ pub fn run_fixture(
                     block_number,
                     mode,
                 ));
-            })
-            .with_context(|| format!("execute block {idx}"))?;
+        }
+        let output = reth_evm::execute::BlockExecutionOutput {
+            state: statedb_owned.take_bundle(),
+            result,
+        };
+        for (addr, slots) in hooked.0.lock().unwrap().iter() {
+            all_cached_addrs.insert(*addr);
+            touched_slot_pairs.extend(slots.iter().map(|s| (*addr, *s)));
+        }
 
         // ALSO add (addr, slot) pairs straight from BundleState.
         // For accounts that end the block as None, the cache has no

@@ -230,8 +230,15 @@ endif()
 # unavailable in the pinned toolchain.
 option(ZEG_JUMPDEST_SW "Use the software JUMPDEST analysis (no jump_dest_bitmap precompile)" OFF)
 
+# The chain the guest validates (see the host CMakeLists / zeg/config.hpp).
+set(ZEG_CHAIN "mainnet" CACHE STRING "Chain: mainnet | sepolia")
+if(NOT ZEG_CHAIN MATCHES "^(mainnet|sepolia)$")
+  message(FATAL_ERROR "ZEG_CHAIN must be mainnet | sepolia (got ${ZEG_CHAIN})")
+endif()
+
 target_compile_definitions(zisk_eth_guest.elf PRIVATE
   ZEG_ZISK
+  $<$<STREQUAL:${ZEG_CHAIN},sepolia>:ZEG_CHAIN_SEPOLIA>
   $<$<STREQUAL:${EVM_BACKEND},zevm>:USE_ZEVM>
   $<$<BOOL:${ZEG_SECP256K1_SW}>:ZEG_SECP256K1_SW>
   $<$<BOOL:${ZEG_BSWAP_BUILTIN}>:ZEG_BSWAP_BUILTIN>

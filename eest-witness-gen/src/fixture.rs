@@ -79,38 +79,6 @@ pub struct Block {
     /// expected-failure tests separately.
     #[serde(default)]
     pub expect_exception: Option<String>,
-    /// EIP-7928 block-level access list (Amsterdam, valid blocks).
-    #[serde(default)]
-    pub block_access_list: Option<Vec<BalAccount>>,
-    /// Decoded form of an invalid block; carries its (possibly corrupted)
-    /// `blockAccessList`.
-    #[serde(default, rename = "rlp_decoded")]
-    pub rlp_decoded: Option<RlpDecoded>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RlpDecoded {
-    #[serde(default)]
-    pub block_access_list: Option<Vec<BalAccount>>,
-}
-
-/// One account of a fixture's EIP-7928 BAL. Only the keys matter here: the
-/// bridge turns them into the guest's BalHint; the values are recomputed by
-/// the guest.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BalAccount {
-    pub address: Address,
-    #[serde(default)]
-    pub storage_changes: Vec<BalSlotChanges>,
-    #[serde(default)]
-    pub storage_reads: Vec<U256>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct BalSlotChanges {
-    pub slot: U256,
 }
 
 #[derive(Debug, Deserialize)]
