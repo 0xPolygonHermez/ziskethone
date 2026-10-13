@@ -194,8 +194,12 @@ the block reads.
   absent accounts and 137–803 absent slots.
 - **Sepolia:** `ZEG_CHAIN=sepolia` builds (chain id 11155111, deposit contract
   0x7f02…295d; the system contracts match `eth_config`), and `input-gen`
-  picks the fork schedule by chain id. Not run on a block yet: no public
-  Sepolia endpoint serves `debug_executionWitness` from reth.
+  picks the fork schedule by chain id. On a local Sepolia reth node
+  (v2.7.0), 11 consecutive Amsterdam blocks (11906720–11906730, 114–227 txs,
+  57–98 Mgas) give the real block hash on both host builds; blocks carry
+  3–23 absent accounts and 96–392 absent slots. Blocks 11906724 and
+  11906727 also match on both GCC 14 ZisK ELFs under ziskemu: 568,839,327 /
+  397,443,082 steps (zevm) and 494,834,076 / 347,189,983 (evmone).
 
 ### After EIP-7843
 

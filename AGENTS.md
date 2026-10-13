@@ -61,4 +61,5 @@ cmake -S cpp-guest -B cpp-guest/build-zevm-sepolia -DEVM_BACKEND=zevm   -DZEG_CH
 
 `input-gen` picks the fork schedule from the node's chain id. It needs a Sepolia
 reth node with the `debug` namespace (public endpoints such as publicnode
-don't serve `debug_executionWitness`); the same 32-block rule applies.
+don't serve `debug_executionWitness`); the same 32-block rule applies. A local
+Sepolia reth node serves it at `http://127.0.0.1:8645`.

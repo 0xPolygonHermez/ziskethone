@@ -87,7 +87,12 @@ pub(crate) async fn fetch_offline_sources_online(
         target_blob_gas_per_block,
         max_blob_gas_per_block,
     ) = fork_params(chain_id, current.header.timestamp)?;
-    if is_osaka {
+    if current.header.block_access_list_hash.is_some() {
+        info!(
+            timestamp = current.header.timestamp,
+            "block runs under Amsterdam"
+        );
+    } else if is_osaka {
         info!(
             timestamp = current.header.timestamp,
             "block runs under Osaka"
