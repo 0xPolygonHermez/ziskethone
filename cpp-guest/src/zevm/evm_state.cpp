@@ -5,7 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 
-#include <evm/jump_dest_bitmap.hpp>  // ZisK jump_dest_bitmap precompile (CSR 0x81C)
+#include <evm/jump_dest_bitmap.hpp>  // ZisK jump_dest_bitmap precompile (zkvm_evm.h)
 
 #include "evm_mem.hpp"
 

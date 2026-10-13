@@ -1,32 +1,29 @@
 // secp256r1_p256.cpp — secp256r1 / P-256 ECDSA precompile (p256verify 0x100,
-// RIP-7212 / EIP-7951) for the ZisK self-contained guest.
+// RIP-7212 / EIP-7951) for the ZisK build, through the EF zkVM accelerator ABI.
 //
-// Provides evmmax::secp256r1::verify (the symbol p256verify_execute calls) on the
-// self-contained P-256 port (secp256r1/p256.hpp) running on the ZisK secp256r1
-// precompiles + fcall hints. Replaces evmone's software secp256r1.cpp (excluded
-// from the build). Inputs are big-endian (hash256 / intx::uint256); convert to
-// little-endian u64[4] limbs at the boundary.
+// Provides evmmax::secp256r1::verify (the symbol p256verify_execute calls) as one
+// zkvm_secp256r1_verify call, replacing evmone's software secp256r1.cpp (excluded
+// from the build). The EF ABI takes big-endian bytes: h is already the 32-byte
+// big-endian message hash; r, s and the public key are stored big-endian.
 
 #include <evmone_precompiles/secp256r1.hpp>
-#include "secp256r1/p256.hpp"
-
-namespace {
-inline void to_limbs(const intx::uint256& v, uint64_t o[4]) {
-    o[0] = (uint64_t)v; o[1] = (uint64_t)(v >> 64); o[2] = (uint64_t)(v >> 128); o[3] = (uint64_t)(v >> 192);
-}
-}  // namespace
+#include "zkvm_accelerators.h"
 
 namespace evmmax::secp256r1 {
 
 bool verify(const ethash::hash256& h, const uint256& r, const uint256& s, const uint256& qx,
     const uint256& qy) noexcept {
-    uint64_t z[4], rr[4], ss[4], pk[8];
-    to_limbs(intx::be::load<intx::uint256>(h.bytes), z);
-    to_limbs(r, rr);
-    to_limbs(s, ss);
-    to_limbs(qx, pk);
-    to_limbs(qy, pk + 4);
-    return zeg::r1::ecdsa_verify(pk, z, rr, ss);
+    zkvm_secp256r1_signature sig;
+    zkvm_secp256r1_pubkey pub;
+    intx::be::unsafe::store(sig.data, r);
+    intx::be::unsafe::store(sig.data + 32, s);
+    intx::be::unsafe::store(pub.data, qx);
+    intx::be::unsafe::store(pub.data + 32, qy);
+    bool ok = false;
+    // h is an ethash::hash256, a union with 64-bit words, so it is 8-byte aligned.
+    const zkvm_status st = zkvm_secp256r1_verify(
+        reinterpret_cast<const zkvm_secp256r1_hash*>(h.bytes), &sig, &pub, &ok);
+    return st == ZKVM_EOK && ok;
 }
 
 }  // namespace evmmax::secp256r1
