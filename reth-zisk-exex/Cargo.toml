@@ -16,6 +16,7 @@ reth-revm             = { git = "https://github.com/paradigmxyz/reth", tag = "v2
 reth-chain-state      = { git = "https://github.com/paradigmxyz/reth", tag = "v2.7.0" }
 reth-engine-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v2.7.0" }
 reth-trie-common      = { git = "https://github.com/paradigmxyz/reth", tag = "v2.7.0" }
+reth-payload-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v2.7.0" }
 
 # Split alloy crates pinned to reth v2.7.0's workspace versions.
 alloy-primitives      = "=1.6.1"
@@ -23,6 +24,8 @@ alloy-consensus       = "=2.5.0"
 alloy-eips            = "=2.5.0"
 alloy-rlp             = "=0.3.16"
 alloy-rpc-types-debug = "=2.5.0"
+alloy-rpc-types-engine = "=2.5.0"
+alloy-eip7928         = { version = "=0.4.11", features = ["rlp"] }
 
 # ZEG0 input encoder (in-process `assemble::sources_from_parts`).
 rust-input-gen = { path = "../rust-input-gen" }
@@ -42,7 +45,7 @@ hmac    = "0.12"
 aes     = "0.8"
 ctr     = "0.9"
 unicode-normalization = "0.1"
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream"] }
 
 anyhow     = "1"
 eyre       = "0.6"

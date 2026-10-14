@@ -2,11 +2,31 @@
 
 `reth-zisk` is a reth v2.7.0 node with an execution extension. For each block that arrives by `engine_newPayload`, the node:
 
-1. **Builds the ZEG0 guest input in-process.** It re-executes the block on its parent's state and generates the same execution witness that `debug_executionWitness` returns. It also collects every account and slot the block accesses (the State cache, a per-tx state hook, and DB reads), then encodes the input with `rust_input_gen::assemble`. No RPC is involved, and the bytes are the same as `input-gen` produces.
-2. **Pre-checks it natively.** The host build of the guest (`zisk_eth_guest`) must recompute the block hash. Its second line is the expected public output, the EIP-8025 `new_payload_request_root`. A guest fatal is `abort()`, so this runs as a subprocess.
-3. **Proves it** with a ZisK coordinator over gRPC: register and set up the ELF once, then `JobRequest(Prove)`, then `WaitJobResult`. The proof must carry the pre-check root as its public output.
-4. **Cancels on a different block.** If the engine executes a different block (same or higher number), or the in-flight block leaves the canonical chain before its proof is ready, the job is cancelled (`CancelJob`) and the new block starts.
+1. **Takes the payload at t0.** The engine tree's payload validator is wrapped (`src/tap.rs`): as soon as reth decodes a newPayload, before executing it, a copy of the block and its block access list goes to the prover pipeline.
+2. **Builds the ZEG0 guest input from the BAL, without executing** (`witness::sources_from_bal`).
+   - The EIP-7928 BAL names every account and slot the block touches, together with the post-values. The guest rebuilds the BAL from its own accesses and checks its hash, so the BAL is exactly the set of keys it loads.
+   - The pre-state of those keys is read from the parent state. The trie proofs come from the same `StateProofProvider::witness` that `debug_executionWitness` uses, with the post-state built from the BAL. Codes are those of every BAL account (in practice all used); ancestors are only the parent.
+   - On a cold page cache the first proof walk over a block's keys is I/O-bound: 0.5–2.5 s sequential, about 70 ms warm. So 16 threads first read and prove a share of the accounts each, warming the pages, and then the full proof runs.
+   - Blocks without a BAL (pre-Amsterdam, mainnet today) are re-executed instead (`witness::sources_by_execution`).
+3. **Proves it right away while pre-checking it natively.** The host build of the guest (`zisk_eth_guest`, in a subprocess because a guest fatal is `abort()`) runs alongside the prover. It must recompute the block hash, and its second line is the expected public output, the EIP-8025 `new_payload_request_root`. With `ZEG_DUMP_USED` it also reports the codes and BLOCKHASH ancestors the block used.
+   - If the pre-check fails, or the block reads an ancestor beyond the parent (rare), the proof is cancelled and redone on a checked input: BAL with all 256 ancestors, trimmed to the used ones, or re-execution if that also fails.
+   - The prover is a ZisK coordinator over gRPC: register and set up the ELF once, then `JobRequest(Prove)`, then `WaitJobResult`. The proof must carry the pre-check root as its public output.
+4. **Cancels on a different block.** If a different payload arrives (same or higher number), the engine reports the block invalid, or the in-flight block leaves the canonical chain before its proof is ready, the job is cancelled (`CancelJob`) and the new block starts.
 5. **Signs and submits.** It finds the beacon block whose payload bid commits to the block: under Gloas that is the block at the header's `slot_number`. It signs an `ExecutionProofEnvelope` with a validator key and POSTs it to the beacon node. This is the idea of dapplion/proof_seeder, done in-process.
+
+Measured on Sepolia over 10 blocks, in ms from reth receiving newPayload (medians, emulate mode):
+
+| | re-execution after reth's event | BAL, pre-check before proving | BAL, prove while pre-checking (current) |
+|---|---:|---:|---:|
+| input start | 79 | 2 | 3 |
+| input built | 852 | 365 | 286 |
+| prove start | 977 | 497 | 304 |
+
+**Taking payloads from Lighthouse directly** (`--zisk.lighthouse-early`: its `execution_payload_gossip` SSE event, then `GET /eth/v1/beacon/execution_payload_envelopes/{root}`) gains nothing:
+- the gossip event arrives only 2–6 ms before Lighthouse's newPayload reaches reth;
+- the envelope isn't served until Lighthouse has imported the payload, after the EL has executed it (≈ +100 ms).
+
+The flag stays as a second source: the first one wins.
 
 The guest commits only the 32-byte `new_payload_request_root`. The ExEx supplies the rest of the EIP-8025 `PublicInput`:
 - `successful_validation = true`, since the guest halts on an invalid block;
@@ -58,6 +78,7 @@ sudo systemctl stop reth-sepolia.service
 
 Each block leaves `--zisk.out-dir/<number>-<hash prefix>/`, containing:
 - `input.bin`
+- `input.exec.bin`, the re-execution input, with `--zisk.compare-exec`
 - `public_input.json`
 - `proof.bin`
 - `signed.ssz`, the SSZ list body as POSTed

@@ -1,6 +1,7 @@
-//! One proof in flight: each block the engine executes from a newPayload
-//! starts a job (witness → pre-check → prove → sign → submit) and cancels
-//! the previous one if it hasn't produced its proof yet.
+//! One proof in flight: each payload, as soon as it is seen (the engine's
+//! payload tap, or Lighthouse's gossip when `--zisk.lighthouse-early`),
+//! starts a job (witness → pre-check → trim → prove → sign → submit) and
+//! cancels the previous one if it hasn't produced its proof yet.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -12,7 +13,7 @@ use anyhow::{bail, Context, Result};
 use futures::StreamExt;
 use reth_engine_primitives::ConsensusEngineEvent;
 use reth_ethereum::evm::primitives::ConfigureEvm;
-use reth_ethereum::primitives::RecoveredBlock;
+use reth_ethereum::primitives::SealedBlock;
 use reth_ethereum::provider::{HeaderProvider, StateProviderFactory};
 use reth_ethereum::{Block, EthPrimitives};
 use serde_json::json;
@@ -45,6 +46,20 @@ pub struct Submitter {
     pub submit: bool,
 }
 
+/// A payload seen by one of the job sources.
+pub struct Incoming {
+    pub block: SealedBlock<Block>,
+    /// EIP-7928 block access list (RLP), Amsterdam payloads only.
+    pub bal: Option<alloy_primitives::Bytes>,
+    /// The beacon block committing to the payload, when the source knows it.
+    pub beacon_root: Option<Root>,
+    /// Timeline label of the source (`tap_payload`, `lh_envelope`).
+    pub source: &'static str,
+    pub at: SystemTime,
+    /// Earlier timeline marks from the same source (e.g. `lh_gossip`).
+    pub extra_marks: Vec<(&'static str, SystemTime)>,
+}
+
 pub struct Config {
     pub mode: Mode,
     pub chain_id: u64,
@@ -52,6 +67,14 @@ pub struct Config {
     pub precheck: Precheck,
     pub prover: Option<Prover>,
     pub submitter: Option<Submitter>,
+    /// After each BAL-built job, also build the re-execution input and
+    /// compare (measurement aid; off the critical path).
+    pub compare_exec: bool,
+    /// Build a BAL input only once reth has executed the block: reth's
+    /// parallel, BAL-driven prefetch has then loaded the trie pages our
+    /// (sequential) proof walk reads; on a cold cache that walk is several
+    /// times slower.
+    pub after_execution: bool,
 }
 
 /// Wall-clock marks of one block's job, for the per-block timing report.
@@ -59,7 +82,10 @@ pub struct Config {
 pub struct Timeline(Arc<std::sync::Mutex<Vec<(&'static str, SystemTime)>>>);
 
 impl Timeline {
-    fn at(&self, label: &'static str, t: SystemTime) {
+    pub fn has(&self, label: &str) -> bool {
+        self.0.lock().unwrap().iter().any(|(l, _)| *l == label)
+    }
+    pub fn at(&self, label: &'static str, t: SystemTime) {
         self.0.lock().unwrap().push((label, t));
     }
     pub fn mark(&self, label: &'static str) {
@@ -103,8 +129,11 @@ pub struct Pipeline<P, E> {
     evm_config: E,
     cfg: Arc<Config>,
     current: Option<InFlight>,
-    /// When reth received each recent newPayload (`BlockReceived`).
-    received: std::collections::VecDeque<(B256, SystemTime)>,
+    /// Timelines of recent blocks by hash: sources and engine events mark
+    /// them in whatever order they arrive.
+    timelines: std::collections::VecDeque<(B256, Timeline)>,
+    /// Blocks a job was started for (the first source wins).
+    started: std::collections::VecDeque<B256>,
 }
 
 impl<P, E> Pipeline<P, E>
@@ -113,68 +142,118 @@ where
     E: ConfigureEvm<Primitives = EthPrimitives> + Clone + Send + Sync + 'static,
 {
     pub fn new(provider: P, evm_config: E, cfg: Config) -> Self {
-        Self { provider, evm_config, cfg: Arc::new(cfg), current: None, received: Default::default() }
+        Self {
+            provider,
+            evm_config,
+            cfg: Arc::new(cfg),
+            current: None,
+            timelines: Default::default(),
+            started: Default::default(),
+        }
     }
 
-    pub async fn run(mut self, mut events: impl futures::Stream<Item = ConsensusEngineEvent<EthPrimitives>> + Unpin) {
-        while let Some(event) = events.next().await {
-            match event {
-                ConsensusEngineEvent::BlockReceived(num_hash) => {
-                    self.received.push_back((num_hash.hash, SystemTime::now()));
-                    if self.received.len() > 64 {
-                        self.received.pop_front();
-                    }
+    fn timeline(&mut self, hash: B256) -> Timeline {
+        if let Some((_, t)) = self.timelines.iter().find(|(h, _)| *h == hash) {
+            return t.clone();
+        }
+        let t = Timeline::default();
+        self.timelines.push_back((hash, t.clone()));
+        if self.timelines.len() > 64 {
+            self.timelines.pop_front();
+        }
+        t
+    }
+
+    pub async fn run(
+        mut self,
+        mut events: impl futures::Stream<Item = ConsensusEngineEvent<EthPrimitives>> + Unpin,
+        mut payloads: tokio::sync::mpsc::Receiver<Incoming>,
+    ) {
+        loop {
+            tokio::select! {
+                Some(p) = payloads.recv() => self.on_payload(p),
+                event = events.next() => {
+                    let Some(event) = event else { break };
+                    self.on_event(event);
                 }
-                ConsensusEngineEvent::CanonicalBlockAdded(executed, _)
-                | ConsensusEngineEvent::ForkBlockAdded(executed, _) => {
-                    self.on_block(executed.recovered_block.clone());
-                }
-                ConsensusEngineEvent::CanonicalChainCommitted(head, _) => {
-                    // The in-flight block left the canonical chain (a reorg
-                    // to a sibling or back to an ancestor).
-                    if let Some(cur) = &self.current {
-                        if head.number() <= cur.number && head.hash() != cur.hash {
-                            info!(number = cur.number, hash = %cur.hash, "in-flight block reorged out");
-                            cur.cancel.cancel();
-                        }
-                    }
-                }
-                _ => {}
             }
         }
         warn!("engine event stream closed");
     }
 
-    fn on_block(&mut self, block: Arc<RecoveredBlock<Block>>) {
-        let (number, hash) = (block.number(), block.hash());
+    fn on_event(&mut self, event: ConsensusEngineEvent<EthPrimitives>) {
+        match event {
+            ConsensusEngineEvent::BlockReceived(num_hash) => {
+                self.timeline(num_hash.hash).mark("newpayload_received");
+            }
+            ConsensusEngineEvent::CanonicalBlockAdded(executed, _) | ConsensusEngineEvent::ForkBlockAdded(executed, _) => {
+                self.timeline(executed.recovered_block.hash()).mark("executed");
+            }
+            ConsensusEngineEvent::InvalidBlock { block, error } => {
+                if let Some(cur) = self.current.as_ref().filter(|c| c.hash == block.hash()) {
+                    warn!(number = cur.number, %error, "in-flight block is invalid");
+                    cur.cancel.cancel();
+                }
+            }
+            ConsensusEngineEvent::CanonicalChainCommitted(head, _) => {
+                // The in-flight block left the canonical chain (a reorg to a
+                // sibling or back to an ancestor).
+                if let Some(cur) = &self.current {
+                    if head.number() <= cur.number && head.hash() != cur.hash {
+                        info!(number = cur.number, hash = %cur.hash, "in-flight block reorged out");
+                        cur.cancel.cancel();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn on_payload(&mut self, p: Incoming) {
+        let (number, hash) = (p.block.number, p.block.hash());
+        let timeline = self.timeline(hash);
+        for (label, at) in &p.extra_marks {
+            timeline.at(label, *at);
+        }
+        timeline.at(p.source, p.at);
+        if self.started.contains(&hash) {
+            return; // another source was first
+        }
         if let Some(cur) = &self.current {
-            if cur.hash == hash || number < cur.number {
-                return; // already proving it, or an older side block
+            if number < cur.number {
+                return; // an older side block
             }
             cur.cancel.cancel();
         }
-        let timeline = Timeline::default();
-        if let Some((_, t)) = self.received.iter().find(|(h, _)| *h == hash) {
-            timeline.at("newpayload_received", *t);
+        self.started.push_back(hash);
+        if self.started.len() > 64 {
+            self.started.pop_front();
         }
-        timeline.mark("executed");
         let cancel = CancellationToken::new();
         self.current = Some(InFlight { number, hash, cancel: cancel.clone() });
         let (provider, evm_config, cfg) = (self.provider.clone(), self.evm_config.clone(), self.cfg.clone());
         tokio::spawn(async move {
             let dir = cfg.out_dir.join(format!("{number}-{}", &hex::encode(hash)[..16]));
             let t0 = Instant::now();
-            let slot_start = block.header().timestamp;
-            let result = run_job(&provider, &evm_config, &cfg, block, &dir, &cancel, &timeline).await;
+            let slot_start = p.block.timestamp;
+            let source = p.source;
+            let block = p.block.clone();
+            let has_bal = p.bal.is_some();
+            let result = run_job(&provider, &evm_config, &cfg, p, &dir, &cancel, &timeline).await;
+            if cfg.compare_exec && has_bal && result.is_ok() && !cancel.is_cancelled() {
+                if let Err(e) = compare_exec(&provider, &evm_config, &cfg, &block, &dir).await {
+                    warn!(number, "compare-exec: {e:#}");
+                }
+            }
             let timings = timeline.report(slot_start);
             let mut status = match &result {
                 Ok(stage) => {
                     info!(number, %hash, stage, elapsed = ?t0.elapsed(), "job finished");
-                    json!({ "number": number, "hash": hash, "result": stage })
+                    json!({ "number": number, "hash": hash, "result": stage, "source": source })
                 }
                 Err(e) => {
                     error!(number, %hash, "job failed: {e:#}");
-                    json!({ "number": number, "hash": hash, "result": "failed", "error": format!("{e:#}") })
+                    json!({ "number": number, "hash": hash, "result": "failed", "error": format!("{e:#}"), "source": source })
                 }
             };
             info!(number, timings = %timings, "job timings");
@@ -186,12 +265,38 @@ where
     }
 }
 
+/// Build the input on a blocking thread: from the BAL when the payload has
+/// one, else by re-executing. Returns the sources and whether they came
+/// from the BAL (a superset to trim).
+async fn build_sources<P, E>(
+    provider: &P,
+    evm_config: &E,
+    chain_id: u64,
+    block: &SealedBlock<Block>,
+    bal: Option<&alloy_primitives::Bytes>,
+    all_ancestors: bool,
+) -> Result<(rust_input_gen::offline::OfflineSources, bool)>
+where
+    P: StateProviderFactory + HeaderProvider<Header = alloy_consensus::Header> + Clone + Send + Sync + 'static,
+    E: ConfigureEvm<Primitives = EthPrimitives> + Clone + Send + Sync + 'static,
+{
+    let (provider, evm_config, block, bal) = (provider.clone(), evm_config.clone(), block.clone(), bal.cloned());
+    tokio::task::spawn_blocking(move || match bal {
+        Some(bal) => Ok((crate::witness::sources_from_bal(&provider, chain_id, &block, &bal, all_ancestors)?, true)),
+        None => {
+            let block = block.try_recover().map_err(|e| anyhow::anyhow!("recovering senders: {e}"))?;
+            Ok((crate::witness::sources_by_execution(&provider, &evm_config, chain_id, &block)?, false))
+        }
+    })
+    .await?
+}
+
 /// Run one block's job; returns the stage it ended at.
 async fn run_job<P, E>(
     provider: &P,
     evm_config: &E,
     cfg: &Config,
-    block: Arc<RecoveredBlock<Block>>,
+    p: Incoming,
     dir: &std::path::Path,
     cancel: &CancellationToken,
     timeline: &Timeline,
@@ -200,19 +305,18 @@ where
     P: StateProviderFactory + HeaderProvider<Header = alloy_consensus::Header> + Clone + Send + Sync + 'static,
     E: ConfigureEvm<Primitives = EthPrimitives> + Clone + Send + Sync + 'static,
 {
-    let (number, hash) = (block.number(), block.hash());
+    let block = &p.block;
+    let (number, hash) = (block.number, block.hash());
     let block_hash: Root = hash.0;
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
 
-    // 1. Witness + ZEG0 input (blocking: state reads, re-execution, proofs).
-    //    The parent's state is served once it is canonical (or persisted); a
-    //    payload can arrive before the forkchoice update that makes its
-    //    parent canonical (e.g. while catching up), so wait for it. A newer
-    //    block cancels the wait.
-    //    The witness also walks ancestor headers by hash, so wait for the
-    //    parent's header too.
+    // 1. The parent's state is served once it is canonical (or persisted);
+    //    a payload can arrive before the forkchoice update that makes its
+    //    parent canonical (e.g. while catching up), so wait for it. The
+    //    witness also walks ancestor headers by hash, so wait for the
+    //    parent's header too. A newer block cancels the wait.
     let t = Instant::now();
-    let parent = block.parent_hash();
+    let parent = block.parent_hash;
     while provider.state_by_block_hash(parent).is_err() || !matches!(provider.header(parent), Ok(Some(_))) {
         if cancel.is_cancelled() {
             return Ok("cancelled");
@@ -220,28 +324,64 @@ where
         if t.elapsed() > Duration::from_secs(36) {
             bail!("parent {parent} state/header never became available");
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
+
+    if cfg.after_execution && p.bal.is_some() {
+        let t = Instant::now();
+        while !timeline.has("executed") {
+            if cancel.is_cancelled() {
+                return Ok("cancelled");
+            }
+            if t.elapsed() > Duration::from_secs(12) {
+                bail!("reth did not execute the block within 12 s");
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    }
+
+    // 2. Witness + ZEG0 input: from the BAL (no execution) when present,
+    //    with only the parent as BLOCKHASH ancestor (nearly every block).
     timeline.mark("input_start");
     let t = Instant::now();
-    let input = {
-        let (provider, evm_config, block, chain_id) = (provider.clone(), evm_config.clone(), block.clone(), cfg.chain_id);
-        tokio::task::spawn_blocking(move || crate::witness::build_input(&provider, &evm_config, chain_id, &block))
-            .await??
-    };
-    let input_path = dir.join("input.bin");
+    let (sources, from_bal) = build_sources(provider, evm_config, cfg.chain_id, block, p.bal.as_ref(), false).await?;
+    timeline.mark("witness_done");
+    let input = rust_input_gen::offline::encode_binary(&sources)?;
     timeline.mark("input_done");
+    let input_path = dir.join("input.bin");
     std::fs::write(&input_path, &input)?;
-    info!(number, bytes = input.len(), elapsed = ?t.elapsed(), "built input");
+    info!(number, bytes = input.len(), from_bal, elapsed = ?t.elapsed(), "built input");
     if cancel.is_cancelled() {
         return Ok("cancelled");
     }
 
-    // 2. Native pre-check: block hash and the expected public output.
-    let t = Instant::now();
-    let root = cfg.precheck.run(&input_path, &block_hash).await?;
-    timeline.mark("precheck_done");
-    info!(number, root = %hex::encode(root), elapsed = ?t.elapsed(), "pre-check passed");
+    // 3. Prove and pre-check. A BAL-built input is proved right away while
+    //    the native pre-check runs alongside; if that fails or shows the
+    //    block reads an ancestor beyond the parent, the proof is cancelled
+    //    and redone on a checked input.
+    let attempt = if from_bal {
+        prove_optimistic(cfg, &input, &input_path, &block_hash, number, cancel, timeline).await?
+    } else {
+        prove_checked(cfg, &input, &input_path, &block_hash, cancel, timeline).await?
+    };
+    let (root, proof) = match attempt {
+        Attempt::Done(root, proof) => (root, proof),
+        Attempt::Cancelled => {
+            info!(number, %hash, "proof cancelled");
+            return Ok("cancelled");
+        }
+        Attempt::Retry(reason) => {
+            warn!(number, "optimistic proof dropped ({reason}); proving a checked input");
+            let input = checked_input(provider, evm_config, cfg, block, p.bal.as_ref(), &input_path, &block_hash).await?;
+            timeline.mark("retry_input_done");
+            match prove_checked(cfg, &input, &input_path, &block_hash, cancel, timeline).await? {
+                Attempt::Done(root, proof) => (root, proof),
+                Attempt::Cancelled => return Ok("cancelled"),
+                Attempt::Retry(reason) => bail!("checked input rejected: {reason}"),
+            }
+        }
+    };
+    info!(number, root = %hex::encode(root), "public output");
     let public_input = PublicInput::new(root, cfg.chain_id);
     std::fs::write(
         dir.join("public_input.json"),
@@ -253,41 +393,21 @@ where
             "hash_tree_root": format!("0x{}", hex::encode(public_input.hash_tree_root())),
         }))?,
     )?;
-    let Some(prover) = &cfg.prover else {
+    let Some(proof) = proof else {
         return Ok("prechecked");
     };
-    if cancel.is_cancelled() {
-        return Ok("cancelled");
-    }
-
-    // 3. Prove (cancellable).
-    let t = Instant::now();
-    timeline.mark("prove_start");
-    let proof = match prover.prove(&input, &root, cancel).await? {
-        Outcome::Cancelled => {
-            info!(number, %hash, "proof cancelled");
-            return Ok("cancelled");
-        }
-        Outcome::Proved(p) => p,
-    };
-    timeline.mark("prove_done");
-    if proof.root != root {
-        bail!(
-            "prover public output 0x{} != pre-check root 0x{}",
-            hex::encode(proof.root),
-            hex::encode(root)
-        );
-    }
-    info!(number, elapsed = ?t.elapsed(), "public output matches");
     let Some(sub) = &cfg.submitter else {
         return Ok("emulated");
     };
     std::fs::write(dir.join("proof.bin"), &proof.data)?;
 
-    // 4. Sign for the beacon block that commits to this payload. Not
+    // 6. Sign for the beacon block that commits to this payload. Not
     //    cancelled from here on: the proof stays valid for its block.
     let slot = block.header().slot_number.context("block has no slot_number (pre-Amsterdam)")?;
-    let beacon_root = sub.beacon.wait_beacon_root(slot, &block_hash, Duration::from_secs(24)).await?;
+    let beacon_root = match p.beacon_root {
+        Some(r) => r,
+        None => sub.beacon.wait_beacon_root(slot, &block_hash, Duration::from_secs(24)).await?,
+    };
     let fork_version = sub.params.fork_version_at_slot(slot);
     let message = ExecutionProofEnvelope { proof_data: proof.data, proof_type: sub.proof_type, beacon_block_root: beacon_root };
     let signed = sub.signer.sign(message, sub.validator_index, fork_version, &sub.params.genesis_validators_root);
@@ -300,8 +420,167 @@ where
         return Ok("signed");
     }
 
-    // 5. Submit.
+    // 7. Submit.
     sub.beacon.submit(std::slice::from_ref(&signed)).await?;
     info!(number, slot, "submitted proof");
     Ok("submitted")
+}
+
+
+/// Build the re-execution input of `block` next to the BAL-built one
+/// (`input.exec.bin`) and check both give the same root.
+async fn compare_exec<P, E>(provider: &P, evm_config: &E, cfg: &Config, block: &SealedBlock<Block>, dir: &std::path::Path) -> Result<()>
+where
+    P: StateProviderFactory + HeaderProvider<Header = alloy_consensus::Header> + Clone + Send + Sync + 'static,
+    E: ConfigureEvm<Primitives = EthPrimitives> + Clone + Send + Sync + 'static,
+{
+    let t = Instant::now();
+    let (sources, _) = build_sources(provider, evm_config, cfg.chain_id, block, None, false).await?;
+    let elapsed = t.elapsed();
+    let path = dir.join("input.exec.bin");
+    let bytes = rust_input_gen::offline::encode_binary(&sources)?;
+    std::fs::write(&path, &bytes)?;
+    let exec = cfg.precheck.run(&path, &block.hash().0).await?;
+    let bal = cfg.precheck.run(&dir.join("input.bin"), &block.hash().0).await?;
+    let bal_len = std::fs::metadata(dir.join("input.bin"))?.len();
+    info!(
+        number = block.number,
+        same_root = exec.root == bal.root,
+        exec_bytes = bytes.len(),
+        bal_bytes = bal_len,
+        exec_build = ?elapsed,
+        "compare-exec"
+    );
+    if exec.root != bal.root {
+        bail!("roots differ: exec 0x{} bal 0x{}", hex::encode(exec.root), hex::encode(bal.root));
+    }
+    Ok(())
+}
+
+enum Attempt {
+    /// The public output, and the proof (none without a prover).
+    Done(Root, Option<crate::prover::Proof>),
+    Cancelled,
+    /// The input can't be proved as is; why.
+    Retry(String),
+}
+
+/// Prove `input` while pre-checking it; the proof stands if the pre-check
+/// passes, reads no ancestor beyond the parent and gives the root the
+/// proof commits to.
+async fn prove_optimistic(
+    cfg: &Config,
+    input: &[u8],
+    input_path: &std::path::Path,
+    block_hash: &Root,
+    number: u64,
+    cancel: &CancellationToken,
+    timeline: &Timeline,
+) -> Result<Attempt> {
+    let prove_cancel = cancel.child_token();
+    let check = async {
+        let r = cfg.precheck.run(input_path, block_hash).await;
+        timeline.mark("precheck_done");
+        let verdict = match &r {
+            Err(e) => Some(format!("pre-check failed: {e:#}")),
+            Ok(c) if c.used_blocks.iter().any(|n| *n + 1 != number) => {
+                Some(format!("block reads ancestors {:?}", c.used_blocks))
+            }
+            Ok(_) => None,
+        };
+        if verdict.is_some() {
+            prove_cancel.cancel();
+        }
+        (r, verdict)
+    };
+    let prove = async {
+        match &cfg.prover {
+            Some(prover) => {
+                timeline.mark("prove_start");
+                let r = prover.prove(input, &prove_cancel).await;
+                timeline.mark("prove_done");
+                Some(r)
+            }
+            None => None,
+        }
+    };
+    let (outcome, (checked, verdict)) = tokio::join!(prove, check);
+    if let Some(reason) = verdict {
+        return Ok(Attempt::Retry(reason));
+    }
+    let root = checked?.root;
+    finish_attempt(root, outcome, cancel)
+}
+
+/// Pre-check `input`, then prove it.
+async fn prove_checked(
+    cfg: &Config,
+    input: &[u8],
+    input_path: &std::path::Path,
+    block_hash: &Root,
+    cancel: &CancellationToken,
+    timeline: &Timeline,
+) -> Result<Attempt> {
+    let root = match cfg.precheck.run(input_path, block_hash).await {
+        Ok(c) => c.root,
+        Err(e) => return Ok(Attempt::Retry(format!("pre-check failed: {e:#}"))),
+    };
+    timeline.mark("precheck_done");
+    let outcome = match &cfg.prover {
+        Some(prover) => {
+            timeline.mark("prove_start");
+            let r = prover.prove(input, cancel).await;
+            timeline.mark("prove_done");
+            Some(r)
+        }
+        None => None,
+    };
+    finish_attempt(root, outcome, cancel)
+}
+
+fn finish_attempt(root: Root, outcome: Option<Result<Outcome>>, cancel: &CancellationToken) -> Result<Attempt> {
+    match outcome {
+        None => Ok(Attempt::Done(root, None)),
+        Some(r) => match r? {
+            Outcome::Cancelled if cancel.is_cancelled() => Ok(Attempt::Cancelled),
+            Outcome::Cancelled => Ok(Attempt::Retry("proof cancelled".into())),
+            Outcome::Proved(p) if p.commits_to(&root) => Ok(Attempt::Done(root, Some(p))),
+            Outcome::Proved(_) => bail!("the proof does not commit to the pre-check root 0x{}", hex::encode(root)),
+        },
+    }
+}
+
+/// A pre-checked input for the slow path: from the BAL with every
+/// BLOCKHASH ancestor, trimmed to what the pre-check reports the block
+/// uses, or by re-execution if the BAL-built input fails.
+async fn checked_input<P, E>(
+    provider: &P,
+    evm_config: &E,
+    cfg: &Config,
+    block: &SealedBlock<Block>,
+    bal: Option<&alloy_primitives::Bytes>,
+    input_path: &std::path::Path,
+    block_hash: &Root,
+) -> Result<Vec<u8>>
+where
+    P: StateProviderFactory + HeaderProvider<Header = alloy_consensus::Header> + Clone + Send + Sync + 'static,
+    E: ConfigureEvm<Primitives = EthPrimitives> + Clone + Send + Sync + 'static,
+{
+    if bal.is_some() {
+        let (mut sources, _) = build_sources(provider, evm_config, cfg.chain_id, block, bal, true).await?;
+        std::fs::write(input_path, rust_input_gen::offline::encode_binary(&sources)?)?;
+        match cfg.precheck.run(input_path, block_hash).await {
+            Ok(c) => {
+                rust_input_gen::assemble::trim(&mut sources, &c.used_codes, &c.used_blocks);
+                let input = rust_input_gen::offline::encode_binary(&sources)?;
+                std::fs::write(input_path, &input)?;
+                return Ok(input);
+            }
+            Err(e) => warn!(number = block.number, "BAL-built input failed the pre-check, re-executing: {e:#}"),
+        }
+    }
+    let (sources, _) = build_sources(provider, evm_config, cfg.chain_id, block, None, false).await?;
+    let input = rust_input_gen::offline::encode_binary(&sources)?;
+    std::fs::write(input_path, &input)?;
+    Ok(input)
 }

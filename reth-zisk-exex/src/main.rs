@@ -3,11 +3,13 @@
 //! beacon node. See README.md.
 
 mod beacon;
+mod lighthouse;
 mod pipeline;
 mod precheck;
 mod prover;
 mod signer;
 mod ssz;
+mod tap;
 mod witness;
 
 use std::path::PathBuf;
@@ -62,6 +64,19 @@ struct ZiskArgs {
     /// EIP-8025 proof type of this guest (no ZisK id is assigned yet).
     #[arg(long = "zisk.proof-type")]
     proof_type: Option<u8>,
+    /// Also take payloads straight from the beacon node (--zisk.beacon-url):
+    /// its execution_payload_gossip events, then the envelope. A job starts
+    /// on whichever of this and the engine's newPayload comes first.
+    #[arg(long = "zisk.lighthouse-early", default_value_t = false)]
+    lighthouse_early: bool,
+    /// After each job, also build the re-execution input and compare it with
+    /// the BAL-built one (measurement aid).
+    #[arg(long = "zisk.compare-exec", default_value_t = false, hide = true)]
+    compare_exec: bool,
+    /// Build a BAL input only after reth has executed the block (warm trie
+    /// pages) instead of at newPayload.
+    #[arg(long = "zisk.after-execution", default_value_t = false, action = clap::ArgAction::Set)]
+    after_execution: bool,
     /// POST signed proofs to the beacon node (otherwise only stored).
     #[arg(long = "zisk.submit", default_value_t = false)]
     submit: bool,
@@ -125,13 +140,34 @@ async fn build_config(args: &ZiskArgs, chain_id: u64) -> anyhow::Result<Config> 
         precheck: Precheck { guest_host: args.guest_host.clone() },
         prover,
         submitter,
+        compare_exec: args.compare_exec,
+        after_execution: args.after_execution,
     })
 }
 
 fn main() -> eyre::Result<()> {
     Cli::<EthereumChainSpecParser, ZiskArgs>::parse().run(async move |builder, args| {
+        // Every newPayload is copied to the pipeline from the engine's
+        // payload validator, before reth executes it.
+        let (payload_tx, payload_rx) = tokio::sync::mpsc::channel(64);
+        let payload_tx_lh = payload_tx.clone();
+        // The engine tree builds its validator through the engine-validator
+        // builder (the payload-validator slot is the engine RPC's).
+        use reth_ethereum::node::builder::rpc::{
+            BasicEngineApiBuilder, BasicEngineValidatorBuilder, Identity, RpcAddOns,
+        };
+        let add_ons = reth_ethereum::node::EthereumAddOns::new(RpcAddOns::new(
+            <reth_ethereum::node::EthereumEthApiBuilder>::default(),
+            reth_ethereum::node::EthereumEngineValidatorBuilder::default(),
+            BasicEngineApiBuilder::<reth_ethereum::node::EthereumEngineValidatorBuilder>::default(),
+            BasicEngineValidatorBuilder::new(tap::TapValidatorBuilder { tx: payload_tx }),
+            Identity::new(),
+            Identity::new(),
+        ));
         let handle = builder
-            .node(EthereumNode::default())
+            .with_types::<EthereumNode>()
+            .with_components(EthereumNode::components())
+            .with_add_ons(add_ons)
             .install_exex("zisk", async move |ctx| Ok(exex(ctx)))
             .launch_with_debug_capabilities()
             .await?;
@@ -142,9 +178,13 @@ fn main() -> eyre::Result<()> {
 
         let cfg = build_config(&args, chain_id).await.map_err(|e| eyre::eyre!("{e:#}"))?;
         info!(mode = ?cfg.mode, out_dir = %cfg.out_dir.display(), "zisk prover pipeline started");
+        if args.lighthouse_early {
+            let (url, tx) = (args.beacon_url.trim_end_matches('/').to_string(), payload_tx_lh);
+            node.task_executor.spawn_task(Box::pin(lighthouse::run(url, tx)));
+        }
         let events = node.add_ons_handle.engine_events.new_listener();
         let pipeline = Pipeline::new(node.provider.clone(), node.evm_config.clone(), cfg);
-        node.task_executor.spawn_critical_task("zisk prover pipeline", Box::pin(pipeline.run(events)));
+        node.task_executor.spawn_critical_task("zisk prover pipeline", Box::pin(pipeline.run(events, payload_rx)));
 
         handle.wait_for_node_exit().await
     })

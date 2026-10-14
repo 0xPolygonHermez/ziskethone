@@ -19,8 +19,20 @@ use grpc::zisk_coordinator_api_client::ZiskCoordinatorApiClient;
 /// empty for the emulator.
 pub struct Proof {
     pub data: Vec<u8>,
-    /// The guest's public output, the `new_payload_request_root`.
-    pub root: Root,
+    /// The guest's public output, the `new_payload_request_root`, when the
+    /// prover reports it (the emulator); a coordinator proof carries it
+    /// inside `data`.
+    pub root: Option<Root>,
+}
+
+impl Proof {
+    /// Whether the proof's public output is `root`.
+    pub fn commits_to(&self, root: &Root) -> bool {
+        match &self.root {
+            Some(r) => r == root,
+            None => contains_publics(&self.data, root),
+        }
+    }
 }
 
 pub enum Outcome {
@@ -43,9 +55,9 @@ pub enum Prover {
 }
 
 impl Prover {
-    pub async fn prove(&self, input: &[u8], expected_root: &Root, cancel: &CancellationToken) -> Result<Outcome> {
+    pub async fn prove(&self, input: &[u8], cancel: &CancellationToken) -> Result<Outcome> {
         match self {
-            Self::Coordinator(p) => p.prove(input, expected_root, cancel).await,
+            Self::Coordinator(p) => p.prove(input, cancel).await,
             Self::Emulator(p) => p.prove(input, cancel).await,
         }
     }
@@ -130,7 +142,7 @@ impl CoordinatorProver {
         }
     }
 
-    async fn prove(&self, input: &[u8], expected_root: &Root, cancel: &CancellationToken) -> Result<Outcome> {
+    async fn prove(&self, input: &[u8], cancel: &CancellationToken) -> Result<Outcome> {
         let mut this = Self { client: self.client.clone(), hash_id: self.hash_id.clone() };
         let prove = grpc::job_kind::Kind::Prove(grpc::ProveRequest {
             hash_id: this.hash_id.clone(),
@@ -161,10 +173,7 @@ impl CoordinatorProver {
         if proof.data.len() > MAX_PROOF_SIZE {
             bail!("proof is {} bytes, over MAX_PROOF_SIZE", proof.data.len());
         }
-        if !contains_publics(&proof.data, expected_root) {
-            bail!("proof does not commit to the expected new_payload_request_root");
-        }
-        Ok(Outcome::Proved(Proof { data: proof.data, root: *expected_root }))
+        Ok(Outcome::Proved(Proof { data: proof.data, root: None }))
     }
 }
 
@@ -234,7 +243,7 @@ impl EmulatorProver {
         let bytes = std::fs::read(&out).context("reading the ziskemu output")?;
         let root: Root = bytes.get(..32).context("ziskemu output shorter than 32 bytes")?.try_into()?;
         info!(elapsed = ?t0.elapsed(), root = %hex::encode(root), "ziskemu finished");
-        Ok(Outcome::Proved(Proof { data: Vec::new(), root }))
+        Ok(Outcome::Proved(Proof { data: Vec::new(), root: Some(root) }))
     }
 }
 

@@ -15,6 +15,14 @@ pub struct Precheck {
     pub guest_host: PathBuf,
 }
 
+/// What a pre-check found: the public output, and the codes and BLOCKHASH
+/// numbers the block used (`ZEG_DUMP_USED`).
+pub struct Checked {
+    pub root: Root,
+    pub used_codes: std::collections::HashSet<alloy_primitives::B256>,
+    pub used_blocks: std::collections::BTreeSet<u64>,
+}
+
 fn parse_root(line: &str) -> Result<Root> {
     let b = hex::decode(line.trim().trim_start_matches("0x")).with_context(|| format!("bad hex {line:?}"))?;
     b.try_into().map_err(|_| anyhow::anyhow!("not 32 bytes: {line:?}"))
@@ -23,7 +31,7 @@ fn parse_root(line: &str) -> Result<Root> {
 impl Precheck {
     /// The `new_payload_request_root` of `input`, after checking the guest
     /// recomputes `block_hash`.
-    pub async fn run(&self, input: &Path, block_hash: &Root) -> Result<Root> {
+    pub async fn run(&self, input: &Path, block_hash: &Root) -> Result<Checked> {
         // RLIMIT_CORE = 1 byte keeps a guest abort() from going through
         // apport, which costs ~8 s per crash.
         let out = tokio::time::timeout(
@@ -32,6 +40,7 @@ impl Precheck {
                 .arg("--core=1")
                 .arg(&self.guest_host)
                 .arg(input)
+                .env("ZEG_DUMP_USED", "1")
                 .kill_on_drop(true)
                 .output(),
         )
@@ -51,6 +60,14 @@ impl Precheck {
         if parse_root(hash)? != *block_hash {
             bail!("host guest computed block hash {hash}, expected 0x{}", hex::encode(block_hash));
         }
-        parse_root(root)
+        let mut checked = Checked { root: parse_root(root)?, used_codes: Default::default(), used_blocks: Default::default() };
+        for line in String::from_utf8_lossy(&out.stderr).lines() {
+            if let Some(h) = line.strip_prefix("USED code ") {
+                checked.used_codes.insert(alloy_primitives::B256::from(parse_root(h)?));
+            } else if let Some(n) = line.strip_prefix("USED blockhash ") {
+                checked.used_blocks.insert(n.trim().parse().context("USED blockhash")?);
+            }
+        }
+        Ok(checked)
     }
 }
