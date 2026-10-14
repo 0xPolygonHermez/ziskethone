@@ -37,8 +37,8 @@ struct ZiskArgs {
     /// Directory for per-block artifacts (input, proof, signed envelope, status).
     #[arg(long = "zisk.out-dir", default_value = "zisk-proofs")]
     out_dir: PathBuf,
-    /// Native host build of the guest, for the pre-check.
-    #[arg(long = "zisk.guest-host", default_value = "cpp-guest/build-sepolia/zisk_eth_guest")]
+    /// Native host build of the guest (only for --zisk.compare-exec).
+    #[arg(long = "zisk.guest-host", default_value = "cpp-guest/build-sepolia/zisk_eth_guest", hide = true)]
     guest_host: PathBuf,
     /// Guest ELF (emulate and prove modes).
     #[arg(long = "zisk.elf")]

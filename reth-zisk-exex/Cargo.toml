@@ -25,6 +25,8 @@ alloy-eips            = "=2.5.0"
 alloy-rlp             = "=0.3.16"
 alloy-rpc-types-debug = "=2.5.0"
 alloy-rpc-types-engine = "=2.5.0"
+alloy-rpc-types-eth   = "=2.5.0"
+alloy-evm             = "=0.39.0"
 alloy-eip7928         = { version = "=0.4.11", features = ["rlp"] }
 
 # ZEG0 input encoder (in-process `assemble::sources_from_parts`).

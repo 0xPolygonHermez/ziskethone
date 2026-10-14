@@ -21,19 +21,10 @@ pub struct Proof {
     pub data: Vec<u8>,
     /// The guest's public output, the `new_payload_request_root`, when the
     /// prover reports it (the emulator); a coordinator proof carries it
-    /// inside `data`.
+    /// inside `data`, checked by the beacon node's proof engine.
     pub root: Option<Root>,
 }
 
-impl Proof {
-    /// Whether the proof's public output is `root`.
-    pub fn commits_to(&self, root: &Root) -> bool {
-        match &self.root {
-            Some(r) => r == root,
-            None => contains_publics(&self.data, root),
-        }
-    }
-}
 
 pub enum Outcome {
     Proved(Proof),
@@ -177,28 +168,6 @@ impl CoordinatorProver {
     }
 }
 
-/// Whether a serialized ZisK proof (`bincode` standard config of
-/// `zisk_common::Proof`) carries `root` as its public output: the guest's 8
-/// output words, one public each, appear in order as bincode varints. A
-/// sanity check that the coordinator proved this input, not a verification.
-pub fn contains_publics(proof: &[u8], root: &Root) -> bool {
-    let mut needle = Vec::new();
-    for w in root.chunks(4) {
-        let v = u32::from_le_bytes(w.try_into().unwrap());
-        match v {
-            0..=250 => needle.push(v as u8),
-            251..=0xffff => {
-                needle.push(0xfb);
-                needle.extend_from_slice(&(v as u16).to_le_bytes());
-            }
-            _ => {
-                needle.push(0xfc);
-                needle.extend_from_slice(&v.to_le_bytes());
-            }
-        }
-    }
-    proof.windows(needle.len()).any(|w| w == needle.as_slice())
-}
 
 // ---------------------------------------------------------------------------
 // Emulator
@@ -257,17 +226,4 @@ mod tests {
         assert_eq!(frame_input(&[0; 8]).len(), 16);
     }
 
-    #[test]
-    fn publics_search() {
-        let mut root = [0u8; 32];
-        root[..4].copy_from_slice(&7u32.to_le_bytes());
-        root[4..8].copy_from_slice(&300u32.to_le_bytes());
-        root[8..12].copy_from_slice(&0xdeadbeefu32.to_le_bytes());
-        // [vk...] then the 8 publics as varints, then the remaining zeros.
-        let mut proof = vec![0xfd, 1, 2, 3, 4, 5, 6, 7, 8];
-        proof.extend_from_slice(&[7, 0xfb, 0x2c, 0x01, 0xfc, 0xef, 0xbe, 0xad, 0xde, 0, 0, 0, 0, 0]);
-        assert!(contains_publics(&proof, &root));
-        root[31] = 1;
-        assert!(!contains_publics(&proof, &root));
-    }
 }
