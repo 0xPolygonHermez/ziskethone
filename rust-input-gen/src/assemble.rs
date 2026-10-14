@@ -107,6 +107,25 @@ pub fn rpc_block(
     block
 }
 
+/// Keep only the bytecodes in `used_codes` (by keccak hash) and, besides
+/// the parent, only the ancestors whose number is in `used_blocks`: what a
+/// guest run reported with `ZEG_DUMP_USED`. For an input built from a
+/// superset (from the BAL, without executing), so the proof doesn't pay to
+/// hash codes and headers the block never reads.
+pub fn trim(
+    sources: &mut OfflineSources,
+    used_codes: &std::collections::HashSet<B256>,
+    used_blocks: &std::collections::BTreeSet<u64>,
+) {
+    sources.witness.codes.retain(|c| used_codes.contains(&alloy::primitives::keccak256(c)));
+    let mut ancestors = std::mem::take(&mut sources.ancestors).into_iter();
+    let parent = ancestors.next();
+    sources.ancestors = parent
+        .into_iter()
+        .chain(ancestors.filter(|b| used_blocks.contains(&b.header.number)))
+        .collect();
+}
+
 /// Add reth's witness keys (an address followed by its slots), the
 /// beneficiary and the withdrawal recipients (credited outside any tx) to
 /// `accessed`.
