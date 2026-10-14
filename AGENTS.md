@@ -68,3 +68,13 @@ cmake -S cpp-guest -B cpp-guest/build-zevm-sepolia -DEVM_BACKEND=zevm   -DZEG_CH
 reth node with the `debug` namespace (public endpoints such as publicnode
 don't serve `debug_executionWitness`); the same 32-block rule applies. A local
 Sepolia reth node serves it at `http://127.0.0.1:8645`.
+
+## Live prover (`reth-zisk-exex/`)
+
+`reth-zisk` is reth v2.7.0 plus an ExEx: for every block the engine executes
+from a newPayload it builds the ZEG0 input in-process (same bytes as
+`input-gen`), pre-checks it with the host guest, proves it (ZisK coordinator,
+or ziskemu in `--zisk.mode emulate`) and signs/submits the EIP-8025 proof.
+It runs in place of `reth-sepolia.service` on the same datadir (stop the
+service first, restart it afterwards). Its own `Cargo.lock`; build with
+`cargo build --release` inside the directory. See `reth-zisk-exex/README.md`.

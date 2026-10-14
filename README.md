@@ -44,6 +44,7 @@ pointer casts to packed structs.
 | `rust-input-gen/`     | Two binaries: `input-gen` (RPC → binary) and `input-gen-from-manifest`.    |
 | `eest-witness-gen/`   | Bridges EEST blockchain-test fixtures to an `OfflineSources` JSON manifest.|
 | `cpp-guest/`          | C++ stateless verifier (evmone + custom state DB).                         |
+| `reth-zisk-exex/`     | `reth-zisk`: reth node that proves each new payload with ZisK and submits the EIP-8025 proof (see its README). |
 | `scripts/`            | `verify_blocks.py` — continuous mainnet verifier.                          |
 | `BINARY_FORMAT.md`    | On-disk format specification.                                              |
 | `Makefile`            | Convenience targets to build / run.                                        |
