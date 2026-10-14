@@ -280,3 +280,12 @@ else()
     message(FATAL_ERROR "EVM_BACKEND must be evmone | zevm (got ${EVM_BACKEND})")
 endif()
 
+
+# ----- host unit tests -------------------------------------------------------
+#
+# Known-answer tests for the SSZ merkleization behind the EIP-8025
+# new_payload_request_root (test/ssz_test.cpp).
+add_executable(ssz_test test/ssz_test.cpp src/ssz.cpp src/fatal.cpp)
+target_include_directories(ssz_test PRIVATE include)
+target_compile_options(ssz_test PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(ssz_test PRIVATE evmone::precompiles)
