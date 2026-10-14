@@ -1,7 +1,9 @@
 #include "zeg/contracts.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <set>
 
 #include <evmone_precompiles/keccak.hpp>
 
@@ -37,6 +39,17 @@ size_t Contracts::index_of(const evmc::bytes32& hash) const {
         for (int i = 0; i < 32; ++i) std::fprintf(stderr, "%02x", hash.bytes[i]);
         std::fprintf(stderr, "\n");
         fatal("Contracts::index_of: code hash not present in the table");
+    }
+    // DEBUG (host): report each code the block uses, so a host can drop the
+    // unused ones from the input (reth-zisk-exex trims its BAL-built input).
+    static const bool dump_used = std::getenv("ZEG_DUMP_USED") != nullptr;
+    if (dump_used) {
+        static std::set<evmc::bytes32> seen;
+        if (seen.insert(hash).second) {
+            std::fprintf(stderr, "USED code 0x");
+            for (int i = 0; i < 32; ++i) std::fprintf(stderr, "%02x", hash.bytes[i]);
+            std::fprintf(stderr, "\n");
+        }
     }
     return it->second;
 }
