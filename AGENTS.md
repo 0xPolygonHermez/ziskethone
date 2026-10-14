@@ -44,6 +44,11 @@ BLK=$(( HEAD - 3 ))
 ./cpp-guest/build/zisk_eth_guest     build/block_input.bin | tail -1
 ```
 
+The host guest prints the recomputed block hash (line 1, must equal the chain's
+`hash`) and then the public output, the EIP-8025 `new_payload_request_root`
+(the last line; the only output of the ZisK ELF). `scripts/npr_root_ref.py`
+recomputes the root with execution-specs for an independent check.
+
 `input-gen` calls `debug_executionWitness` and `debug_traceBlockByHash`
 (prestateTracer): reth's witness `keys` omit accounts that were loaded but don't
 exist, and every loaded key must be a leaf in the input — the guest halts on any

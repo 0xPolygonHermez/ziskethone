@@ -19,10 +19,10 @@ file on disk:
 │                      │                       │                        │
 │  • talks to an ETH   │                       │  • reads private input │
 │    JSON-RPC node     │                       │  • re-executes block   │
-│  • fetches header,   │                       │  • commits 2 public    │
-│    txs, witness…     │                       │    outputs:            │
-│  • writes binary     │                       │    – previousBlockHash │
-│    container         │                       │    – nextBlockHash     │
+│  • fetches header,   │                       │  • commits 1 public    │
+│    txs, witness…     │                       │    output (EIP-8025):  │
+│  • writes binary     │                       │    new_payload_        │
+│    container         │                       │    request_root        │
 └──────────────────────┘                       └────────────────────────┘
 
 ┌──────────────────────┐
@@ -132,7 +132,12 @@ LATEST=$(cast block-number --rpc-url "$ETH_RPC_URL")
 ./cpp-guest/build/zisk_eth_guest build/block_input.bin
 ```
 
-The guest prints `0x<block_hash>` on its last stdout line. Compare against the
+The host guest prints two lines: the recomputed `0x<block_hash>`, then the public
+output, the EIP-8025 `0x<new_payload_request_root>`. That root is the SSZ
+`hash_tree_root` of the block's Engine API `NewPayloadRequest` (the payload, blob
+versioned hashes, parent beacon block root and typed execution requests). It
+uses the Amsterdam schema for every fork, with empty or zero values for fields a
+fork lacks. The ZisK ELF emits only the root. Compare the first line against the
 canonical hash:
 
 ```bash
@@ -146,7 +151,7 @@ For a fixed reference, any Pectra mainnet block works (Pectra activated on
 ./target/release/input-gen --rpc-url "$ETH_RPC_URL" --block 25000000 \
     --output build/block_input.bin
 ./cpp-guest/build/zisk_eth_guest build/block_input.bin
-# → expect the same hash that `cast block 25000000` reports
+# → expect the first line to be the hash that `cast block 25000000` reports
 ```
 
 ## Continuous mainnet verification — `scripts/verify_blocks.py`
@@ -269,7 +274,7 @@ for m in $(find "$OUT" -name "block-*.json" | sort); do
         rm -f "$bin"; continue
     fi
 
-    actual=$(timeout 60 "$REPO/cpp-guest/build/zisk_eth_guest" "$bin" 2>"$bin.err" | tail -1)
+    actual=$(timeout 60 "$REPO/cpp-guest/build/zisk_eth_guest" "$bin" 2>"$bin.err" | head -1)  # block hash
     guest_rc=${PIPESTATUS[0]}
     fatal=$(grep -m1 '^guest: ' "$bin.err")   # the guest's own rejection
     rm -f "$bin" "$bin.err"
@@ -295,6 +300,9 @@ for m in $(find "$OUT" -name "block-*.json" | sort); do
 
     if [ "$actual" = "$expected" ] && [ -n "$expected" ]; then
         echo "PASS $FIX $m" >> "$LOG"
+    elif [[ "$fatal" == *"invalid request payload length"* ]]; then
+        # valid EL block with partial request records: no EIP-8025 root exists
+        echo "NA_POS(npr_partial_requests) $FIX $m" >> "$LOG"
     else
         echo "FAIL $FIX $m actual=$actual expected=$expected" >> "$LOG"
     fi
@@ -336,6 +344,13 @@ block computed with the wrong hash).
 input is structured (header fields, tx list, withdrawals list), not block RLP,
 so there is nothing to reject: the same header with a correctly encoded body
 is a valid block with the same hash.
+`NA_POS(npr_partial_requests)` = a valid EL block whose (modified) request
+predeploy returned bytes that are not a whole number of request records
+(`eip8282_builder_execution_requests/modified_builder_contract/partial_request_records`).
+The typed EIP-8025 `ExecutionRequests` can't hold a partial record, so the block
+has no `new_payload_request_root` and the guest halts. execution-specs'
+`decode_execution_requests` rejects it the same way, and the CL could never have
+built that payload.
 
 Blocks that get no result are counted as `MISSING`: tests on networks
 `eest-witness-gen` doesn't support (pre-Berlin forks — see
@@ -380,7 +395,7 @@ client targets.
 The 2 NA_NEG are both `InvalidBlocks/bc4895-withdrawals/shanghaiWithoutWithdrawalsRLP.json`
 (Cancun, Prague): a block whose body RLP omits the withdrawals list
 (`RLP_WITHDRAWALS_NOT_READ`). Its header is valid: `withdrawalsRoot` is the
-empty-trie root. The guest outputs exactly that header hash, which is correct:
+empty-trie root. The guest commits to exactly that header hash, which is correct:
 what it proves is that the header is a valid successor, and the same header
 with an empty withdrawals list is a valid block. A prover gains nothing from
 the bad encoding.
