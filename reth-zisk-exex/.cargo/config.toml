@@ -1,0 +1,4 @@
+# Resolve to versions whose rust-version fits ours (Cargo.toml: 1.95):
+# vergen 10.0.3, pulled by reth-node-core, needs rustc 1.96.
+[resolver]
+incompatible-rust-versions = "fallback"
