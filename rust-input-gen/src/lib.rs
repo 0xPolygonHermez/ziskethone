@@ -10,6 +10,7 @@
 
 pub mod enrich;
 pub mod errors;
+pub mod assemble;
 pub(crate) mod fetch;
 pub mod live;
 pub mod mpt;
