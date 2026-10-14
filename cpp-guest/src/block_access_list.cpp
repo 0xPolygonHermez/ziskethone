@@ -129,8 +129,8 @@ struct Sizer {
 
 }  // namespace
 
-evmc::bytes32 BlockAccessList::hash(std::span<const Entry> entries,
-                                    const Contracts& contracts) const {
+std::vector<uint8_t> BlockAccessList::encode(std::span<const Entry> entries,
+                                             const Contracts& contracts) const {
     const Sizer sz{changes_, contracts};
 
     // Pass 1: sizes.
@@ -198,7 +198,7 @@ evmc::bytes32 BlockAccessList::hash(std::span<const Entry> entries,
         write_changes(e.account->code, s.code, 1);
     }
     if (p != buf.data() + buf.size()) fatal("BAL: encoder size mismatch");
-    return keccak256_bytes32(buf.data(), buf.size());
+    return buf;
 }
 
 void BlockAccessList::dump(std::span<const Entry> entries,

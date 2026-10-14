@@ -1,4 +1,6 @@
 // C FFI wrapper so the host can run ziskethone's block validation in-process.
+// `out` receives the guest's public output: the EIP-8025
+// new_payload_request_root (no longer the execution block hash).
 #include <cstddef>
 #include <cstdint>
 

@@ -4,12 +4,14 @@
 // the block against a ZiskStateDB, verifies the pre-execution state root
 // against `consensus.parent_hash()`, recomputes the post-execution state
 // root and the execution-layer block hash of the block under proof, and
-// emits that block hash as the sole public output.
+// emits the EIP-8025 `new_payload_request_root` (the SSZ hash_tree_root of
+// the block's Engine API NewPayloadRequest, which commits to that block
+// hash) as the sole public output.
 //
 // The block-validation pipeline itself lives in `run` (see
 // zeg/run.hpp) so it can be shared with the host-side C FFI wrapper.
 // `main()` only does I/O: slurp the ZEG0 container into a buffer, run the
-// pipeline, and emit the resulting 32-byte execution block hash.
+// pipeline, and emit the resulting 32-byte new_payload_request_root.
 
 #include <array>
 #include <cstdint>
@@ -45,6 +47,17 @@ InputBuffer read_input_buffer(const char* path);
 // Emit a 32-byte value to ZisK as a public output.
 void emit_public_output(const uint8_t value[32]);
 
+#if !defined(ZEG_ZISK)
+// Print a 32-byte value as 0x-prefixed lowercase hex, one line.
+void print_hex_line(const uint8_t value[32]) {
+    std::printf("0x");
+    for (int i = 0; i < 32; ++i) {
+        std::printf("%02x", value[i]);
+    }
+    std::printf("\n");
+}
+#endif
+
 } // namespace
 
 #if defined(ZEG_ZISK)
@@ -64,9 +77,12 @@ int main(int argc, char** argv) {
     // 2. Run the full stateless block validation on the in-memory container.
     //    This parses every section, verifies the pre-execution state root,
     //    executes the block, recomputes the post-execution state root, builds
-    //    the header, and computes the execution-layer block hash.
+    //    the header, computes the execution-layer block hash and the
+    //    new_payload_request_root.
+    uint8_t new_payload_request_root[32] = {};
     uint8_t execution_block_hash[32] = {};
-    const int rc = zeg::run(in.ptr, in.len, execution_block_hash);
+    const int rc = zeg::run(in.ptr, in.len, new_payload_request_root,
+                            execution_block_hash);
 
     // A nonzero rc means run returned early without writing a hash because
     // the `ZEG_STAGE` debug selector requested a partial run (it already
@@ -77,8 +93,14 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    // 3. Emit the execution-layer block hash as the sole public output.
-    emit_public_output(execution_block_hash);
+#if !defined(ZEG_ZISK)
+    // Host only: the block hash first, so it can be checked against the
+    // chain; the last line is the public output.
+    print_hex_line(execution_block_hash);
+#endif
+
+    // 3. Emit the new_payload_request_root as the sole public output.
+    emit_public_output(new_payload_request_root);
 
     return 0;
 }
@@ -123,17 +145,12 @@ InputBuffer read_input_buffer(const char* path) {
 
 void emit_public_output(const uint8_t value[32]) {
 #if defined(ZEG_ZISK)
-    // ZisK: write the 32-byte block hash to the public-output region as
+    // ZisK: write the 32-byte root to the public-output region as
     // 8 u32 slots (the value attested by the proof).
     zeg::zisk::set_output_bytes32(value);
 #else
-    // Host-build placeholder for the ZisK public-output API: print
-    // the 32-byte value as lowercase hex with a 0x prefix, one line.
-    std::printf("0x");
-    for (int i = 0; i < 32; ++i) {
-        std::printf("%02x", value[i]);
-    }
-    std::printf("\n");
+    // Host-build placeholder for the ZisK public-output API.
+    print_hex_line(value);
 #endif
 }
 

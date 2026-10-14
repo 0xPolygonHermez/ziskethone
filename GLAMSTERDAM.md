@@ -80,6 +80,17 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
 
 ### Open items that span EIPs
 
+- **EIP-8025 public output.** The guest's public output is now the
+  `new_payload_request_root`: the SSZ `hash_tree_root` (progressive containers,
+  EIP-7916/7495) of the block's Engine API `NewPayloadRequest`. The host guest
+  prints the block hash first and the root on the last line. The guest still
+  reads ZEG0 input (not the EIP's `StatelessInput`) and halts on an invalid
+  block, so it emits only the root, not the full `StatelessValidationResult`.
+  The Amsterdam schema is used for every fork (an empty BAL and slot 0 before
+  Amsterdam). `scripts/npr_root_ref.py` recomputes the root with execution-specs
+  @3ebcb5d; `cpp-guest/test/ssz_test.cpp` holds the merkleization vectors.
+  `partial_request_records` (12 blocks) have no root: see `NA_POS` in the README.
+
 - **EIP-7997 needs no guest code.** The fixtures inject nothing at the fork:
   `factory_untouched_across_transition` keeps a chain without the factory
   without it. Every other test has the factory (0x4e59…956c) in its pre-state,

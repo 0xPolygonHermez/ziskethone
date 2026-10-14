@@ -215,6 +215,9 @@ public:
     // EIP-7928 (Amsterdam): the hash of the BAL built while executing,
     // available after `execute_block` (zero before Amsterdam).
     const evmc::bytes32& block_access_list_hash() const noexcept { return bal_hash_; }
+    // ... and its RLP encoding (empty before Amsterdam), committed to by the
+    // EIP-8025 NewPayloadRequest root.
+    std::span<const uint8_t> block_access_list_rlp() const noexcept { return bal_rlp_; }
 
     // ----- block execution driver -----
     //
@@ -633,6 +636,7 @@ private:
     mutable size_t                   bal_pending_  = kNoBalPending;
     uint32_t                         bal_tx_count_ = 0;
     evmc::bytes32                    bal_hash_{};
+    std::vector<uint8_t>             bal_rlp_{};
 
     // Per-tx receipts (finalized at end-of-tx; logs filled by emit_log
     // during execution).

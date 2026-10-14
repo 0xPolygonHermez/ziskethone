@@ -46,12 +46,12 @@ python3 -c "import struct,sys; d=open('$IN','rb').read(); \
 
 ZE=../zisk/target/release/ziskemu
 $ZE -e cpp-guest/zisk/build/zisk_eth_guest.elf -i /tmp/blk.zisk.bin -o /tmp/blk.out -x
-xxd -p -c32 /tmp/blk.out        # the 32-byte block hash (public output)
+xxd -p -c32 /tmp/blk.out        # the 32-byte new_payload_request_root (public output)
 ```
 
 `-x` prints opcode/step statistics (the benchmark); `-m` prints timing metrics.
 The output must match the native guest:
-`./cpp-guest/build/zisk_eth_guest $IN | tail -1`.
+`./cpp-guest/build/zisk_eth_guest $IN | tail -1` (its first line is the block hash).
 
 ## What's stubbed (first milestone)
 

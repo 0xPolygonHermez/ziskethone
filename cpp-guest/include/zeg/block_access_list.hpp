@@ -139,10 +139,10 @@ public:
         const Account*       account;
         std::span<const Slot* const> slots;  // in slot order, changed and read
     };
-    // keccak256(rlp(BAL)) over `entries` (already in BAL order, all periods
-    // closed). Code changes are resolved to bytes through `contracts`.
-    evmc::bytes32 hash(std::span<const Entry> entries,
-                       const Contracts& contracts) const;
+    // rlp(BAL) over `entries` (already in BAL order, all periods closed).
+    // Code changes are resolved to bytes through `contracts`.
+    std::vector<uint8_t> encode(std::span<const Entry> entries,
+                                const Contracts& contracts) const;
     // DEBUG (ZEG_DUMP_BAL): print the BAL as text to stderr.
     void dump(std::span<const Entry> entries, const Contracts& contracts) const;
 

@@ -936,7 +936,8 @@ evmc::bytes32 ZiskStateDB::build_block_access_list_hash() noexcept {
         fatal("BAL: accessed count mismatch");
     }
     if (std::getenv("ZEG_DUMP_BAL") != nullptr) bal_->dump(entries, contracts_);  // DEBUG
-    return bal_->hash(entries, contracts_);
+    bal_rlp_ = bal_->encode(entries, contracts_);
+    return keccak256_bytes32(bal_rlp_.data(), bal_rlp_.size());
 }
 
 void ZiskStateDB::transfer_value(const evmc::address& from,

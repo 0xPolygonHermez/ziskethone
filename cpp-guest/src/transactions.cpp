@@ -474,6 +474,7 @@ Transactions::Transactions(const uint8_t*& cursor) {
             v.num_authorizations_ = n;
         }
 
+        v.envelope_         = {env, env_size};
         v.transaction_hash_ = keccak256_bytes32(env, env_size);
         v.sender_           = recover_sender(v);
 

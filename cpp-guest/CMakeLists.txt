@@ -151,9 +151,11 @@ set(GUEST_SOURCES
     src/intrinsic_gas.cpp
     src/journal.cpp
     src/mpt.cpp
+    src/new_payload_request.cpp
     src/previous_blocks.cpp
     src/receipt.cpp
     src/rlp.cpp
+    src/ssz.cpp
     src/state_root.cpp
     src/storages.cpp
     src/transactions.cpp

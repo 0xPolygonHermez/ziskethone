@@ -1,14 +1,10 @@
 // Shared core for the ZisK guest's stateless block validation.
 //
-// Extracted verbatim from `main()` so both the standalone executable / ZisK
-// ELF and the host-side C FFI wrapper (`zeg_run`) run the exact same
-// pipeline. The only difference from the old `main()` is the input source:
-// instead of `read_input_stream` (file / MMIO) the bytes are supplied as an
-// in-memory buffer, and instead of `emit_public_output` the resulting 32-byte
-// execution block hash is copied into the caller's `out` buffer.
-//
-// No validation / encoding / hashing logic is changed — this is a pure
-// extraction.
+// Used by both the standalone executable / ZisK ELF (`main()`) and the
+// host-side C FFI wrapper (`zeg_run`), so both run the exact same pipeline
+// over an in-memory ZEG0 buffer. The result is the EIP-8025
+// `new_payload_request_root` (the public output), plus optionally the
+// execution block hash for host-side checks.
 
 #include "zeg/run.hpp"
 
@@ -25,6 +21,7 @@
 #include "zeg/block_access_list.hpp"
 #include "zeg/block_header.hpp"
 #include "zeg/keccak.hpp"
+#include "zeg/new_payload_request.hpp"
 #include "zeg/consensus_info.hpp"
 #include "zeg/contracts.hpp"
 #include "zeg/fake_exponential.hpp"
@@ -39,7 +36,7 @@
 
 namespace zeg {
 
-int run(const uint8_t* input, size_t len, uint8_t out[32]) {
+int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_out[32]) {
     // 1. Validate the ZEG0 magic + version directly on the in-memory buffer
     //    (mirrors read_input_stream) and position the cursor past the 8-byte
     //    magic+version prefix so it stays 8-byte aligned for the typed reads
@@ -445,8 +442,24 @@ int run(const uint8_t* input, size_t len, uint8_t out[32]) {
         }
     }
 
-    // 8. Hand the execution-layer block hash back to the caller.
-    std::memcpy(out, execution_block_hash.bytes, 32);
+    // 8. EIP-8025: the SSZ root of the NewPayloadRequest this block is the
+    //    payload of — what the proof attests.
+    const evmc::bytes32 npr_root = zeg::new_payload_request_root(
+        header, execution_block_hash, transactions, consensus, state);
+    if (std::getenv("ZEG_DUMP_NPR") != nullptr) {  // DEBUG: inputs for scripts/npr_root_ref.py
+        auto dump = [](const char* name, std::span<const uint8_t> b) {
+            std::fprintf(stderr, "NPR %s 0x", name);
+            for (auto c : b) std::fprintf(stderr, "%02x", c);
+            std::fprintf(stderr, "\n");
+        };
+        for (const auto& r : state.requests()) dump("request", r);
+        dump("bal", state.block_access_list_rlp());
+    }
+
+    std::memcpy(out, npr_root.bytes, 32);
+    if (block_hash_out != nullptr) {
+        std::memcpy(block_hash_out, execution_block_hash.bytes, 32);
+    }
 
     return 0;
 }
