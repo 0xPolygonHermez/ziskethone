@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use alloy_consensus::BlockHeader as _;
 use alloy_primitives::B256;
@@ -54,6 +54,44 @@ pub struct Config {
     pub submitter: Option<Submitter>,
 }
 
+/// Wall-clock marks of one block's job, for the per-block timing report.
+#[derive(Clone, Default)]
+pub struct Timeline(Arc<std::sync::Mutex<Vec<(&'static str, SystemTime)>>>);
+
+impl Timeline {
+    fn at(&self, label: &'static str, t: SystemTime) {
+        self.0.lock().unwrap().push((label, t));
+    }
+    pub fn mark(&self, label: &'static str) {
+        self.at(label, SystemTime::now());
+    }
+    /// `{label: ms}` relative to t0 = newPayload received (else the first
+    /// mark), plus t0 itself and its offset from the slot start.
+    fn report(&self, slot_start_unix: u64) -> serde_json::Value {
+        let marks = self.0.lock().unwrap().clone();
+        let Some(t0) = marks.iter().find(|(l, _)| *l == "newpayload_received").or(marks.first()).map(|(_, t)| *t)
+        else {
+            return json!({});
+        };
+        let ms = |t: SystemTime| -> f64 {
+            match t.duration_since(t0) {
+                Ok(d) => d.as_secs_f64() * 1e3,
+                Err(e) => -e.duration().as_secs_f64() * 1e3,
+            }
+        };
+        let unix_ms = |t: SystemTime| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+        let mut rel = serde_json::Map::new();
+        for (l, t) in &marks {
+            rel.insert(l.to_string(), json!((ms(*t) * 10.0).round() / 10.0));
+        }
+        json!({
+            "t0_unix_ms": unix_ms(t0),
+            "t0_after_slot_start_ms": unix_ms(t0) as i64 - (slot_start_unix * 1000) as i64,
+            "ms_from_t0": rel,
+        })
+    }
+}
+
 struct InFlight {
     number: u64,
     hash: B256,
@@ -65,6 +103,8 @@ pub struct Pipeline<P, E> {
     evm_config: E,
     cfg: Arc<Config>,
     current: Option<InFlight>,
+    /// When reth received each recent newPayload (`BlockReceived`).
+    received: std::collections::VecDeque<(B256, SystemTime)>,
 }
 
 impl<P, E> Pipeline<P, E>
@@ -73,12 +113,18 @@ where
     E: ConfigureEvm<Primitives = EthPrimitives> + Clone + Send + Sync + 'static,
 {
     pub fn new(provider: P, evm_config: E, cfg: Config) -> Self {
-        Self { provider, evm_config, cfg: Arc::new(cfg), current: None }
+        Self { provider, evm_config, cfg: Arc::new(cfg), current: None, received: Default::default() }
     }
 
     pub async fn run(mut self, mut events: impl futures::Stream<Item = ConsensusEngineEvent<EthPrimitives>> + Unpin) {
         while let Some(event) = events.next().await {
             match event {
+                ConsensusEngineEvent::BlockReceived(num_hash) => {
+                    self.received.push_back((num_hash.hash, SystemTime::now()));
+                    if self.received.len() > 64 {
+                        self.received.pop_front();
+                    }
+                }
                 ConsensusEngineEvent::CanonicalBlockAdded(executed, _)
                 | ConsensusEngineEvent::ForkBlockAdded(executed, _) => {
                     self.on_block(executed.recovered_block.clone());
@@ -107,14 +153,21 @@ where
             }
             cur.cancel.cancel();
         }
+        let timeline = Timeline::default();
+        if let Some((_, t)) = self.received.iter().find(|(h, _)| *h == hash) {
+            timeline.at("newpayload_received", *t);
+        }
+        timeline.mark("executed");
         let cancel = CancellationToken::new();
         self.current = Some(InFlight { number, hash, cancel: cancel.clone() });
         let (provider, evm_config, cfg) = (self.provider.clone(), self.evm_config.clone(), self.cfg.clone());
         tokio::spawn(async move {
             let dir = cfg.out_dir.join(format!("{number}-{}", &hex::encode(hash)[..16]));
             let t0 = Instant::now();
-            let result = run_job(&provider, &evm_config, &cfg, block, &dir, &cancel).await;
-            let status = match &result {
+            let slot_start = block.header().timestamp;
+            let result = run_job(&provider, &evm_config, &cfg, block, &dir, &cancel, &timeline).await;
+            let timings = timeline.report(slot_start);
+            let mut status = match &result {
                 Ok(stage) => {
                     info!(number, %hash, stage, elapsed = ?t0.elapsed(), "job finished");
                     json!({ "number": number, "hash": hash, "result": stage })
@@ -124,6 +177,8 @@ where
                     json!({ "number": number, "hash": hash, "result": "failed", "error": format!("{e:#}") })
                 }
             };
+            info!(number, timings = %timings, "job timings");
+            status["timings"] = timings;
             if dir.exists() {
                 let _ = std::fs::write(dir.join("status.json"), serde_json::to_vec_pretty(&status).unwrap());
             }
@@ -139,6 +194,7 @@ async fn run_job<P, E>(
     block: Arc<RecoveredBlock<Block>>,
     dir: &std::path::Path,
     cancel: &CancellationToken,
+    timeline: &Timeline,
 ) -> Result<&'static str>
 where
     P: StateProviderFactory + HeaderProvider<Header = alloy_consensus::Header> + Clone + Send + Sync + 'static,
@@ -166,12 +222,15 @@ where
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+    timeline.mark("input_start");
+    let t = Instant::now();
     let input = {
         let (provider, evm_config, block, chain_id) = (provider.clone(), evm_config.clone(), block.clone(), cfg.chain_id);
         tokio::task::spawn_blocking(move || crate::witness::build_input(&provider, &evm_config, chain_id, &block))
             .await??
     };
     let input_path = dir.join("input.bin");
+    timeline.mark("input_done");
     std::fs::write(&input_path, &input)?;
     info!(number, bytes = input.len(), elapsed = ?t.elapsed(), "built input");
     if cancel.is_cancelled() {
@@ -181,6 +240,7 @@ where
     // 2. Native pre-check: block hash and the expected public output.
     let t = Instant::now();
     let root = cfg.precheck.run(&input_path, &block_hash).await?;
+    timeline.mark("precheck_done");
     info!(number, root = %hex::encode(root), elapsed = ?t.elapsed(), "pre-check passed");
     let public_input = PublicInput::new(root, cfg.chain_id);
     std::fs::write(
@@ -202,6 +262,7 @@ where
 
     // 3. Prove (cancellable).
     let t = Instant::now();
+    timeline.mark("prove_start");
     let proof = match prover.prove(&input, &root, cancel).await? {
         Outcome::Cancelled => {
             info!(number, %hash, "proof cancelled");
@@ -209,6 +270,7 @@ where
         }
         Outcome::Proved(p) => p,
     };
+    timeline.mark("prove_done");
     if proof.root != root {
         bail!(
             "prover public output 0x{} != pre-check root 0x{}",
