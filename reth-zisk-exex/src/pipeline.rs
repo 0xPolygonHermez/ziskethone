@@ -153,13 +153,16 @@ where
     //    payload can arrive before the forkchoice update that makes its
     //    parent canonical (e.g. while catching up), so wait for it. A newer
     //    block cancels the wait.
+    //    The witness also walks ancestor headers by hash, so wait for the
+    //    parent's header too.
     let t = Instant::now();
-    while let Err(e) = provider.state_by_block_hash(block.parent_hash()) {
+    let parent = block.parent_hash();
+    while provider.state_by_block_hash(parent).is_err() || !matches!(provider.header(parent), Ok(Some(_))) {
         if cancel.is_cancelled() {
             return Ok("cancelled");
         }
         if t.elapsed() > Duration::from_secs(36) {
-            bail!("parent state never became available: {e}");
+            bail!("parent {parent} state/header never became available");
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
