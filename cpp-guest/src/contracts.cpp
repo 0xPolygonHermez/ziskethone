@@ -40,6 +40,7 @@ size_t Contracts::index_of(const evmc::bytes32& hash) const {
         std::fprintf(stderr, "\n");
         fatal("Contracts::index_of: code hash not present in the table");
     }
+#if !defined(ZEG_ZISK)
     // DEBUG (host): report each code the block uses, so a host can drop the
     // unused ones from the input (reth-zisk-exex trims its BAL-built input).
     static const bool dump_used = std::getenv("ZEG_DUMP_USED") != nullptr;
@@ -51,6 +52,7 @@ size_t Contracts::index_of(const evmc::bytes32& hash) const {
             std::fprintf(stderr, "\n");
         }
     }
+#endif
     return it->second;
 }
 

@@ -17,7 +17,7 @@ path is selected by the `ZEG_ZISK` compile macro.
 - A `ziskemu` that matches the `../zisk` repo memory map (`INPUT_ADDR=0x40000000`).
   The SDK `~/.zisk/bin/ziskemu` (0.2.0) is **too old** (`0x90000000`); build a
   current one:
-  `cargo build --release -p ziskemu --manifest-path ../zisk/Cargo.toml`
+  `cargo build --release -p ziskemu --manifest-path ../zisk/Cargo.toml` (ZisK v1.3.2-alpha)
   → `../zisk/target/release/ziskemu`.
 
 ## Build
@@ -45,11 +45,11 @@ python3 -c "import struct,sys; d=open('$IN','rb').read(); \
   open('/tmp/blk.zisk.bin','wb').write(struct.pack('<Q',len(d))+d)"
 
 ZE=../zisk/target/release/ziskemu
-$ZE -e cpp-guest/zisk/build/zisk_eth_guest.elf -i /tmp/blk.zisk.bin -o /tmp/blk.out -x
+$ZE -e cpp-guest/zisk/build/zisk_eth_guest.elf -i /tmp/blk.zisk.bin -o /tmp/blk.out -X
 xxd -p -c32 /tmp/blk.out        # the 32-byte new_payload_request_root (public output)
 ```
 
-`-x` prints opcode/step statistics (the benchmark); `-m` prints timing metrics.
+`-X` prints steps and the cost breakdown (the benchmark; ZisK ≥ 1.3 reports `STEPS: 0` with the legacy `-x`); `-m` prints timing metrics.
 The output must match the native guest:
 `./cpp-guest/build/zisk_eth_guest $IN | tail -1` (its first line is the block hash).
 

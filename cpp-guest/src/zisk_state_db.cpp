@@ -584,9 +584,11 @@ evmc::bytes32 ZiskStateDB::get_block_hash(int64_t block_number) const noexcept {
     // binary format (the pre-execution root anchor), NOT the parent's block
     // hash — never use it for BLOCKHASH.
     const uint64_t target = static_cast<uint64_t>(block_number);
+#if !defined(ZEG_ZISK)
     // DEBUG (host): report each BLOCKHASH depth used (see Contracts::index_of).
     static const bool dump_used = std::getenv("ZEG_DUMP_USED") != nullptr;
     if (dump_used) std::fprintf(stderr, "USED blockhash %llu\n", static_cast<unsigned long long>(target));
+#endif
     if (const evmc::bytes32* h = previous_blocks_.hash_of_number(target)) {
         return *h;
     }
