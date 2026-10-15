@@ -7,5 +7,6 @@ members = [
 # members: both pull reth v2.7.0 and its exact alloy/revm pins, a far larger
 # dependency graph than rust-input-gen's. Excluding them gives each its own
 # Cargo.lock and target/, so a reth bump never moves the input-gen CLI's
-# resolution (and vice versa).
-exclude = ["eest-witness-gen", "reth-zisk-exex"]
+# resolution (and vice versa). `proof-engine` is standalone too: it pins the
+# ZisK verifier (git) to the prover's release.
+exclude = ["eest-witness-gen", "reth-zisk-exex", "proof-engine"]

@@ -61,6 +61,9 @@ impl Prover {
 pub struct CoordinatorProver {
     client: ZiskCoordinatorApiClient<tonic::transport::Channel>,
     hash_id: String,
+    /// The guest's program VK from setup (4 u64 LE limbs), which the proof
+    /// engine pins (`zisk-proof-engine --program-vk`).
+    pub program_vk: Vec<u8>,
 }
 
 impl CoordinatorProver {
@@ -83,7 +86,7 @@ impl CoordinatorProver {
             .hash_id;
         info!(%hash_id, elf = %elf.display(), "registered guest program");
 
-        let mut this = Self { client, hash_id };
+        let mut this = Self { client, hash_id, program_vk: Vec::new() };
         let setup = grpc::job_kind::Kind::Setup(grpc::SetupRequest {
             hash_id: this.hash_id.clone(),
             with_hints: false,
@@ -94,6 +97,7 @@ impl CoordinatorProver {
         match this.wait(&job_id, &CancellationToken::new()).await? {
             Some(grpc::job_kind_response::Kind::Setup(s)) => {
                 info!(program_vk = %hex::encode(&s.vk), hash_mode = %s.hash_mode, "guest program set up");
+                this.program_vk = s.vk;
             }
             other => bail!("setup job returned {other:?}"),
         }
@@ -134,7 +138,7 @@ impl CoordinatorProver {
     }
 
     async fn prove(&self, input: &[u8], cancel: &CancellationToken) -> Result<Outcome> {
-        let mut this = Self { client: self.client.clone(), hash_id: self.hash_id.clone() };
+        let mut this = Self { client: self.client.clone(), hash_id: self.hash_id.clone(), program_vk: Vec::new() };
         let prove = grpc::job_kind::Kind::Prove(grpc::ProveRequest {
             hash_id: this.hash_id.clone(),
             input: Some(grpc::InputKind {

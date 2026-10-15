@@ -129,6 +129,8 @@ async fn build_config(args: &ZiskArgs, chain_id: u64) -> anyhow::Result<Config> 
             let validator_index = beacon.validator_index(&signer.pubkey()).await?;
             info!(validator_index, pubkey = %hex::encode(signer.pubkey()), proof_type, "proof signer");
             let prover = CoordinatorProver::connect(&args.coordinator, &elf()?).await?;
+            std::fs::create_dir_all(&args.out_dir)?;
+            std::fs::write(args.out_dir.join("program_vk.hex"), format!("0x{}\n", hex::encode(&prover.program_vk)))?;
             let sub = Submitter { beacon, params, signer, validator_index, proof_type, submit: args.submit };
             (Some(Prover::Coordinator(prover)), Some(sub))
         }

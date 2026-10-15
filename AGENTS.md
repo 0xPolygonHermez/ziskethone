@@ -78,3 +78,14 @@ or ziskemu in `--zisk.mode emulate`) and signs/submits the EIP-8025 proof.
 It runs in place of `reth-sepolia.service` on the same datadir (stop the
 service first, restart it afterwards). Its own `Cargo.lock`; build with
 `cargo build --release` inside the directory. See `reth-zisk-exex/README.md`.
+
+## Proof engine (`proof-engine/`)
+
+`zisk-proof-engine` is the EIP-8025 ProofEngine that Lighthouse calls through
+`--proof-engine-endpoint`, using `POST /v1/execution_proof_verifications`. It
+verifies the exex's VadcopFinal proofs with `zisk-verifier` (git tag
+v1.3.2-alpha, which must match the prover's release). It checks the proof
+against a pinned program VK (`program_vk.hex` from the exex) and the proving
+key's vadcop_final setup VK, and binds the committed 32-byte root to the query's
+`new_payload_request_root`. It is a standalone crate with its own lock file:
+`cargo build --release` inside the directory. See `proof-engine/README.md`.
