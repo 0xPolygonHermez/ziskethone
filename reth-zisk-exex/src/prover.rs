@@ -1,4 +1,4 @@
-//! Provers: a ZisK coordinator over gRPC (real proofs, cancellable), and
+//! Provers: a ZisK coordinator over gRPC (real proofs), and
 //! `ziskemu` (no proof, only the public output) for hosts without a GPU.
 
 use std::path::PathBuf;
@@ -25,6 +25,9 @@ pub struct Proof {
     pub root: Option<Root>,
 }
 
+
+/// How long a proving job is retried while the cluster is busy.
+const BUSY_RETRY: std::time::Duration = std::time::Duration::from_secs(20);
 
 pub enum Outcome {
     Proved(Proof),
@@ -109,8 +112,28 @@ impl CoordinatorProver {
         Ok(self.client.job_request(req).await?.into_inner().job_id)
     }
 
+    /// `submit`, retried while the cluster is busy with the previous block's
+    /// proof: it runs one job at a time and refuses the next one with
+    /// "workers are busy running another job" instead of queueing it.
+    async fn submit_when_free(&mut self, kind: grpc::job_kind::Kind) -> Result<String> {
+        let t0 = std::time::Instant::now();
+        loop {
+            let req = grpc::JobRequestMessage { job_kind: Some(grpc::JobKind { kind: Some(kind.clone()) }) };
+            match self.client.job_request(req).await {
+                Ok(r) => return Ok(r.into_inner().job_id),
+                Err(e) if e.code() == tonic::Code::Unavailable
+                    && e.message().contains("busy running another job")
+                    && t0.elapsed() < BUSY_RETRY =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
     /// Long-poll `job_id` to a terminal state; on `cancel`, `CancelJob` it
-    /// and return `None`.
+    /// and return `None`. Proving jobs are never cancelled (see `prove`).
     async fn wait(&mut self, job_id: &str, cancel: &CancellationToken) -> Result<Option<grpc::job_kind_response::Kind>> {
         use grpc::job_status::Status;
         loop {
@@ -137,6 +160,9 @@ impl CoordinatorProver {
         }
     }
 
+    /// A submitted proof always runs to completion: `CancelJob` on a running
+    /// proof left the cluster's workers "setting up" for ~10 min (v1.3.2-alpha,
+    /// 2026-10-15). `cancel` only stops a job that has not been submitted.
     async fn prove(&self, input: &[u8], cancel: &CancellationToken) -> Result<Outcome> {
         let mut this = Self { client: self.client.clone(), hash_id: self.hash_id.clone(), program_vk: Vec::new() };
         let prove = grpc::job_kind::Kind::Prove(grpc::ProveRequest {
@@ -148,10 +174,13 @@ impl CoordinatorProver {
             proof_dest: grpc::ProofKind::Stark as i32,
             hints: None,
         });
-        let job_id = this.submit(prove).await?;
+        if cancel.is_cancelled() {
+            return Ok(Outcome::Cancelled);
+        }
+        let job_id = this.submit_when_free(prove).await?;
         info!(%job_id, "submitted proving job");
         let t0 = std::time::Instant::now();
-        let Some(result) = this.wait(&job_id, cancel).await? else {
+        let Some(result) = this.wait(&job_id, &CancellationToken::new()).await? else {
             return Ok(Outcome::Cancelled);
         };
         let grpc::job_kind_response::Kind::Prove(resp) = result else {

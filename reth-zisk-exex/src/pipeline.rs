@@ -1,7 +1,9 @@
 //! One proof in flight: each payload, as soon as it is seen (the engine's
 //! payload tap, or Lighthouse's gossip when `--zisk.lighthouse-early`),
-//! starts a job (witness → pre-check → trim → prove → sign → submit) and
-//! cancels the previous one if it hasn't produced its proof yet.
+//! starts a job (witness → pre-check → trim → prove → sign → submit). A newer
+//! block cancels the previous job only before its proof is requested; once
+//! submitted, a proof runs to completion and is still signed and sent. A
+//! reorg or an invalid block also discards the in-flight proof.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -120,7 +122,10 @@ impl Timeline {
 struct InFlight {
     number: u64,
     hash: B256,
+    /// Stop the job if it has not requested its proof yet.
     cancel: CancellationToken,
+    /// The block left the canonical chain or is invalid: drop its proof.
+    discard: CancellationToken,
 }
 
 pub struct Pipeline<P, E> {
@@ -192,6 +197,7 @@ where
                 if let Some(cur) = self.current.as_ref().filter(|c| c.hash == block.hash()) {
                     warn!(number = cur.number, %error, "in-flight block is invalid");
                     cur.cancel.cancel();
+                    cur.discard.cancel();
                 }
             }
             ConsensusEngineEvent::CanonicalChainCommitted(head, _) => {
@@ -201,6 +207,7 @@ where
                     if head.number() <= cur.number && head.hash() != cur.hash {
                         info!(number = cur.number, hash = %cur.hash, "in-flight block reorged out");
                         cur.cancel.cancel();
+                        cur.discard.cancel();
                     }
                 }
             }
@@ -228,8 +235,8 @@ where
         if self.started.len() > 64 {
             self.started.pop_front();
         }
-        let cancel = CancellationToken::new();
-        self.current = Some(InFlight { number, hash, cancel: cancel.clone() });
+        let (cancel, discard) = (CancellationToken::new(), CancellationToken::new());
+        self.current = Some(InFlight { number, hash, cancel: cancel.clone(), discard: discard.clone() });
         let (provider, evm_config, cfg) = (self.provider.clone(), self.evm_config.clone(), self.cfg.clone());
         tokio::spawn(async move {
             let dir = cfg.out_dir.join(format!("{number}-{}", &hex::encode(hash)[..16]));
@@ -238,7 +245,7 @@ where
             let source = p.source;
             let block = p.block.clone();
             let has_bal = p.bal.is_some();
-            let result = run_job(&provider, &evm_config, &cfg, p, &dir, &cancel, &timeline).await;
+            let result = run_job(&provider, &evm_config, &cfg, p, &dir, &cancel, &discard, &timeline).await;
             if cfg.compare_exec && has_bal && result.is_ok() && !cancel.is_cancelled() {
                 if let Err(e) = compare_exec(&provider, &evm_config, &cfg, &block, &dir).await {
                     warn!(number, "compare-exec: {e:#}");
@@ -297,6 +304,7 @@ async fn run_job<P, E>(
     p: Incoming,
     dir: &std::path::Path,
     cancel: &CancellationToken,
+    discard: &CancellationToken,
     timeline: &Timeline,
 ) -> Result<&'static str>
 where
@@ -357,7 +365,7 @@ where
         return Ok("cancelled");
     }
 
-    // 3. Prove (cancellable).
+    // 3. Prove. Cancellable only until the job is submitted.
     timeline.mark("prove_start");
     let proof = match prover.prove(&input, cancel).await? {
         Outcome::Cancelled => {
@@ -367,6 +375,10 @@ where
         Outcome::Proved(p) => p,
     };
     timeline.mark("prove_done");
+    if discard.is_cancelled() {
+        info!(number, %hash, "proof discarded: the block left the canonical chain or is invalid");
+        return Ok("discarded");
+    }
     if let Some(root) = proof.root {
         info!(number, root = %hex::encode(root), "public output");
         let public_input = PublicInput::new(root, cfg.chain_id);
