@@ -26,9 +26,12 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{info, warn};
 
+/// ZisK's EIP-8025 `ProofType`, the only one served (reth-zisk-exex signs
+/// its proofs with the same value).
+pub const ZISK_PROOF_TYPE: u8 = 6;
+
 pub struct Engine {
     pub cfg: Config,
-    pub proof_type: u8,
 }
 
 pub fn router(engine: Arc<Engine>) -> Router {
@@ -39,8 +42,8 @@ pub fn router(engine: Arc<Engine>) -> Router {
         .with_state(engine)
 }
 
-async fn proof_types(State(engine): State<Arc<Engine>>) -> Json<serde_json::Value> {
-    Json(json!({ "proof_types": [engine.proof_type] }))
+async fn proof_types() -> Json<serde_json::Value> {
+    Json(json!({ "proof_types": [ZISK_PROOF_TYPE] }))
 }
 
 fn bad_request(msg: impl Into<String>) -> Response {
@@ -85,13 +88,13 @@ async fn verify_proof(
         Ok(x) => x,
         Err(e) => return bad_request(e),
     };
-    if proof_type != engine.proof_type {
+    if proof_type != ZISK_PROOF_TYPE {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({
                 "error": "unsupported proof_type",
                 "proof_type": proof_type,
-                "supported": [engine.proof_type],
+                "supported": [ZISK_PROOF_TYPE],
             })),
         )
             .into_response();
@@ -129,7 +132,6 @@ mod tests {
     fn engine() -> Arc<Engine> {
         Arc::new(Engine {
             cfg: Config { chain_id: 1, program_vks: vec![[1, 2, 3, 4]], setup_vk: [5, 6, 7, 8], hash: "blake3".into() },
-            proof_type: 7,
         })
     }
 
@@ -151,8 +153,8 @@ mod tests {
         let ok = format!("new_payload_request_root={ROOT}&successful_validation=true&chain_id=1&schema_id=5377");
         let (s, v) = call(&format!("{ok}&proof_type=3"), b"x").await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
-        assert_eq!(v["supported"], json!([7]));
-        let (s, _) = call("new_payload_request_root=0x12&successful_validation=true&chain_id=1&schema_id=5377&proof_type=7", b"x").await;
+        assert_eq!(v["supported"], json!([6]));
+        let (s, _) = call("new_payload_request_root=0x12&successful_validation=true&chain_id=1&schema_id=5377&proof_type=6", b"x").await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
         let (s, _) = call(&format!("{ok}"), b"x").await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
@@ -160,11 +162,11 @@ mod tests {
 
     #[tokio::test]
     async fn bad_proof_is_invalid() {
-        let q = format!("new_payload_request_root={ROOT}&successful_validation=true&chain_id=1&schema_id=5377&proof_type=7");
+        let q = format!("new_payload_request_root={ROOT}&successful_validation=true&chain_id=1&schema_id=5377&proof_type=6");
         let (s, v) = call(&q, b"\x00garbage").await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(v["status"], "INVALID");
-        let q = format!("new_payload_request_root={ROOT}&successful_validation=true&chain_id=2&schema_id=5377&proof_type=7");
+        let q = format!("new_payload_request_root={ROOT}&successful_validation=true&chain_id=2&schema_id=5377&proof_type=6");
         let (_, v) = call(&q, b"\x00").await;
         assert_eq!(v["status"], "INVALID");
     }
@@ -174,6 +176,6 @@ mod tests {
         let req = Request::get("/v1/proof_types").body(Body::empty()).unwrap();
         let resp = router(engine()).oneshot(req).await.unwrap();
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        assert_eq!(serde_json::from_slice::<serde_json::Value>(&body).unwrap(), json!({ "proof_types": [7] }));
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&body).unwrap(), json!({ "proof_types": [6] }));
     }
 }

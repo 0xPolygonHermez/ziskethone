@@ -42,7 +42,6 @@ pub struct Submitter {
     pub params: ChainParams,
     pub signer: Signer,
     pub validator_index: u64,
-    pub proof_type: u8,
     pub submit: bool,
 }
 
@@ -395,7 +394,7 @@ where
         None => sub.beacon.wait_beacon_root(slot, &block_hash, Duration::from_secs(24)).await?,
     };
     let fork_version = sub.params.fork_version_at_slot(slot);
-    let message = ExecutionProofEnvelope { proof_data: proof.data, proof_type: sub.proof_type, beacon_block_root: beacon_root };
+    let message = ExecutionProofEnvelope { proof_data: proof.data, proof_type: crate::ssz::ZISK_PROOF_TYPE, beacon_block_root: beacon_root };
     let signed = sub.signer.sign(message, sub.validator_index, fork_version, &sub.params.genesis_validators_root);
     if !signer::verify(&signed, &sub.signer.pubkey(), fork_version, &sub.params.genesis_validators_root) {
         bail!("self-check of the proof signature failed");

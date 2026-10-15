@@ -28,9 +28,6 @@ enum Cmd {
     Serve {
         #[arg(long, default_value = "127.0.0.1:9551")]
         listen: SocketAddr,
-        /// The EIP-8025 proof type served (the exex's `--zisk.proof-type`).
-        #[arg(long)]
-        proof_type: u8,
         #[command(flatten)]
         keys: KeyArgs,
     },
@@ -96,18 +93,18 @@ async fn main() -> Result<()> {
         )
         .init();
     match Cli::parse().cmd {
-        Cmd::Serve { listen, proof_type, keys } => {
+        Cmd::Serve { listen, keys } => {
             let cfg = keys.config()?;
             info!(
                 %listen,
-                proof_type,
+                proof_type = api::ZISK_PROOF_TYPE,
                 chain_id = cfg.chain_id,
                 program_vks = ?cfg.program_vks.iter().map(|v| vk_hex(v)).collect::<Vec<_>>(),
                 setup_vk = %vk_hex(&cfg.setup_vk),
                 hash = cfg.hash,
                 "proof engine listening"
             );
-            let app = api::router(Arc::new(api::Engine { cfg, proof_type }));
+            let app = api::router(Arc::new(api::Engine { cfg }));
             let listener = tokio::net::TcpListener::bind(listen).await.with_context(|| format!("bind {listen}"))?;
             axum::serve(listener, app)
                 .with_graceful_shutdown(async {

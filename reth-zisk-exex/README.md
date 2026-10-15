@@ -74,7 +74,7 @@ sudo systemctl stop reth-sepolia.service
     --zisk.coordinator http://prover-host:8000 \
     --zisk.beacon-url http://127.0.0.1:5053 \
     --zisk.keystore keystore.json --zisk.keystore-password-file password.txt \
-    --zisk.proof-type 3 --zisk.submit
+    --zisk.submit
 ```
 
 | `--zisk.mode` | Per block |
@@ -101,7 +101,7 @@ Run `zisk-coordinator` with one or more GPU `zisk-worker`s (ZisK `distributed/`,
 - Lighthouse serves that endpoint from sigp/lighthouse `unstable` >= 16ce0a0728, started with `--proof-engine-endpoint`. Without a proof engine the route returns 404.
 - The signing domain is `DOMAIN_EXECUTION_PROOF` (`0x0F000000`), with the fork version of the referenced block's epoch and `genesis_validators_root`. All three come from `/eth/v1/config/spec` and `/eth/v1/beacon/genesis`.
 - The key must be an **active validator**, which is checked at startup. Each `(beacon block, proof_type, validator)` gets one attempt, so the signature is verified locally before it is sent.
-- No EIP-8025 `proof_type` is assigned to ZisK yet. Pick the one your proof engine maps to this guest and ELF.
+- Proofs are sent with `proof_type` 6, ZisK's EIP-8025 proof type (`ssz::ZISK_PROOF_TYPE`).
 
 ## Tests
 

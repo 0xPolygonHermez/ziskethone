@@ -61,9 +61,6 @@ struct ZiskArgs {
     /// Hex BLS secret key file (devnets), instead of a keystore.
     #[arg(long = "zisk.secret-key-file", conflicts_with = "keystore")]
     secret_key_file: Option<PathBuf>,
-    /// EIP-8025 proof type of this guest (no ZisK id is assigned yet).
-    #[arg(long = "zisk.proof-type")]
-    proof_type: Option<u8>,
     /// Also take payloads straight from the beacon node (--zisk.beacon-url):
     /// its execution_payload_gossip events, then the envelope. A job starts
     /// on whichever of this and the engine's newPayload comes first.
@@ -117,7 +114,6 @@ async fn build_config(args: &ZiskArgs, chain_id: u64) -> anyhow::Result<Config> 
                 (_, _, Some(sk)) => signer::Signer::from_secret_file(sk)?,
                 _ => anyhow::bail!("prove mode needs --zisk.keystore or --zisk.secret-key-file"),
             };
-            let proof_type = args.proof_type.context("prove mode needs --zisk.proof-type")?;
             let beacon = beacon::BeaconClient::new(&args.beacon_url)?;
             let params = beacon.chain_params().await.context("reading the beacon chain spec")?;
             if params.deposit_chain_id != chain_id {
@@ -127,11 +123,11 @@ async fn build_config(args: &ZiskArgs, chain_id: u64) -> anyhow::Result<Config> 
                 );
             }
             let validator_index = beacon.validator_index(&signer.pubkey()).await?;
-            info!(validator_index, pubkey = %hex::encode(signer.pubkey()), proof_type, "proof signer");
+            info!(validator_index, pubkey = %hex::encode(signer.pubkey()), proof_type = ssz::ZISK_PROOF_TYPE, "proof signer");
             let prover = CoordinatorProver::connect(&args.coordinator, &elf()?).await?;
             std::fs::create_dir_all(&args.out_dir)?;
             std::fs::write(args.out_dir.join("program_vk.hex"), format!("0x{}\n", hex::encode(&prover.program_vk)))?;
-            let sub = Submitter { beacon, params, signer, validator_index, proof_type, submit: args.submit };
+            let sub = Submitter { beacon, params, signer, validator_index, submit: args.submit };
             (Some(Prover::Coordinator(prover)), Some(sub))
         }
     };

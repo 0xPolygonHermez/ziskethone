@@ -19,7 +19,7 @@ POST /v1/execution_proof_verifications?new_payload_request_root=0x..&successful_
   body: raw proof_data (application/octet-stream)
   200 {"status":"VALID"} | 200 {"status":"INVALID","reason":"..."}
   400 {"error":"..."}     malformed query or unsupported proof_type
-GET  /v1/proof_types  ->  {"proof_types":[<proof_type>]}
+GET  /v1/proof_types  ->  {"proof_types":[6]}
 ```
 
 ## What is checked
@@ -54,14 +54,13 @@ cargo test --release
 ```bash
 zisk-proof-engine serve \
     --listen 127.0.0.1:9551 \
-    --proof-type <t>  \
     --chain-id 11155111 \
     --program-vk 0x<32 bytes> \
     --setup-vk ~/.zisk/provingKey/zisk/vadcop_final/vadcop_final.verkey.json
 ```
 
-- `--proof-type` is the same value as the exex's `--zisk.proof-type`. No EIP-8025 id has been
-  assigned to ZisK yet.
+- It serves `proof_type` 6, ZisK's EIP-8025 proof type (`api::ZISK_PROOF_TYPE`, the same
+  constant the exex signs with). Any other type gets a 400.
 - `--program-vk` identifies the guest ELF. The exex writes it to
   `<--zisk.out-dir>/program_vk.hex` at setup and also logs it. Repeat the flag to accept
   several builds, for example during an ELF upgrade.
@@ -81,5 +80,5 @@ Each block directory the exex writes (`<number>-<hash>/proof.bin`) can be replay
 
 ```bash
 curl -s -X POST --data-binary @proof.bin -H 'content-type: application/octet-stream' \
-  "http://127.0.0.1:9551/v1/execution_proof_verifications?new_payload_request_root=$ROOT&successful_validation=true&chain_id=11155111&schema_id=5377&proof_type=$T"
+  "http://127.0.0.1:9551/v1/execution_proof_verifications?new_payload_request_root=$ROOT&successful_validation=true&chain_id=11155111&schema_id=5377&proof_type=6"
 ```

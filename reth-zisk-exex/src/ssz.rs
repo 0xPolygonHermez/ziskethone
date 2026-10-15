@@ -99,6 +99,9 @@ pub fn byte_list_root(data: &[u8], max_len: usize) -> Root {
     mix_in_length(&merkleize(&pack_bytes(data), max_len.div_ceil(32)), data.len())
 }
 
+/// ZisK's EIP-8025 `ProofType`; zisk-proof-engine serves the same value.
+pub const ZISK_PROOF_TYPE: u8 = 6;
+
 /// `ExecutionProofEnvelope`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionProofEnvelope {
