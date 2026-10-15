@@ -22,6 +22,9 @@ using ssz::Chunk;
 
 constexpr uint64_t kMaxExtraDataBytes = 32;
 
+// VersionedHashes is List[VersionedHash, MAX_BLOB_COMMITMENTS_PER_BLOCK].
+constexpr uint64_t kMaxBlobCommitmentsPerBlock = 4096;
+
 // Number of active fields of the two progressive containers.
 constexpr unsigned kExecutionPayloadFields  = 19;
 constexpr unsigned kExecutionRequestsFields = 5;
@@ -92,7 +95,8 @@ Chunk versioned_hashes_root(const Transactions& txs) {
             hashes.push_back(h);
         }
     }
-    return progressive_list_root(hashes);
+    if (hashes.size() > kMaxBlobCommitmentsPerBlock) fatal("too many blob versioned hashes");
+    return ssz::mix_in_length(ssz::merkleize(hashes, kMaxBlobCommitmentsPerBlock), hashes.size());
 }
 
 // --- execution requests --------------------------------------------------
@@ -205,7 +209,7 @@ evmc::bytes32 new_payload_request_root(const BlockHeader&   header,
         bytes32_root(header.parent_beacon_block_root),
         execution_requests_root(state),
     };
-    return container_root(fields);
+    return progressive_container_root(fields);
 }
 
 }  // namespace zeg

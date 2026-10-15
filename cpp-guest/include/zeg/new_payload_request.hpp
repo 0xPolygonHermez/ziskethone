@@ -1,9 +1,9 @@
 // EIP-8025 `new_payload_request_root`: the SSZ hash_tree_root of the Engine
 // API NewPayloadRequest of the block under proof — the guest's public output.
 //
-//   NewPayloadRequest(Container):
+//   NewPayloadRequest(ProgressiveContainer, 4 fields)   consensus-specs gloas
 //     execution_payload:        ExecutionPayload  (ProgressiveContainer, 19 fields)
-//     versioned_hashes:         ProgressiveList[Bytes32]
+//     versioned_hashes:         List[Bytes32, MAX_BLOB_COMMITMENTS_PER_BLOCK=4096]
 //     parent_beacon_block_root: Bytes32
 //     execution_requests:       ExecutionRequests (ProgressiveContainer, 5 fields)
 //

@@ -12,6 +12,11 @@ The execution requests and the block access list are not served by the RPC,
 so they are taken from the guest's `ZEG_DUMP_NPR=1` stderr and checked
 against the header's requests_hash / block_access_list_hash.
 
+Note: the guest follows consensus-specs gloas (and Lighthouse), where
+NewPayloadRequest is a ProgressiveContainer and versioned_hashes a
+List[.., 4096]. The execution-specs commit below predates that change, so
+its root no longer matches the guest's.
+
 Setup (execution-specs pinned to the EIP-8025 reference commit; its wheel
 omits `execution_engine`, so the source tree is put on sys.path):
 
