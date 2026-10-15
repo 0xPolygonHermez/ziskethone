@@ -110,3 +110,5 @@ Run `zisk-coordinator` with one or more GPU `zisk-worker`s (ZisK `distributed/`,
 - the BLS signature, against py_ecc;
 - the EIP-2335 scrypt and pbkdf2 keystore vectors;
 - the `PublicInput` progressive-container root.
+
+Step by step, with the Lighthouse and proof-engine setup: [docs/tutorial-prove-and-submit.md](../docs/tutorial-prove-and-submit.md).

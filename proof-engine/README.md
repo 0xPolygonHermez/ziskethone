@@ -82,3 +82,5 @@ Each block directory the exex writes (`<number>-<hash>/proof.bin`) can be replay
 curl -s -X POST --data-binary @proof.bin -H 'content-type: application/octet-stream' \
   "http://127.0.0.1:9551/v1/execution_proof_verifications?new_payload_request_root=$ROOT&successful_validation=true&chain_id=11155111&schema_id=5377&proof_type=6"
 ```
+
+To run a beacon node with no execution client on these proofs, see [docs/tutorial-lighthouse-without-el.md](../docs/tutorial-lighthouse-without-el.md).

@@ -195,6 +195,14 @@ Key behaviour:
 - **Exit codes**: 75 from input-gen means "chain reorged mid-fetch" and is
   retried automatically. Any other non-zero is recorded as a failure.
 
+## Tutorials: live proving on Sepolia (EIP-8025)
+
+- [Prove every block and submit the proofs](docs/tutorial-prove-and-submit.md): run
+  `reth-zisk` with a ZisK coordinator, sign each proof with a validator key, and publish it
+  through Lighthouse.
+- [Lighthouse without an execution client](docs/tutorial-lighthouse-without-el.md): a beacon
+  node that accepts payloads as valid on ZisK proofs, checked by `zisk-proof-engine`.
+
 ## EEST conformance sweeps
 
 The `eest-witness-gen` bridge replays
