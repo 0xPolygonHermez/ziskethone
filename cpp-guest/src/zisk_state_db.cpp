@@ -133,14 +133,23 @@ ZiskStateDB::ZiskStateDB(Accounts&             accounts,
 #endif
           ),
       transient_(table_seed),
-      warm_keys_(table_seed) {}
+      warm_keys_(table_seed) {
+#ifndef ZEG_ANALYSIS_CACHE_BYTES
+#define ZEG_ANALYSIS_CACHE_BYTES (80u * 1024u * 1024u)
+#endif
+    // Fixed, reusable cache for per-contract JUMPDEST analyses (bounds the heap
+    // regardless of how many distinct contracts a block executes). Sized above
+    // the max simultaneously-pinned set (<= call depth), so eviction never has
+    // to fail a valid block.
+    cache_ = new AnalysisCache(vm2_, ZEG_ANALYSIS_CACHE_BYTES,
+                               vm2_->analysis_slot_bytes);
+}
 
 ZiskStateDB::~ZiskStateDB() {
-    // Release every prepared analysis handle (cached on the Contracts, owned by
-    // the VM) before destroying the VM.
-    contracts_.release_analyses([this](evmc2_pre_execution* pre) {
-        vm2_->release_pre_execution(&vm2_->base, pre);
-    });
+    // Drop the analysis cache (clears the Contracts' cached handles and frees
+    // the arena) before destroying the VM. Slot-backed analyses are owned by
+    // the cache, so there is no per-handle VM release.
+    delete cache_;
     vm2_->base.destroy(&vm2_->base);
 }
 
@@ -714,11 +723,12 @@ evmc2_pre_execution* ZiskStateDB::analysis_for(const evmc::bytes32& code_hash) n
         return nullptr;  // no code → nothing to pre-analyze
     }
     const auto& c = contracts_.by_hash(code_hash);
-    if (c.analysis == nullptr) {  // prepare once per distinct bytecode per block
-        c.analysis = vm2_->prepare(&vm2_->base, c.code,
-                                   static_cast<size_t>(c.code_size));
-    }
-    return c.analysis;
+    // Acquire (preparing on a cache miss) and PIN the analysis for the frame
+    // about to run; run_frame() releases the pin when that frame returns. The
+    // cache keeps it in a fixed arena slot and may evict it later (when no frame
+    // pins it) to bound heap use. c.analysis is the cached slot handle, nulled
+    // by the cache on eviction.
+    return cache_->acquire(&c.analysis, c.code, static_cast<size_t>(c.code_size));
 }
 
 void ZiskStateDB::set_tx_context(const evmc_tx_context& ctx) noexcept {
@@ -839,6 +849,11 @@ evmc_result ZiskStateDB::run_frame(const evmc_message* msg, const uint8_t* code,
     const evmc_result r = vm2_->execute2(&vm2_->base, &evmc::Host::get_interface(),
                                          to_context(), active_revision(), msg, code,
                                          code_size, analysis);
+    // The frame has returned: drop the pin acquired by analysis_for so the
+    // cache may reuse this slot (a no-op for the uncached/nullptr path, e.g.
+    // CREATE initcode). Safe because execute2 ran the whole frame + its
+    // children synchronously, so the analysis is no longer referenced.
+    cache_->release(analysis);
     // A frame that ends normally (success or revert) paid for its last
     // access; one that halts exceptionally may have halted on that charge.
     if (r.status_code == EVMC_SUCCESS || r.status_code == EVMC_REVERT) {

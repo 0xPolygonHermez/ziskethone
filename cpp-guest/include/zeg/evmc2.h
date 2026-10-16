@@ -32,11 +32,21 @@ extern "C" {
 // `release_pre_execution`.
 typedef struct evmc2_pre_execution evmc2_pre_execution;
 
-// Analyze `code` once and return a reusable handle. The handle is owned by the
-// caller and must be freed with the matching `release_pre_execution`.
+// Analyze `code` once and return a reusable handle.
+//
+// If `out_buf` is non-NULL, the backend MUST lay the entire analysis inside
+// `out_buf` (capacity `out_cap` bytes, guaranteed >= the backend's maximum
+// analysis size) and return a handle pointing within it; such a handle is
+// owned by the caller's arena and `release_pre_execution` on it is a no-op.
+// If `out_buf` is NULL the handle is heap-allocated and must be freed with
+// `release_pre_execution` (the legacy path, used on the host and for code that
+// is not cached). The analysis-cache (zeg/analysis_cache.hpp) always passes a
+// slot buffer so the guest never grows the heap per distinct contract.
 typedef evmc2_pre_execution* (*evmc2_prepare_fn)(struct evmc_vm* vm,
                                                  uint8_t const* code,
-                                                 size_t code_size);
+                                                 size_t code_size,
+                                                 uint8_t* out_buf,
+                                                 size_t out_cap);
 
 // Free a handle previously returned by `prepare`.
 typedef void (*evmc2_release_pre_execution_fn)(struct evmc_vm* vm,
@@ -68,6 +78,10 @@ struct evmc2_vm
     evmc2_prepare_fn               prepare;
     evmc2_execute2_fn              execute2;
     evmc2_release_pre_execution_fn release_pre_execution;
+    // Max bytes a single `prepare` needs when writing into a caller slot
+    // (sized for this backend at the largest possible code size). The analysis
+    // cache uses it as its fixed slot size. 0 if the backend has no slot path.
+    size_t                         analysis_slot_bytes;
 };
 
 #ifdef __cplusplus

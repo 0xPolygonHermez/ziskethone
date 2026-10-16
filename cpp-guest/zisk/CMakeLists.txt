@@ -236,8 +236,16 @@ if(NOT ZEG_CHAIN MATCHES "^(mainnet|sepolia)$")
   message(FATAL_ERROR "ZEG_CHAIN must be mainnet | sepolia (got ${ZEG_CHAIN})")
 endif()
 
+# Byte size of the fixed per-contract JUMPDEST-analysis cache arena (bounds the
+# guest heap against blocks that execute many distinct max-size contracts). 80
+# MiB covers the absolute worst case: 1025 live frames x the Amsterdam (64 KiB)
+# max analysis ~= 75 MiB, so the pinned set never overflows at any reachable
+# call depth; honest blocks (<=~10 MiB working set) never evict.
+set(ZEG_ANALYSIS_CACHE_BYTES "83886080" CACHE STRING "Analysis cache arena bytes")
+
 target_compile_definitions(zisk_eth_guest.elf PRIVATE
   ZEG_ZISK
+  ZEG_ANALYSIS_CACHE_BYTES=${ZEG_ANALYSIS_CACHE_BYTES}
   $<$<STREQUAL:${ZEG_CHAIN},sepolia>:ZEG_CHAIN_SEPOLIA>
   $<$<STREQUAL:${EVM_BACKEND},zevm>:USE_ZEVM>
   $<$<BOOL:${ZEG_SECP256K1_SW}>:ZEG_SECP256K1_SW>

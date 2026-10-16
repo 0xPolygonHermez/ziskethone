@@ -20,6 +20,8 @@
 #endif
 #include <evmone/vm.hpp>        // evmone::VM (the type behind the underlying vm)
 
+#include "zeg/system_addresses.hpp"  // kMaxCodeSizeAmsterdam (slot sizing)
+
 namespace {
 
 // The opaque evmc2_pre_execution* handed out by prepare() is a heap CodeAnalysis.
@@ -61,14 +63,44 @@ evmc_set_option_result w_set_option(evmc_vm* vm, char const* name,
 
 // ----- evmc2 extensions over evmone baseline -----
 
+// Node offset inside a slot: the CodeAnalysis object, 8-byte aligned, followed
+// by its padded-code + bitset storage.
+inline constexpr size_t kAnalysisNode = (sizeof(Analysis) + 7) / 8 * 8;
+
+// Bytes `analyze_into` writes for `code_size` bytes of code: padded code
+// (code + 33, 8-aligned) + jumpdest bitset ((code+64)/64 words). Mirrors
+// baseline_analysis.cpp's analyze_legacy layout.
+inline constexpr size_t analyze_storage_bytes(size_t code_size) {
+    const size_t padded = (code_size + 33 + 7) / 8 * 8;
+    const size_t bitset_words = (code_size + 64) / 64;
+    return padded + bitset_words * 8;
+}
+// Slot size = node + storage for the largest cacheable (deployed) code.
+inline constexpr size_t kSlotBytes =
+    kAnalysisNode + analyze_storage_bytes(zeg::kMaxCodeSizeAmsterdam);
+
 evmc2_pre_execution* w_prepare(evmc_vm* /*vm*/, uint8_t const* code,
-                               size_t code_size) noexcept {
+                               size_t code_size, uint8_t* out_buf,
+                               size_t out_cap) noexcept {
+    if (out_buf != nullptr) {
+        // Lay the CodeAnalysis node + its storage inside the caller's cache
+        // slot (no heap growth). analyze_into writes the padded code + bitset
+        // into out_buf+kAnalysisNode; the node adopts it. The cache owns the
+        // slot and never destroys the node, so the node's unique_ptr deleter
+        // (operator delete[], a no-op in the guest) never runs.
+        auto* a = new (out_buf) Analysis(evmone::baseline::analyze_into(
+            evmone::bytes_view{code, code_size}, out_buf + kAnalysisNode,
+            out_cap - kAnalysisNode));
+        return reinterpret_cast<evmc2_pre_execution*>(a);
+    }
     auto* a = new Analysis(evmone::baseline::analyze(
         evmone::bytes_view{code, code_size}));
     return reinterpret_cast<evmc2_pre_execution*>(a);
 }
 
 void w_release(evmc_vm* /*vm*/, evmc2_pre_execution* pre) noexcept {
+    // Only heap handles (out_buf == nullptr path) reach here; slot-backed
+    // handles are owned by the analysis cache, which never calls release.
     delete reinterpret_cast<Analysis*>(pre);
 }
 
@@ -116,6 +148,7 @@ extern "C" evmc2_vm* evmc2_create_evmone(void) {
             /*prepare=*/ w_prepare,
             /*execute2=*/ w_execute2,
             /*release_pre_execution=*/ w_release,
+            /*analysis_slot_bytes=*/ kSlotBytes,
         },
         /*impl=*/ impl,
     };

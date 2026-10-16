@@ -14,6 +14,7 @@
 
 #include "evm_mem.hpp"     // EVMMem::data — the frame's output window
 #include "evm_state.hpp"
+#include "zeg/system_addresses.hpp"  // kMaxCodeSizeAmsterdam (analysis slot size)
 
 // The opcode handlers, pulled in as inline headers so the dispatch switch below
 // can fold the hot ones directly into the per-fork loop (no out-of-line call, no
@@ -355,17 +356,30 @@ void w_destroy(evmc_vm* /*vm*/) noexcept {
 // ----- evmc2 extensions -----
 
 evmc2_pre_execution* w_prepare(evmc_vm* /*vm*/, const uint8_t* code,
-                               size_t code_size) noexcept {
+                               size_t code_size, uint8_t* out_buf,
+                               size_t out_cap) noexcept {
     if (code_size == 0)
         return nullptr;
-    // malloc (not calloc): build_jumpdest_bitset writes every word.
     const size_t nWords = (code_size + 63) / 64;
-    auto* bitset = static_cast<uint64_t*>(std::malloc(nWords * sizeof(uint64_t)));
+    uint64_t* bitset;
+    if (out_buf != nullptr) {
+        // Write the bitset into the caller's cache slot (no heap growth);
+        // out_cap is guaranteed >= nWords*8. build_jumpdest_bitset writes every
+        // word, so no zeroing needed. The cache owns the slot.
+        bitset = reinterpret_cast<uint64_t*>(out_buf);
+    } else {
+        // Legacy heap path (uncached callers / host). malloc (not calloc):
+        // build_jumpdest_bitset writes every word.
+        bitset = static_cast<uint64_t*>(std::malloc(nWords * sizeof(uint64_t)));
+    }
     build_jumpdest_bitset(code, code_size, bitset);
     return reinterpret_cast<evmc2_pre_execution*>(bitset);
 }
 
 void w_release(evmc_vm* /*vm*/, evmc2_pre_execution* pre) noexcept {
+    // Only heap handles reach here; slot-backed handles are owned by the
+    // analysis cache (which never calls release). std::free is a no-op in the
+    // guest bump allocator anyway.
     std::free(pre);
 }
 
@@ -394,6 +408,8 @@ extern "C" evmc2_vm* evmc2_create_zevm(void) {
         .prepare               = zevm::w_prepare,
         .execute2              = zevm::w_execute2,
         .release_pre_execution = zevm::w_release,
+        // Slot = the jumpdest bitset for the largest cacheable (deployed) code.
+        .analysis_slot_bytes   = ((zeg::kMaxCodeSizeAmsterdam + 63) / 64) * 8,
     };
     return &vm;
 }

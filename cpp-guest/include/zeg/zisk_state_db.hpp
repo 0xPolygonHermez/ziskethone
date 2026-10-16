@@ -39,6 +39,7 @@
 #include <evmc/evmc.hpp>
 
 #include "zeg/evmc2.h"          // backend-agnostic VM interface (prepare/execute2)
+#include "zeg/analysis_cache.hpp"  // fixed, reusable per-contract analysis cache
 
 #include "zeg/accounts.hpp"
 #include "zeg/block_access_list.hpp"
@@ -571,6 +572,13 @@ private:
     // analysis caching is expressed via prepare()/execute2() (the call sites use
     // vm2_->execute2 directly; see analysis_for()).
     evmc2_vm*             vm2_;
+
+    // Bounds per-block analysis memory: every distinct executed bytecode's
+    // JUMPDEST analysis lives in this fixed arena (LRU eviction of entries no
+    // live frame pins), instead of growing the heap unboundedly. Owns one
+    // allocation; constructed in the ctor body once vm2_ (hence its
+    // analysis_slot_bytes) exists. See analysis_for()/run_frame().
+    AnalysisCache*        cache_ = nullptr;
 
     // EIP-1153 transient storage. Reset at the start of every EVM
     // frame (each tx + each system call) by the call sites that bump

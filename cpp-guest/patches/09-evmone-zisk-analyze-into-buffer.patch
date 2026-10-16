@@ -1,0 +1,75 @@
+diff --git a/lib/evmone/baseline.hpp b/lib/evmone/baseline.hpp
+index 8ed1e5d..fa2c52c 100644
+--- a/lib/evmone/baseline.hpp
++++ b/lib/evmone/baseline.hpp
+@@ -91,6 +91,15 @@ public:
+ /// @param code         The reference to the EVM code to be analyzed.
+ EVMC_EXPORT CodeAnalysis analyze(bytes_view code);
+ 
++/// Like analyze(), but lays the padded code + JUMPDEST bitset into the
++/// caller-provided @p buffer (capacity @p capacity bytes) instead of allocating
++/// on the heap. Used by the ZisK analysis cache so per-contract analyses live in
++/// a fixed, reusable arena rather than growing the heap. The returned
++/// CodeAnalysis's padded-code unique_ptr adopts @p buffer; the caller owns the
++/// buffer and MUST NOT let the CodeAnalysis be destroyed (the cache reuses slots
++/// by placement-new, never destruction). Fatals if @p capacity is too small.
++EVMC_EXPORT CodeAnalysis analyze_into(bytes_view code, uint8_t* buffer, size_t capacity);
++
+ /// Executes in Baseline interpreter using EVMC-compatible parameters.
+ evmc_result execute(evmc_vm* vm, const evmc_host_interface* host, evmc_host_context* ctx,
+     evmc_revision rev, const evmc_message* msg, const uint8_t* code, size_t code_size) noexcept;
+diff --git a/lib/evmone/baseline_analysis.cpp b/lib/evmone/baseline_analysis.cpp
+index d76e8f8..48cb079 100644
+--- a/lib/evmone/baseline_analysis.cpp
++++ b/lib/evmone/baseline_analysis.cpp
+@@ -110,10 +110,50 @@ CodeAnalysis analyze_legacy(bytes_view code)
+ 
+     return {std::move(storage), code.size(), jumpdest_bitset};
+ }
++
++// analyze_legacy(), but with `storage` carved from a caller-provided buffer
++// instead of make_unique — for the ZisK analysis cache's fixed arena. See
++// baseline.hpp. Never destroy the returned CodeAnalysis: its unique_ptr adopts
++// `buffer`, which the cache owns and reuses via placement-new.
++CodeAnalysis analyze_into_impl(bytes_view code, uint8_t* buffer, size_t capacity)
++{
++    static constexpr auto PADDING = 32 + 1;
++    static constexpr auto BITSET_ALIGNMENT = alignof(BitsetSpan::word_type);
++
++    const auto padded_code_size = code.size() + PADDING;
++    const auto aligned_code_size =
++        (padded_code_size + (BITSET_ALIGNMENT - 1)) / BITSET_ALIGNMENT * BITSET_ALIGNMENT;
++    const auto bitset_words = (code.size() + (BitsetSpan::WORD_BITS)) / BitsetSpan::WORD_BITS;
++    const auto total_size = aligned_code_size + bitset_words * sizeof(BitsetSpan::word_type);
++
++    if (total_size > capacity)
++        __builtin_trap();  // can't happen: slots are sized to the fork's max analysis
++
++    uint8_t* storage = buffer;
++    std::ranges::copy(code, storage);                           // Copy code.
++    std::fill_n(&storage[code.size()], total_size - code.size(), 0);  // Pad + init bitset.
++
++    const auto bitset_storage =
++        new (&storage[aligned_code_size]) BitsetSpan::word_type[bitset_words];
++    const BitsetSpan jumpdest_bitset{bitset_storage};
++#if defined(ZEG_JUMPDEST_PRECOMPILE)
++    analyze_jumpdests(jumpdest_bitset, bytes_view{storage, code.size()});
++#else
++    analyze_jumpdests_sw(jumpdest_bitset, code);
++#endif
++    // Adopt `storage` without owning: the cache reuses the slot by placement-new
++    // and never destroys this object, so the unique_ptr's deleter never runs.
++    return {std::unique_ptr<uint8_t[]>(storage), code.size(), jumpdest_bitset};
++}
+ }  // namespace
+ 
+ CodeAnalysis analyze(bytes_view code)
+ {
+     return analyze_legacy(code);
+ }
++
++CodeAnalysis analyze_into(bytes_view code, uint8_t* buffer, size_t capacity)
++{
++    return analyze_into_impl(code, buffer, capacity);
++}
+ }  // namespace evmone::baseline

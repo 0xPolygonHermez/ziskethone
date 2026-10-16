@@ -62,6 +62,11 @@ endif()
 #       bigint_div fcall hint + an arith256 a==q*b+r / r<b check) instead of
 #       intx software long division. Gated on ZEG_ZISK; the host keeps intx as
 #       the reference. (Supersedes 03's note that div/mod stay on intx.)
+#   09: Add evmone::baseline::analyze_into(code, buf, cap) — analyze_legacy that
+#       lays the padded code + jumpdest bitset into a caller buffer instead of
+#       make_unique. Lets the AnalysisCache (zeg/analysis_cache.hpp) keep every
+#       per-contract analysis in a fixed, reusable arena so a block executing
+#       thousands of distinct contracts no longer OOMs the heap. Ungated.
 # Each patch is checked with `git apply --reverse --check` first; if it
 # is already applied we skip — that keeps the configure step idempotent
 # across rebuilds.
@@ -73,6 +78,7 @@ set(_evmone_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/06-evmone-zisk-fused-dispatch.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/07-evmone-precompile-reused-output.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/08-evmone-zisk-divmod.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/09-evmone-zisk-analyze-into-buffer.patch"
 )
 find_program(GIT_EXECUTABLE git REQUIRED)
 foreach(_patch IN LISTS _evmone_patches)
