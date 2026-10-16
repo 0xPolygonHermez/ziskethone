@@ -58,6 +58,10 @@ endif()
 #       leaked max_output_size every precompile call — a block spamming identity
 #       (output == input) exhausted the heap and became unprovable. Not gated:
 #       a reused buffer is correct on the host too (one block per process).
+#   08: Route DIV/MOD/SDIV/SMOD through the verified zeg::bi::udivmod4 (the
+#       bigint_div fcall hint + an arith256 a==q*b+r / r<b check) instead of
+#       intx software long division. Gated on ZEG_ZISK; the host keeps intx as
+#       the reference. (Supersedes 03's note that div/mod stay on intx.)
 # Each patch is checked with `git apply --reverse --check` first; if it
 # is already applied we skip — that keeps the configure step idempotent
 # across rebuilds.
@@ -68,6 +72,7 @@ set(_evmone_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/05-evmone-zisk-jumpdest-precompile.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/06-evmone-zisk-fused-dispatch.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/07-evmone-precompile-reused-output.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/08-evmone-zisk-divmod.patch"
 )
 find_program(GIT_EXECUTABLE git REQUIRED)
 foreach(_patch IN LISTS _evmone_patches)

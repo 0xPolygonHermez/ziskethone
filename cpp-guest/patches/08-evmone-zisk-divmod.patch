@@ -1,0 +1,96 @@
+diff --git a/lib/evmone/instructions.hpp b/lib/evmone/instructions.hpp
+index edbff87..fdc24b0 100644
+--- a/lib/evmone/instructions.hpp
++++ b/lib/evmone/instructions.hpp
+@@ -271,25 +271,91 @@ inline void sub(StackTop stack) noexcept
+ inline void div(StackTop stack) noexcept
+ {
+     auto& v = stack[1];
++#if defined(ZEG_ZISK)
++    // Verified ZisK division instead of intx software long division (the latter
++    // is ~10^4 cost/op; the EEST div/mod benchmarks were ~10x a mainnet block).
++    if (v != 0)
++    {
++        uint64_t q[4], r[4];
++        zeg::bi::udivmod4(&stack[0][0], &v[0], q, r);
++        zeg_arith::store(v, q);
++    }
++    else
++        v = 0;
++#else
+     v = v != 0 ? stack[0] / v : 0;
++#endif
+ }
+ 
+ inline void sdiv(StackTop stack) noexcept
+ {
+     auto& v = stack[1];
++#if defined(ZEG_ZISK)
++    // Sign handling in intx (cheap); the magnitude divide uses verified udivmod4.
++    if (v != 0)
++    {
++        const auto& u = stack[0];
++        const auto min = intx::uint256{1} << 255;  // INT256_MIN
++        if (u == min && v == ~intx::uint256{})      // -2^255 / -1 = -2^255
++            v = u;
++        else
++        {
++            const bool na = (u[3] >> 63) != 0, nb = (v[3] >> 63) != 0;
++            const intx::uint256 ua = na ? -u : u;
++            const intx::uint256 ub = nb ? -v : v;
++            uint64_t q[4], r[4];
++            zeg::bi::udivmod4(&ua[0], &ub[0], q, r);
++            intx::uint256 iq;
++            iq[0] = q[0]; iq[1] = q[1]; iq[2] = q[2]; iq[3] = q[3];
++            v = (na != nb) ? -iq : iq;
++        }
++    }
++    else
++        v = 0;
++#else
+     v = v != 0 ? intx::sdivrem(stack[0], v).quot : 0;
++#endif
+ }
+ 
+ inline void mod(StackTop stack) noexcept
+ {
+     auto& v = stack[1];
++#if defined(ZEG_ZISK)
++    if (v != 0)
++    {
++        uint64_t q[4], r[4];
++        zeg::bi::udivmod4(&stack[0][0], &v[0], q, r);
++        zeg_arith::store(v, r);
++    }
++    else
++        v = 0;
++#else
+     v = v != 0 ? stack[0] % v : 0;
++#endif
+ }
+ 
+ inline void smod(StackTop stack) noexcept
+ {
+     auto& v = stack[1];
++#if defined(ZEG_ZISK)
++    // Result takes the sign of the dividend; magnitude via verified udivmod4.
++    if (v != 0)
++    {
++        const auto& u = stack[0];
++        const bool na = (u[3] >> 63) != 0;
++        const intx::uint256 ua = na ? -u : u;
++        const intx::uint256 ub = (v[3] >> 63) ? -v : v;
++        uint64_t q[4], r[4];
++        zeg::bi::udivmod4(&ua[0], &ub[0], q, r);
++        intx::uint256 ir;
++        ir[0] = r[0]; ir[1] = r[1]; ir[2] = r[2]; ir[3] = r[3];
++        v = na ? -ir : ir;
++    }
++    else
++        v = 0;
++#else
+     v = v != 0 ? intx::sdivrem(stack[0], v).rem : 0;
++#endif
+ }
+ 
+ inline void addmod(StackTop stack) noexcept

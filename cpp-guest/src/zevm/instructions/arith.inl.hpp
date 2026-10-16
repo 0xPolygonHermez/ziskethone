@@ -13,7 +13,7 @@
 
 #include "detail.hpp"
 
-#include "bigint/backend.hpp"  // zeg::bi::{add256,arith256,arith256_mod,fcall_bigint_div}
+#include "bigint/backend.hpp"  // zeg::bi::{add256,arith256,arith256_mod,fcall_bigint_div,udivmod4}
 
 namespace zevm {
 
@@ -22,13 +22,6 @@ namespace arith_ops {
 constexpr uint64_t ZERO4[4] = {0, 0, 0, 0};
 constexpr uint64_t ONE4[4]  = {1, 0, 0, 0};
 
-// Significant limb count (>= 1), for the variable-length bigint_div fcall.
-inline int limbs_len(const uint64_t x[4]) {
-    int n = 4;
-    while (n > 1 && x[n - 1] == 0) --n;
-    return n;
-}
-
 // Low 256 bits of a * b (the EVM MUL / the multiply step of EXP).
 inline U256 mul_low(const U256& a, const U256& b) {
     uint64_t dl[4], dh[4];
@@ -36,14 +29,12 @@ inline U256 mul_low(const U256& a, const U256& b) {
     return U256{{dl[0], dl[1], dl[2], dl[3]}};
 }
 
-// Unsigned q = a / b, r = a % b. Caller guarantees b != 0.
+// Unsigned q = a / b, r = a % b. Caller guarantees b != 0. The bigint_div fcall
+// is unconstrained prover advice, so udivmod4 verifies a == q*b + r with r < b
+// (one arith256 + compares) — without it a malicious prover could forge every
+// DIV/MOD/SDIV/SMOD result.
 inline void udivmod(const U256& a, const U256& b, U256& q, U256& r) {
-    uint64_t quo[8] = {0}, rem[8] = {0};
-    int lq = 0, lr = 0;
-    zeg::bi::fcall_bigint_div(a.limbs, limbs_len(a.limbs),
-                              b.limbs, limbs_len(b.limbs),
-                              quo, &lq, rem, &lr);
-    for (int i = 0; i < 4; ++i) { q.limbs[i] = quo[i]; r.limbs[i] = rem[i]; }
+    zeg::bi::udivmod4(a.limbs, b.limbs, q.limbs, r.limbs);
 }
 
 // 0x01 ADD — pop a and b, push (a + b) mod 2^256.

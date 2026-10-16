@@ -164,4 +164,37 @@ inline void fcall_bigint_div(const uint64_t* a, int len_a, const uint64_t* b, in
 
 #endif  // backend
 
+// ---- 256-bit word helpers (operate on one 4-limb word) --------------------
+// Backend-agnostic (used by bignum.hpp and the EVM div/mod opcodes); live here,
+// next to arith256, so callers need only backend.hpp.
+inline bool is_zero4(const uint64_t* x) { return !x[0] && !x[1] && !x[2] && !x[3]; }
+inline bool is_one4 (const uint64_t* x) { return x[0]==1 && !x[1] && !x[2] && !x[3]; }
+inline bool eq4(const uint64_t* a, const uint64_t* b) { return a[0]==b[0]&&a[1]==b[1]&&a[2]==b[2]&&a[3]==b[3]; }
+inline bool lt4(const uint64_t* a, const uint64_t* b) {
+    for (int i = 3; i >= 0; --i) if (a[i] != b[i]) return a[i] < b[i];
+    return false;
+}
+inline void cp4(uint64_t* d, const uint64_t* s) { d[0]=s[0]; d[1]=s[1]; d[2]=s[2]; d[3]=s[3]; }
+inline void fail() { for (;;) {} }  // unreachable: a hint/invariant was violated
+
+// ---- verified 256-bit division (q = a/b, r = a%b; caller guarantees b != 0) -
+// The quotient/remainder come from the free `bigint_div` fcall — unconstrained
+// prover advice. One arith256 (q*b + r) plus three 256-bit compares make the
+// result sound: a == q*b + r with no overflow (q*b+r fits 256 bits since
+// q <= a < 2^256 and r < b) and r < b. ~1 arith256 (1440) vs software long
+// division (~10^4 cost). Used by the EVM DIV/MOD/SDIV/SMOD opcodes in both
+// backends. On the host (software backend.hpp) the same check runs and stays an
+// honest reference.
+inline void udivmod4(const uint64_t a[4], const uint64_t b[4],
+                     uint64_t q[4], uint64_t r[4]) {
+    uint64_t qq[8] = {0}, rr[8] = {0};
+    int lq = 0, lr = 0;
+    fcall_bigint_div(a, 4, b, 4, qq, &lq, rr, &lr);  // hint: a = b*q + r
+    cp4(q, qq);
+    cp4(r, rr);
+    uint64_t dl[4], dh[4];
+    arith256(q, b, r, dl, dh);  // q*b + r  (r folded in as the c operand)
+    if (!eq4(dl, a) || !is_zero4(dh) || !lt4(r, b)) fail();
+}
+
 } // namespace zeg::bi

@@ -13,19 +13,12 @@
 
 namespace zeg::bi {
 
-// ---- 256-bit word helpers (operate on one 4-limb word) --------------------
-inline bool is_zero4(const uint64_t* x) { return !x[0] && !x[1] && !x[2] && !x[3]; }
-inline bool is_one4 (const uint64_t* x) { return x[0]==1 && !x[1] && !x[2] && !x[3]; }
-inline bool eq4(const uint64_t* a, const uint64_t* b) { return a[0]==b[0]&&a[1]==b[1]&&a[2]==b[2]&&a[3]==b[3]; }
-inline bool lt4(const uint64_t* a, const uint64_t* b) {
-    for (int i = 3; i >= 0; --i) if (a[i] != b[i]) return a[i] < b[i];
-    return false;
-}
-inline void cp4(uint64_t* d, const uint64_t* s) { d[0]=s[0]; d[1]=s[1]; d[2]=s[2]; d[3]=s[3]; }
+// ---- 256-bit word helpers --------------------------------------------------
+// is_zero4 / is_one4 / eq4 / lt4 / cp4 / fail / udivmod4 now live in backend.hpp
+// (next to arith256); included above. This file adds the multi-word helper.
 inline bool eq_words(const uint64_t* a, const uint64_t* b, int nwords) {
     for (int i = 0; i < nwords*4; ++i) if (a[i] != b[i]) return false; return true;
 }
-inline void fail() { for (;;) {} }  // unreachable: a hint/invariant was violated
 
 inline constexpr int MAXW = 70;  // max U256 words for short-path scratch
 
