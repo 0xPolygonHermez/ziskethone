@@ -46,6 +46,7 @@ reth-evm-ethereum    = { git = "https://github.com/paradigmxyz/reth", tag = "v2.
 reth-revm            = { git = "https://github.com/paradigmxyz/reth", tag = "v2.7.0", features = ["witness"] }
 reth-trie            = { git = "https://github.com/paradigmxyz/reth", tag = "v2.7.0" }
 reth-trie-db         = { git = "https://github.com/paradigmxyz/reth", tag = "v2.7.0" }
+reth-db              = { git = "https://github.com/paradigmxyz/reth", tag = "v2.7.0" }
 reth-db-common       = { git = "https://github.com/paradigmxyz/reth", tag = "v2.7.0" }
 reth-provider        = { git = "https://github.com/paradigmxyz/reth", tag = "v2.7.0", features = ["test-utils"] }
 reth-storage-api     = { git = "https://github.com/paradigmxyz/reth", tag = "v2.7.0" }

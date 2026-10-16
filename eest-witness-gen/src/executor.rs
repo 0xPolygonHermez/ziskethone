@@ -27,7 +27,7 @@ use reth_evm::{execute::Executor, ConfigureEvm};
 use reth_evm_ethereum::EthEvmConfig;
 use reth_primitives_traits::{RecoveredBlock, SealedBlock};
 use reth_provider::{
-    test_utils::create_test_provider_factory_with_chain_spec, BlockWriter,
+    test_utils::create_test_provider_factory_with_chain_spec_and_db_args, BlockWriter,
     DatabaseProviderFactory, ExecutionOutcome, HistoryWriter, OriginalValuesKnown,
     StateProviderFactory, StateWriteConfig, StateWriter,
     BytecodeReader, StaticFileProviderFactory, StaticFileSegment, StaticFileWriter, StorageSettingsCache,
@@ -133,7 +133,12 @@ pub fn run_fixture(
     test: &BlockchainTest,
 ) -> Result<Vec<Option<ExecutedBlock>>> {
     // ---- (1) Fresh in-memory provider seeded with genesis ----
-    let factory = create_test_provider_factory_with_chain_spec(chain_spec.clone());
+    // reth's test default caps the MDBX map at 64 MiB; benchmark fixtures
+    // deploy thousands of 24 KiB contracts in a setup block (EEST
+    // test_unchunkified_bytecode), so allow the map to grow to 16 GiB.
+    let db_args = reth_db::mdbx::DatabaseArguments::test().with_geometry_max_size(Some(16 << 30));
+    let factory =
+        create_test_provider_factory_with_chain_spec_and_db_args(chain_spec.clone(), db_args);
     let provider = factory
         .database_provider_rw()
         .context("creating provider_rw")?;
