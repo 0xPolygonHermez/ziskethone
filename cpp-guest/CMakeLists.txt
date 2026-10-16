@@ -53,6 +53,11 @@ endif()
 #       likewise gated on ZEG_ZISK, so the host keeps the software reference.
 #   06: Hook for fused jump sequences in the cgoto dispatch, gated on ZEG_ZISK.
 #       The fusions live in zisk/evm/fused_dispatch.inl.
+#   07: Reuse one growing output buffer in call_precompile instead of new[] per
+#       call. The ZisK bump allocator never frees, so the per-call allocation
+#       leaked max_output_size every precompile call — a block spamming identity
+#       (output == input) exhausted the heap and became unprovable. Not gated:
+#       a reused buffer is correct on the host too (one block per process).
 # Each patch is checked with `git apply --reverse --check` first; if it
 # is already applied we skip — that keeps the configure step idempotent
 # across rebuilds.
@@ -62,6 +67,7 @@ set(_evmone_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/04-evmone-zisk-jumpdest-pointer-walk.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/05-evmone-zisk-jumpdest-precompile.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/06-evmone-zisk-fused-dispatch.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/07-evmone-precompile-reused-output.patch"
 )
 find_program(GIT_EXECUTABLE git REQUIRED)
 foreach(_patch IN LISTS _evmone_patches)

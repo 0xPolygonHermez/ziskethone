@@ -1,0 +1,45 @@
+diff --git a/test/state/precompiles.cpp b/test/state/precompiles.cpp
+index ea83c76c..136bd62e 100644
+--- a/test/state/precompiles.cpp
++++ b/test/state/precompiles.cpp
+@@ -866,9 +866,28 @@ evmc::Result call_precompile(evmc_revision rev, const evmc_message& msg) noexcep
+     if (gas_left < 0)
+         return evmc::Result{EVMC_OUT_OF_GAS, {.left = msg.state_gas}};
+ 
+-    // Allocate buffer for the precompile's output and pass its ownership to evmc::Result.
+-    // TODO: This can be done more elegantly by providing constructor evmc::Result(std::unique_ptr).
+-    const auto output_data = new (std::nothrow) uint8_t[max_output_size];  // TODO: handle nullptr.
++    // A single reused output buffer instead of new[] per call. Under the ZisK
++    // guest's bump allocator (zisk/runtime.cpp) free/delete are no-ops, so the
++    // upstream per-call `new uint8_t[max_output_size]` leaked that many bytes on
++    // every precompile call: a block that STATICCALLs identity (output == input,
++    // ~100 KB) thousands of times exhausted the heap and became unprovable. The
++    // precompile output is fully consumed by the caller (copied into return-data
++    // and caller memory) before the next precompile runs, and precompiles never
++    // re-enter the EVM, so two outputs are never live at once and one buffer can
++    // serve the whole block. It only grows (doubling), so the worst case is
++    // bounded to ~2x the largest single output; release is a no-op (retained).
++    // Single-threaded guest/host, one block per process.
++    static uint8_t* s_output = nullptr;
++    static size_t s_output_cap = 0;
++    if (max_output_size > s_output_cap)
++    {
++        size_t new_cap = s_output_cap != 0 ? s_output_cap : 256;
++        while (new_cap < max_output_size)
++            new_cap *= 2;
++        s_output = new (std::nothrow) uint8_t[new_cap];  // TODO: handle nullptr.
++        s_output_cap = new_cap;
++    }
++    uint8_t* const output_data = s_output;
+     const auto [status_code, output_size] =
+         execute(msg.input_data, msg.input_size, output_data, max_output_size);
+     return evmc::Result{{
+@@ -877,7 +896,7 @@ evmc::Result call_precompile(evmc_revision rev, const evmc_message& msg) noexcep
+         .state_gas = {.left = msg.state_gas},
+         .output_data = output_data,
+         .output_size = output_size,
+-        .release = [](const evmc_result* res) noexcept { delete[] res->output_data; },
++        .release = [](const evmc_result*) noexcept {},  // buffer retained & reused
+     }};
+ }
+ }  // namespace evmone::state
