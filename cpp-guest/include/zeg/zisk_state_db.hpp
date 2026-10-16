@@ -73,7 +73,8 @@ public:
                 const ConsensusInfo&  consensus,
                 Contracts&            contracts,
                 const PreviousBlocks& previous_blocks,
-                Storages&             storages);
+                Storages&             storages,
+                const zeg::HashSeed&  table_seed);
 
     // Releases every cached pre-analysis handle and destroys the owned VM.
     ~ZiskStateDB();
@@ -575,10 +576,10 @@ private:
     // frame (each tx + each system call) by the call sites that bump
     // tx_counter_. TSTORE writes are journaled so revert restores
     // (or erases) the entry.
-    TransientStorage      transient_{};
+    TransientStorage      transient_;
     // EIP-2929 warmth of keys with no table row (warming isn't a load).
     // Journaled; never reset (a `last_tx_idx` from an earlier tx reads cold).
-    WarmKeys              warm_keys_{};
+    WarmKeys              warm_keys_;
 
     // Monotonic counter incremented at the start of each tx in
     // process_transactions. Passed to Storages for per-tx warm/cold

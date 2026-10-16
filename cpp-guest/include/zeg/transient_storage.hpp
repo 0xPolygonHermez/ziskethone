@@ -15,10 +15,17 @@
 
 #include <evmc/evmc.hpp>
 
+#include "zeg/seeded_hash.hpp"
+
 namespace zeg {
 
 class TransientStorage {
 public:
+    // `seed` keys `map_` with the per-run universal hash
+    // (zeg/seeded_hash.hpp); it must outlive the object.
+    explicit TransientStorage(const zeg::HashSeed& seed)
+        : map_(0, KeyHash{&seed}, KeyEq{}) {}
+
     // Slot value at (addr, position); zero if not set.
     evmc::bytes32 get(const evmc::address& addr,
                       const evmc::bytes32& position) const noexcept;
@@ -53,14 +60,15 @@ private:
         evmc::address address;
         evmc::bytes32 position;
     };
+    // KeyHash reads the whole struct; no padding must creep in, or equal keys
+    // (compared field-wise by KeyEq) could hash differently.
+    static_assert(sizeof(Key) == 20 + 32, "TransientStorage::Key must have no padding");
     struct KeyHash {
+        // Seeded universal hash over the whole 52-byte Key — same rationale
+        // as the persistent Storages class. See zeg/seeded_hash.hpp.
+        const zeg::HashSeed* s_ = nullptr;
         size_t operator()(const Key& k) const noexcept {
-            // Both halves are high-entropy; XOR the low 8 bytes of
-            // each — same trick the persistent Storages class uses.
-            uint64_t a, p;
-            std::memcpy(&a, k.address.bytes  + sizeof(k.address.bytes)  - 8, 8);
-            std::memcpy(&p, k.position.bytes + sizeof(k.position.bytes) - 8, 8);
-            return static_cast<size_t>(a ^ p);
+            return static_cast<size_t>(zeg::hash_bytes(*s_, &k, sizeof(k)));
         }
     };
     struct KeyEq {

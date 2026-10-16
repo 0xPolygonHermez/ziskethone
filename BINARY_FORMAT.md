@@ -28,7 +28,9 @@ The file is one contiguous byte stream, consumed left-to-right:
 ```
 +---------------------------+  offset 0
 |  Magic prefix (8 B)       |
-+---------------------------+
++---------------------------+  offset 8
+|  Hash seed (16 B)         |
++---------------------------+  offset 24
 |  ConsensusInfo            |
 +---------------------------+
 |  Transactions             |
@@ -49,14 +51,17 @@ described under Section 7 rather than as top-level sections.
 No padding between sections — each section's last record is itself
 sized to a multiple of 8, so the next section starts 8-byte aligned.
 
-## Section 0 — Magic prefix (8 bytes)
+## Section 0 — Magic prefix + hash seed (24 bytes)
 
 | Offset | Size | Field     | Description |
 |-------:|-----:|-----------|-------------|
 |      0 |    4 | `magic`   | ASCII `"ZEG0"` (`0x3047455A` little-endian, see [`binary_format.hpp`](cpp-guest/include/zeg/binary_format.hpp)) |
-|      4 |    4 | `version` | `u32` little-endian format version (`kVersion`, currently `12`). Also keeps the cursor 8-byte aligned for everything that follows |
+|      4 |    4 | `version` | `u32` little-endian format version (`kVersion`, currently `13`). Also keeps the cursor 8-byte aligned for everything that follows |
+|      8 |   16 | `hash_seed` | Per-build random seed. The guest feeds it to the universal hash keying its account/storage/warm-key/transient maps (`seeded_hash.hpp`), so a block author cannot grind addresses or storage positions into one hash bucket and force O(n²) lookups. It is pure advice: it changes only internal bucket placement, never the public output, so any seed proves the same `new_payload_request_root`. The generator draws fresh OS randomness per build (overridable with `ZEG_HASH_SEED` for reproducible tests); the first section starts at offset 24 |
 
 The guest fatals on magic mismatch or on a `version` other than `kVersion`.
+Version `13` inserted the 16-byte `hash_seed` at offset 8 (first section now at
+offset 24).
 Version `12` made every key the block loads a StateRoot leaf: an account or
 slot that doesn't exist is an empty-valued leaf placed where it would sit, so
 the parent-root check proves its absence and the guest halts on any load of

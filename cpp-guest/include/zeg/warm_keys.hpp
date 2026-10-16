@@ -17,10 +17,19 @@
 
 #include <evmc/evmc.hpp>
 
+#include "zeg/seeded_hash.hpp"
+
 namespace zeg {
 
 class WarmKeys {
 public:
+    // `seed` keys both maps with the per-run universal hash
+    // (zeg/seeded_hash.hpp) so author-grindable access-list keys cannot be
+    // forced into one bucket; it must outlive the object.
+    explicit WarmKeys(const zeg::HashSeed& seed)
+        : accounts_(0, AddressHash{&seed})
+        , slots_(0, KeyHash{&seed}) {}
+
     uint64_t account(const evmc::address& addr) const noexcept {
         const auto it = accounts_.find(addr);
         return it == accounts_.end() ? 0 : it->second;
@@ -47,10 +56,9 @@ public:
 
 private:
     struct AddressHash {
+        const zeg::HashSeed* s_ = nullptr;
         size_t operator()(const evmc::address& a) const noexcept {
-            uint64_t v;
-            std::memcpy(&v, a.bytes + 12, sizeof(v));
-            return static_cast<size_t>(v);
+            return static_cast<size_t>(zeg::hash_bytes(*s_, a.bytes, sizeof(a.bytes)));
         }
     };
     struct Key {
@@ -65,11 +73,9 @@ private:
     };
     static_assert(sizeof(Key) == 24 + 32, "Key must have no tail padding");
     struct KeyHash {
+        const zeg::HashSeed* s_ = nullptr;
         size_t operator()(const Key& k) const noexcept {
-            uint64_t a, p;
-            std::memcpy(&a, k.address.bytes + 12, sizeof(a));
-            std::memcpy(&p, k.position.bytes + 24, sizeof(p));
-            return static_cast<size_t>(a ^ p);
+            return static_cast<size_t>(zeg::hash_bytes(*s_, &k, sizeof(k)));
         }
     };
 

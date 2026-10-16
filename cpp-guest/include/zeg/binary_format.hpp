@@ -56,7 +56,14 @@ constexpr uint32_t kMagic   = 0x3047455Au; // "ZEG0" little-endian
 //     guest derives read-only-ness dynamically (original == current).
 // v1: StateRoot `Op::Leaf` carries no index; keccak-sorted tables.
 // The guest rejects any version != kVersion.
-constexpr uint32_t kVersion = 12; // v8: ConsensusInfo prefix +8 B —
+constexpr uint32_t kVersion = 13; // v13: 16-byte hash seed at offset [8,24),
+                                  // right after the magic+version prefix, so the
+                                  // cursor to the first section starts at 24. The
+                                  // guest uses it only to seed its internal
+                                  // hash-map bucket selection (defeats forced
+                                  // O(n^2) account/storage lookups); it never
+                                  // affects the public output.
+                                  // v8: ConsensusInfo prefix +8 B —
                                   // adds target_blob_gas_per_block (u64-le
                                   // at offset 352) so the guest can
                                   // independently re-derive and validate

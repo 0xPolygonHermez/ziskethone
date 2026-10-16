@@ -28,6 +28,7 @@
 
 #include "zeg/zisk_dma.hpp"
 #include "zeg/trie_node.hpp"
+#include "zeg/seeded_hash.hpp"
 
 namespace zeg {
 
@@ -39,7 +40,11 @@ public:
 
     // Starts empty. Call `reserve(numberOfStorages)` once, then `append`
     // one row per storage-trie leaf during the StateRoot old-root walk.
-    Storages() = default;
+    // `seed` keys both maps with the per-run universal hash
+    // (zeg/seeded_hash.hpp); it must outlive the table.
+    explicit Storages(const zeg::HashSeed& seed)
+        : index_(0, KeyHash{&seed}, KeyEq{})
+        , addr_slots_(0, AddressHash{&seed}, AddressEq{}) {}
 
     // Pre-size the owned record buffer to exactly `count` rows. Must be
     // called before any `append`; the buffer is fixed at this size so
@@ -248,16 +253,14 @@ private:
     // No trailing padding, so KeyEq's memcmp only ever sees initialized bytes.
     static_assert(sizeof(Key) == 24 + 32,           "Key must have no tail padding");
 
-    // Hash: XOR the lowest 8 bytes of address and position. Both halves
-    // are high-entropy big-endian quantities, so XOR-ing their LSB ends
-    // produces a good distribution with one byte-fetch from each.
+    // Seeded universal hash over the whole 56-byte Key (address + pad +
+    // position). The raw SSTORE/SLOAD position is author-chosen, so the key
+    // must be mixed with the per-run secret seed to stop forced single-bucket
+    // collisions. See zeg/seeded_hash.hpp.
     struct KeyHash {
+        const zeg::HashSeed* s_ = nullptr;
         size_t operator()(const Key& k) const noexcept {
-            uint64_t a;
-            std::memcpy(&a, k.address.bytes  + sizeof(k.address.bytes)  - 8, 8);
-            uint64_t p;
-            std::memcpy(&p, k.position.bytes + sizeof(k.position.bytes) - 8, 8);
-            return static_cast<size_t>(a ^ p);
+            return static_cast<size_t>(zeg::hash_bytes(*s_, &k, sizeof(k)));
         }
     };
     struct KeyEq {
@@ -267,14 +270,13 @@ private:
         }
     };
 
-    // Address-only hash/eq for the per-account slot-index map. Addresses
-    // are high-entropy, so the first 8 bytes make a good hash (same
-    // rationale as Accounts::AddressHash).
+    // Address-only hash/eq for the per-account slot-index map. Seeded
+    // universal hash over all 20 address bytes (same rationale as
+    // Accounts::AddressHash — addresses are author-grindable).
     struct AddressHash {
+        const zeg::HashSeed* s_ = nullptr;
         size_t operator()(const evmc::address& a) const noexcept {
-            uint64_t v;
-            std::memcpy(&v, a.bytes, sizeof(v));
-            return static_cast<size_t>(v);
+            return static_cast<size_t>(zeg::hash_bytes(*s_, a.bytes, sizeof(a.bytes)));
         }
     };
     struct AddressEq {

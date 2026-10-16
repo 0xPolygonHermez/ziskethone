@@ -56,7 +56,7 @@ use crate::writer::Writer;
 /// derives read-only-ness dynamically (original == current).
 /// v1: StateRoot `Op::Leaf` carries no index (keccak-sorted tables +
 /// counter-derived index in the guest).
-pub const FORMAT_VERSION: u32 = 12;
+pub const FORMAT_VERSION: u32 = 13;
 
 /// File magic prefix (8 bytes): 4 B ASCII `"ZEG0"` + 4 B little-endian
 /// format version, which also keeps the cursor 8-byte aligned for the

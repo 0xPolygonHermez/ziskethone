@@ -118,7 +118,8 @@ ZiskStateDB::ZiskStateDB(Accounts&             accounts,
                          const ConsensusInfo&  consensus,
                          Contracts&            contracts,
                          const PreviousBlocks& previous_blocks,
-                         Storages&             storages)
+                         Storages&             storages,
+                         const zeg::HashSeed&  table_seed)
     : accounts_(accounts),
       consensus_(consensus),
       contracts_(contracts),
@@ -130,7 +131,9 @@ ZiskStateDB::ZiskStateDB(Accounts&             accounts,
 #else
           evmc2_create_evmone()
 #endif
-      ) {}
+          ),
+      transient_(table_seed),
+      warm_keys_(table_seed) {}
 
 ZiskStateDB::~ZiskStateDB() {
     // Release every prepared analysis handle (cached on the Contracts, owned by

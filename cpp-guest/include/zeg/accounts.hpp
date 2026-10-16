@@ -30,6 +30,7 @@
 #include <evmc/evmc.hpp>
 
 #include "zeg/trie_node.hpp"
+#include "zeg/seeded_hash.hpp"
 
 namespace zeg {
 
@@ -43,7 +44,10 @@ public:
 
     // Starts empty. Call `reserve(numberOfAccounts)` once, then `append`
     // one row per state-trie leaf during the StateRoot old-root walk.
-    Accounts() = default;
+    // `seed` keys `index_` with the per-run universal hash (zeg/seeded_hash.hpp)
+    // so an author cannot force O(n^2) lookups; it must outlive the table.
+    explicit Accounts(const zeg::HashSeed& seed)
+        : index_(0, AddressHash{&seed}, AddressEq{}) {}
 
     // Pre-size the owned record buffer to exactly `count` rows. Must be
     // called before any `append`, and `count` must equal the number of
@@ -261,15 +265,15 @@ private:
         uint64_t        last_tx_idx = 0;
     };
 
-    // Custom hasher: the address is already a high-entropy 20-byte value
-    // (keccak output for EOAs created via CREATE2, or the lower 20 bytes
-    // of keccak(sender || nonce) for CREATE — random enough either way),
-    // so we just splice its first 8 bytes as the hash.
+    // Seeded universal hash over all 20 address bytes. The address is NOT
+    // reliably high-entropy — an author grinds CREATE2 salts or just walks
+    // sequential addresses (a stock cold-BALANCE benchmark put ~22.6k accounts
+    // in one bucket under the old first-8-bytes hash), so the key must be
+    // mixed with the per-run secret seed. See zeg/seeded_hash.hpp.
     struct AddressHash {
+        const zeg::HashSeed* s_ = nullptr;
         size_t operator()(const evmc::address& a) const noexcept {
-            uint64_t v;
-            std::memcpy(&v, a.bytes, sizeof(v));
-            return static_cast<size_t>(v);
+            return static_cast<size_t>(zeg::hash_bytes(*s_, a.bytes, sizeof(a.bytes)));
         }
     };
     struct AddressEq {

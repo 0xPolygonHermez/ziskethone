@@ -105,11 +105,12 @@ pub struct OfflineSources {
 }
 
 /// Encode an `OfflineSources` bundle to the cpp-guest's binary
-/// format and write it to `output`. Pure: no network, no env access.
-/// Both the live-RPC `input-gen` binary and the manifest-driven
-/// `input-gen-from-manifest` binary funnel through here, so the two
-/// paths are guaranteed to produce byte-identical outputs from the
-/// same `OfflineSources`.
+/// format and write it to `output`. No network access. Both the live-RPC
+/// `input-gen` binary and the manifest-driven `input-gen-from-manifest`
+/// binary funnel through here, so the two paths produce byte-identical
+/// outputs from the same `OfflineSources` — except for the 16-byte hash
+/// seed (offset 8), which is fresh OS randomness per build unless pinned
+/// via `ZEG_HASH_SEED` (see `hash_seed`).
 pub fn build_binary(sources: &OfflineSources, output: &Path) -> Result<()> {
     let bytes = encode_binary(sources)?;
     if let Some(parent_dir) = output.parent() {
@@ -126,6 +127,26 @@ pub fn build_binary(sources: &OfflineSources, output: &Path) -> Result<()> {
 /// thin wrapper that writes the result to disk; in-process consumers (the
 /// `live` module's `fetch_and_build_*` entry points) use this directly to
 /// avoid a tempfile round-trip.
+/// The 16-byte per-build hash seed written at container offset 8. It is the
+/// one non-deterministic field in the format: it randomizes the guest's
+/// internal hash-map bucket placement (so a block author cannot grind
+/// addresses/storage keys into one bucket and force O(n^2) lookups), and it
+/// never feeds the public output. Fresh OS randomness each build, unless
+/// `ZEG_HASH_SEED` (16 bytes, 32 hex chars, optional `0x`) pins it for
+/// byte-reproducible tests.
+fn hash_seed() -> Result<[u8; 16]> {
+    if let Ok(s) = std::env::var("ZEG_HASH_SEED") {
+        let v = hex::decode(s.trim_start_matches("0x"))
+            .context("ZEG_HASH_SEED must be hex")?;
+        return v.as_slice().try_into().map_err(|_| {
+            anyhow::anyhow!("ZEG_HASH_SEED must be 16 bytes (32 hex chars), got {}", v.len())
+        });
+    }
+    let mut buf = [0u8; 16];
+    getrandom::getrandom(&mut buf).context("getrandom for hash seed")?;
+    Ok(buf)
+}
+
 pub fn encode_binary(sources: &OfflineSources) -> Result<Vec<u8>> {
     // `prestate`/`diff` are populated only by the manifest path (eest-witness-gen
     // ships a BundleState prestate). The online RPC path is witness-only and
@@ -164,6 +185,12 @@ pub fn encode_binary(sources: &OfflineSources) -> Result<Vec<u8>> {
 
     let mut w = Writer::new();
     sections::write_magic(&mut w);
+    // 16-byte hash seed, container offset [8,24). The one non-deterministic
+    // field: it randomizes the guest's internal hash-map bucket placement so a
+    // block author cannot force worst-case O(n^2) lookups, and it never affects
+    // the public output (`new_payload_request_root`). See `hash_seed`.
+    w.bytes(&hash_seed()?);
+    w.assert_aligned();
     sections::write_consensus_info(
         &mut w,
         &sources.current,

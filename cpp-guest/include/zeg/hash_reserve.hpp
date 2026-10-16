@@ -17,9 +17,14 @@ namespace zeg {
 // resulting bucket count and growth threshold are identical to reserve(n)'s.
 //
 // Precondition: m is empty — the move-assignment discards contents.
+//
+// The bucket-count constructor is passed the map's current hash and equality
+// instances (m.hash_function()/m.key_eq()) so a *stateful* functor — e.g. the
+// seeded universal hash in zeg/seeded_hash.hpp — survives the reserve. A plain
+// `Map(n)` would default-construct the functor and silently drop the seed.
 template <class Map>
 inline void hash_reserve_empty(Map& m, std::size_t n) {
-    m = Map(n);
+    m = Map(n, m.hash_function(), m.key_eq());
 }
 
 }  // namespace zeg

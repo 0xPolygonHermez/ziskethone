@@ -54,7 +54,14 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
     if (version != zeg::kVersion) {
         zeg::fatal("run: unsupported format version");
     }
-    const uint8_t* cursor = input + 8;
+    // 16-byte hash seed at offset [8,24): per-run random advice that seeds the
+    // state-table hash maps (defeats forced O(n^2) account/storage lookups).
+    // It only picks hash buckets and never affects the public output.
+    if (len < 24) {
+        zeg::fatal("run: input too small for hash seed");
+    }
+    const zeg::HashSeed table_seed = zeg::HashSeed::derive(input + 8);
+    const uint8_t* cursor = input + 24;
     const uint8_t* file_base = input;  // base for the SROOT_OFFSET debug dump
 
     // 2. Parse the input-stream collections. Stream order must match the
@@ -66,8 +73,8 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
     zeg::Transactions   transactions    (cursor);
     zeg::Contracts      contracts       (cursor);
     zeg::PreviousBlocks previous_blocks (cursor);
-    zeg::Accounts       accounts;
-    zeg::Storages       storages;
+    zeg::Accounts       accounts        (table_seed);
+    zeg::Storages       storages        (table_seed);
 
     // 3. Anchor the ancestor chain to the block being computed.
     //    PreviousBlocks[0] must be the parent — every BLOCKHASH
@@ -249,7 +256,7 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
     //    collections by reference for the rest of the run; Host
     //    callbacks pass data through them (or fatal-stub for overrides
     //    that need infrastructure not yet built).
-    zeg::ZiskStateDB state(accounts, consensus, contracts, previous_blocks, storages);
+    zeg::ZiskStateDB state(accounts, consensus, contracts, previous_blocks, storages, table_seed);
 
     // 6. Run the whole block: pre-block system calls, every tx, then
     //    post-block side-effects. `state` owns the evmone VM and
