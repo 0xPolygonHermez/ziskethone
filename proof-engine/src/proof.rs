@@ -3,9 +3,14 @@
 //! `ProveResponse.proof.data` and reth-zisk-exex signs it.
 //!
 //! Only the Vadcop body is mirrored. Field order and variant order are the
-//! encoding, so they are copied verbatim from ZisK v1.3.2-alpha
+//! encoding, so they are copied verbatim from ZisK 1.4.0-alpha
 //! `common/src/proof.rs` and `common/src/hash_mode.rs`. Depending on
 //! `zisk-common` itself would pull the whole prover.
+//!
+//! 1.4.0 appended `Proof.random_seed: Option<RandomSeed>` (a `RandomSeed([u8;
+//! 32])` newtype) — unauthenticated execution metadata the verifier ignores.
+//! It must still be decoded or its 33 `Some` bytes (1 tag + 32 seed) trail the
+//! proof and decode rejects them.
 
 use serde::Deserialize;
 
@@ -61,6 +66,11 @@ pub struct ProgramVk {
 pub struct Proof {
     pub body: ProofBody,
     pub program_vk: ProgramVk,
+    /// `zisk_common::RandomSeed([u8; 32])` (serde-transparent newtype), added in
+    /// 1.4.0. Unauthenticated metadata the verifier ignores; decoded only so the
+    /// whole input is consumed. `None` for aggregates / pre-1.4.0 proofs.
+    #[allow(dead_code)] // decoded to consume the bytes; verification ignores it
+    pub random_seed: Option<[u8; 32]>,
 }
 
 /// A decoded Vadcop proof.
@@ -132,6 +142,7 @@ pub mod tests {
     struct ProofOut {
         body: BodyOut,
         program_vk: VkOut,
+        random_seed: Option<[u8; 32]>,
     }
 
     pub fn encode(proof: Vec<u64>, kind: KindOut, publics_full: Vec<u64>) -> Vec<u8> {
@@ -139,6 +150,7 @@ pub mod tests {
         let p = ProofOut {
             body: BodyOut::Vadcop { proof, zisk_vk: vec![9; 4], kind, hash: "blake3".into(), publics_full },
             program_vk: VkOut { vk, hash_mode: HashOut::Blake3 },
+            random_seed: Some([7u8; 32]),
         };
         bincode::serde::encode_to_vec(&p, bincode::config::standard()).unwrap()
     }
@@ -164,6 +176,7 @@ pub mod tests {
         let plonk = ProofOut {
             body: BodyOut::Plonk { proof_bytes: vec![1] },
             program_vk: VkOut { vk: vec![0; 4], hash_mode: HashOut::Blake3 },
+            random_seed: None,
         };
         let bytes = bincode::serde::encode_to_vec(&plonk, bincode::config::standard()).unwrap();
         assert!(decode(&bytes).unwrap_err().contains("Plonk"));
