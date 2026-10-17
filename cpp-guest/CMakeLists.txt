@@ -51,33 +51,36 @@ endif()
 #   05: Replace that walk with the ZisK jump_dest_bitmap precompile (CSR 0x81C),
 #       one op per contract instead of a byte walk. Applies on top of 04 and is
 #       likewise gated on ZEG_ZISK, so the host keeps the software reference.
-#   06: Hook for fused jump sequences in the cgoto dispatch, gated on ZEG_ZISK.
-#       The fusions live in zisk/evm/fused_dispatch.inl.
+#   06: Fused superinstructions in evmone's cgoto dispatch, gated on
+#       ZEG_ZISK. The patch is only a hook (a guarded #include plus one line
+#       in the dispatch macro); the fusions themselves live in the guest tree
+#       at zisk/evm/fused_dispatch.inl. Hot dynamic opcode sequences execute
+#       as one fused step; every edge case falls back to the generic handlers
+#       so semantics stay bit-identical. Each fusion is individually measured
+#       on mainnet blocks — the .inl documents the method, the numbers and
+#       the rejected candidates.
 #   07: Reuse one growing output buffer in call_precompile instead of new[] per
 #       call. The ZisK bump allocator never frees, so the per-call allocation
 #       leaked max_output_size every precompile call — a block spamming identity
 #       (output == input) exhausted the heap and became unprovable. Not gated:
 #       a reused buffer is correct on the host too (one block per process).
-#   08: Route DIV/MOD/SDIV/SMOD through the verified zeg::bi::udivmod4 (the
-#       bigint_div fcall hint + an arith256 a==q*b+r / r<b check) instead of
-#       intx software long division. Gated on ZEG_ZISK; the host keeps intx as
-#       the reference. (Supersedes 03's note that div/mod stay on intx.)
 #   09: Add evmone::baseline::analyze_into(code, buf, cap) — analyze_legacy that
 #       lays the padded code + jumpdest bitset into a caller buffer instead of
 #       make_unique. Lets the AnalysisCache (zeg/analysis_cache.hpp) keep every
 #       per-contract analysis in a fixed, reusable arena so a block executing
 #       thousands of distinct contracts no longer OOMs the heap. Ungated.
+#       (ZisK 256-bit div/mod/sdiv/smod are handled in-circuit by patch 03's
+#       u256 ABI under 1.4.0, so the former patch 08 is dropped.)
 # Each patch is checked with `git apply --reverse --check` first; if it
 # is already applied we skip — that keeps the configure step idempotent
 # across rebuilds.
 set(_evmone_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/02-evmone-delegation-eoa-fastpath.patch"
-    "${CMAKE_CURRENT_SOURCE_DIR}/patches/03-evmone-zisk-arith256-mulmod.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/03-evmone-zisk-u256-abi.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/04-evmone-zisk-jumpdest-pointer-walk.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/05-evmone-zisk-jumpdest-precompile.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/06-evmone-zisk-fused-dispatch.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/07-evmone-precompile-reused-output.patch"
-    "${CMAKE_CURRENT_SOURCE_DIR}/patches/08-evmone-zisk-divmod.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/09-evmone-zisk-analyze-into-buffer.patch"
 )
 find_program(GIT_EXECUTABLE git REQUIRED)

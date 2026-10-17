@@ -1,5 +1,5 @@
 // Generates the ZisK coordinator gRPC client from the vendored protos
-// (0xPolygonHermez/zisk v1.3.2-alpha, distributed/crates/coordinator-api/proto).
+// (0xPolygonHermez/zisk 1.4.0-alpha fix/worker-cancel-recovery, distributed/crates/coordinator-api/proto).
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_prost_build::configure()
         .build_server(false)

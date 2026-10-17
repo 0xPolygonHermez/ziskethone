@@ -7,8 +7,8 @@
 // libstdc++ would normally provide and that the guest actually references:
 //
 //   * the bump allocator backing malloc/realloc/free and operator new,
-//   * strlen/strcmp (the mem* family — memcpy/memmove/memset/memcmp — lives in
-//     dma/*.s, which routes each through the ZisK DMA precompiles),
+//   * strlen/strcmp (the mem* family — memcpy/memmove/memset/memcmp — is the ZisK
+//     memory ABI's DMA ops in zkvm_mem.s),
 //   * the libgcc integer builtins the compiler emits calls to
 //     (__bswap{di,si}2, __clzdi2),
 //   * loud `halt()` + abort() that stop the emulator,
@@ -66,9 +66,9 @@ extern "C" [[noreturn]] void zeg_zisk_halt() {
 // ===========================================================================
 static char *g_next = nullptr;
 
-// memcpy lives in dma/memcpy.s (routed through the ZisK DMA precompile); declare
-// it so realloc can use it. -fno-builtin (see zisk/CMakeLists.txt) keeps this an
-// out-of-line call to that symbol rather than an inlined byte loop.
+// memcpy is the ZisK memory ABI's (zkvm_mem.s, one DMA op);
+// declare it so realloc can use it. -fno-builtin (see zisk/CMakeLists.txt) keeps
+// this an out-of-line call to that symbol rather than an inlined byte loop.
 void *memcpy(void *dst, const void *src, size_t n);
 
 static inline char *heap_alloc(size_t size) {
@@ -105,9 +105,8 @@ void *aligned_alloc(size_t alignment, size_t size) {
 
 // ===========================================================================
 // Freestanding str* (no libc). The mem* family (memcpy/memmove/memset/memcmp)
-// is provided by dma/*.s, which routes each call through the ZisK DMA precompiles
-// (CSR 0x813/0x814/0x816) instead of a byte loop. Only strlen/strcmp stay here —
-// there are no DMA str* precompiles.
+// is the ZisK memory ABI (zkvm_mem.h), one DMA op per call instead of a byte loop.
+// Only strlen/strcmp stay here — there are no DMA str* operations.
 // ===========================================================================
 size_t strlen(const char *s) { size_t n = 0; while (s[n]) ++n; return n; }
 
