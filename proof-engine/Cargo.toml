@@ -16,7 +16,7 @@ path = "src/main.rs"
 # ZisK 1.4.0-alpha: fix/worker-cancel-recovery (no v1.4.0 tag yet); proofman rev
 # matches zisk's own Cargo.lock (pil2-proofman branch pre-develop-1.4.0-alpha).
 zisk-verifier = { git = "https://github.com/0xPolygonHermez/zisk", rev = "32a20dc9e2dd5081094dfd17cd7ce7f1acba8863", features = ["std"] }
-proofman-verifier = { git = "https://github.com/0xPolygonHermez/pil2-proofman.git", rev = "16e4034f745a0fa14a042df7df09f24f426e3d9a", version = "1.4.0-alpha", default-features = false, features = ["std", "verify"] }
+proofman-verifier = { git = "https://github.com/0xPolygonHermez/pil2-proofman.git", branch = "pre-develop-1.4.0-alpha", version = "1.4.0-alpha", default-features = false, features = ["std"] }
 
 # The proof_data wire format: bincode (standard config) of zisk_common::Proof.
 bincode = { version = "2.0", default-features = false, features = ["serde", "std"] }

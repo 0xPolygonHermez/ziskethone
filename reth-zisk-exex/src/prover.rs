@@ -173,6 +173,9 @@ impl CoordinatorProver {
             proof_timeout: None,
             proof_dest: grpc::ProofKind::Stark as i32,
             hints: None,
+            // Let the coordinator draw its own proving seed (client seeds are
+            // rejected unless it is configured to allow them). New in 1.4.0.
+            random_seed: None,
         });
         if cancel.is_cancelled() {
             return Ok(Outcome::Cancelled);
