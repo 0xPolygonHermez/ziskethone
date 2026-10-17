@@ -5,7 +5,7 @@
 //                           accelerator ABI (a zkvmcall thunk the transpiler
 //                           turns into a jump to the native .zisk routine).
 //   host (!ZEG_ZISK)      : delegates to evmone's
-//                           evmmax::secp256k1::secp256k1_ecdsa_recover (intx,
+//                           evmone::crypto::secp256k1::secp256k1_ecdsa_recover (intx,
 //                           projective coords). The host only needs a correct
 //                           fast answer (it proves nothing), and evmone is the
 //                           reference implementation, so it doubles as the
@@ -54,7 +54,7 @@ extern "C" int secp256k1_ecdsa_recover(const uint64_t* z, const uint64_t* r,
     limbs_to_be(s, sb);
     // evmone validates r,s in [1,n-1] and returns nullopt when no point exists —
     // identical precompile semantics to the ZisK path below.
-    const auto pt = evmmax::secp256k1::secp256k1_ecdsa_recover(zb, rb, sb, recid != 0);
+    const auto pt = evmone::crypto::secp256k1::secp256k1_ecdsa_recover(zb, rb, sb, recid != 0, evmone::crypto::secp256k1::RecoveryMode::malleable);
     if (!pt.has_value())
         return 1;  // not recoverable
     uint8_t pk[64];
