@@ -1,9 +1,10 @@
 //! One proof in flight: each payload, as soon as it is seen (the engine's
 //! payload tap, or Lighthouse's gossip when `--zisk.lighthouse-early`),
 //! starts a job (witness → pre-check → trim → prove → sign → submit). A newer
-//! block cancels the previous job only before its proof is requested; once
-//! submitted, a proof runs to completion and is still signed and sent. A
-//! reorg or an invalid block also discards the in-flight proof.
+//! block — the next height, or a replacement at the same height — cancels the
+//! previous job at any stage, including a proof already running on the
+//! coordinator, which is `CancelJob`-ed to free the worker, and starts the new
+//! one. A reorg or an invalid block also discards the in-flight proof.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -122,7 +123,8 @@ impl Timeline {
 struct InFlight {
     number: u64,
     hash: B256,
-    /// Stop the job if it has not requested its proof yet.
+    /// Stop the job — including a proof already running on the coordinator,
+    /// which is `CancelJob`-ed — when a newer block supersedes it.
     cancel: CancellationToken,
     /// The block left the canonical chain or is invalid: drop its proof.
     discard: CancellationToken,
@@ -365,7 +367,8 @@ where
         return Ok("cancelled");
     }
 
-    // 3. Prove. Cancellable only until the job is submitted.
+    // 3. Prove. Cancellable right through to completion: a newer block
+    //    `CancelJob`-s a proof already running on the coordinator.
     timeline.mark("prove_start");
     let proof = match prover.prove(&input, cancel).await? {
         Outcome::Cancelled => {

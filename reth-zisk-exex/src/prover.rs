@@ -114,18 +114,28 @@ impl CoordinatorProver {
 
     /// `submit`, retried while the cluster is busy with the previous block's
     /// proof: it runs one job at a time and refuses the next one with
-    /// "workers are busy running another job" instead of queueing it.
-    async fn submit_when_free(&mut self, kind: grpc::job_kind::Kind) -> Result<String> {
+    /// "workers are busy running another job" instead of queueing it. When a
+    /// newer block arrives the previous proof is being `CancelJob`-ed
+    /// concurrently, so the worker frees within a poll or two. Returns `None`
+    /// if `cancel` fires before the job is accepted (this block, in turn, was
+    /// superseded while waiting for the worker).
+    async fn submit_when_free(&mut self, kind: grpc::job_kind::Kind, cancel: &CancellationToken) -> Result<Option<String>> {
         let t0 = std::time::Instant::now();
         loop {
+            if cancel.is_cancelled() {
+                return Ok(None);
+            }
             let req = grpc::JobRequestMessage { job_kind: Some(grpc::JobKind { kind: Some(kind.clone()) }) };
             match self.client.job_request(req).await {
-                Ok(r) => return Ok(r.into_inner().job_id),
+                Ok(r) => return Ok(Some(r.into_inner().job_id)),
                 Err(e) if e.code() == tonic::Code::Unavailable
                     && e.message().contains("busy running another job")
                     && t0.elapsed() < BUSY_RETRY =>
                 {
-                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => {}
+                        _ = cancel.cancelled() => return Ok(None),
+                    }
                 }
                 Err(e) => return Err(e.into()),
             }
@@ -133,7 +143,10 @@ impl CoordinatorProver {
     }
 
     /// Long-poll `job_id` to a terminal state; on `cancel`, `CancelJob` it
-    /// and return `None`. Proving jobs are never cancelled (see `prove`).
+    /// and return `None`. A running proof is cancelled this way when a newer
+    /// block supersedes it — the 1.4.0 coordinator frees its worker on
+    /// `CancelJob` (under v1.3.2-alpha this wedged the workers "setting up"
+    /// for ~10 min, which is why submitted proofs used to run to completion).
     async fn wait(&mut self, job_id: &str, cancel: &CancellationToken) -> Result<Option<grpc::job_kind_response::Kind>> {
         use grpc::job_status::Status;
         loop {
@@ -160,9 +173,12 @@ impl CoordinatorProver {
         }
     }
 
-    /// A submitted proof always runs to completion: `CancelJob` on a running
-    /// proof left the cluster's workers "setting up" for ~10 min (v1.3.2-alpha,
-    /// 2026-10-15). `cancel` only stops a job that has not been submitted.
+    /// Prove `input`, cancellable right through to completion: when a newer
+    /// block supersedes this one, `cancel` fires and we `CancelJob` the
+    /// running proof so the coordinator's single worker is freed for the new
+    /// block. (Under v1.3.2-alpha, 2026-10-15, `CancelJob` on a running proof
+    /// wedged the workers for ~10 min, so proofs were then left to finish;
+    /// the 1.4.0 coordinator cancels cleanly, so that rule is lifted.)
     async fn prove(&self, input: &[u8], cancel: &CancellationToken) -> Result<Outcome> {
         let mut this = Self { client: self.client.clone(), hash_id: self.hash_id.clone(), program_vk: Vec::new() };
         let prove = grpc::job_kind::Kind::Prove(grpc::ProveRequest {
@@ -177,13 +193,13 @@ impl CoordinatorProver {
             // rejected unless it is configured to allow them). New in 1.4.0.
             random_seed: None,
         });
-        if cancel.is_cancelled() {
+        let Some(job_id) = this.submit_when_free(prove, cancel).await? else {
             return Ok(Outcome::Cancelled);
-        }
-        let job_id = this.submit_when_free(prove).await?;
+        };
         info!(%job_id, "submitted proving job");
         let t0 = std::time::Instant::now();
-        let Some(result) = this.wait(&job_id, &CancellationToken::new()).await? else {
+        let Some(result) = this.wait(&job_id, cancel).await? else {
+            info!(%job_id, "cancelled the in-flight proof for a newer block");
             return Ok(Outcome::Cancelled);
         };
         let grpc::job_kind_response::Kind::Prove(resp) = result else {
