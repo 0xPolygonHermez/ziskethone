@@ -137,6 +137,8 @@ void EvmState::reset(const evmc_message* msg,
     host          = host_;
     context       = ctx_;
     rev           = rev_;
+    // SELFBALANCE cache starts empty; the first SELFBALANCE fetches it lazily.
+    self_balance_valid = false;
     output_offset = 0;
     output_size   = 0;
     returnDataOwner = evmc_result{};

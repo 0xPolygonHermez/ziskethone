@@ -210,8 +210,15 @@ bool op_codesize(EvmState& s, Regs& R) {
 bool op_selfbalance(EvmState& s, Regs& R) {
     if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_LOW;
-    const evmc_uint256be bal = s.host->get_balance(s.context, &s.evmcMsg->recipient);
-    if (!push_be32(s, R, bal.bytes)) return false;
+    // SELFBALANCE fast path: refetch the executing account's balance from the
+    // host only when the per-frame cache is stale (frame entry, or after a
+    // CALL/CREATE that may have changed it); otherwise reuse the cached value,
+    // avoiding a host call + account lookup on every opcode.
+    if (!s.self_balance_valid) {
+        s.self_balance_be = s.host->get_balance(s.context, &s.evmcMsg->recipient);
+        s.self_balance_valid = true;
+    }
+    if (!push_be32(s, R, s.self_balance_be.bytes)) return false;
     return true;
 }
 

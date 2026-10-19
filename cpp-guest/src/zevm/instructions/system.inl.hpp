@@ -54,6 +54,9 @@ inline bool be_lt(const evmc_uint256be& a, const evmc_uint256be& b) {
 //   has_value      — CALL/CALLCODE take a value arg (DELEGATECALL/STATICCALL don't)
 //   static_forced  — STATICCALL forces the child into static mode
 bool call_impl(EvmState& s, Regs& R, evmc_call_kind kind, bool has_value, bool static_forced) {
+    // A sub-call can change this frame's own balance (value sent out, or a
+    // nested call back into us), so stale the SELFBALANCE cache.
+    s.self_balance_valid = false;
     const size_t nargs = has_value ? 7u : 6u;
 
     if (R.gas < WARM_ACCESS) { s.status = EVMC_OUT_OF_GAS; return false; }
@@ -267,6 +270,9 @@ bool op_staticcall(EvmState& s, Regs& R)   { return call_impl(s, R, EVMC_CALL,  
 // size + word cost, CREATE2's keccak word cost, the 63/64 cap), build the
 // message, and push the created address (0 on failure).
 bool create_impl(EvmState& s, Regs& R, evmc_call_kind kind) {
+    // CREATE debits this frame's balance by `value` (and the init code may call
+    // back into us), so stale the SELFBALANCE cache.
+    s.self_balance_valid = false;
     const bool     is2   = (kind == EVMC_CREATE2);
     const size_t nargs = is2 ? 4u : 3u;
 
