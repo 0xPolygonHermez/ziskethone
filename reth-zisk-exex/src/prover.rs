@@ -29,6 +29,40 @@ pub struct Proof {
 /// How long a proving job is retried while the cluster is busy.
 const BUSY_RETRY: std::time::Duration = std::time::Duration::from_secs(20);
 
+/// Per-message payload when the framed input is streamed over `PushJobInput`
+/// (3 MiB, matching the ZisK SDK's `MAX_CHUNK_BYTES`; far under the 128 MiB
+/// gRPC message cap).
+const CHUNK_BYTES: usize = 3 * 1024 * 1024;
+
+/// Largest framed input still sent as a single inline `InputChunk`. Above this
+/// the input is streamed in `CHUNK_BYTES` pieces via `PushJobInput`, which
+/// lifts the 128 MiB inline cap up to the zkVM input-region limit
+/// (`MAX_INPUT_SIZE` = 1 GiB today, ~2 GiB in the next coordinator release).
+/// A margin under the 128 MiB message cap leaves room for the 16-byte frame
+/// header and the `ProveRequest` protobuf overhead.
+const INLINE_MAX: usize = 100 * 1024 * 1024;
+
+/// Split `framed` into `PushJobInputRequest`s of at most `CHUNK_BYTES` bytes
+/// each, every one tagged with `job_id`. Owns its inputs so the iterator is
+/// `'static` (streamable to `push_job_input`) and lazy (one chunk copy in
+/// flight, never a second full copy of the input). Factored out so the
+/// chunking math is unit-testable without a coordinator.
+fn input_chunks(job_id: String, framed: prost::bytes::Bytes) -> impl Iterator<Item = grpc::PushJobInputRequest> {
+    let mut off = 0usize;
+    std::iter::from_fn(move || {
+        if off >= framed.len() {
+            return None;
+        }
+        let end = (off + CHUNK_BYTES).min(framed.len());
+        let data = framed.slice(off..end).to_vec();
+        off = end;
+        Some(grpc::PushJobInputRequest {
+            job_id: job_id.clone(),
+            chunk: Some(grpc::InputChunk { data }),
+        })
+    })
+}
+
 pub enum Outcome {
     Proved(Proof),
     Cancelled,
@@ -181,11 +215,26 @@ impl CoordinatorProver {
     /// the 1.4.0 coordinator cancels cleanly, so that rule is lifted.)
     async fn prove(&self, input: &[u8], cancel: &CancellationToken) -> Result<Outcome> {
         let mut this = Self { client: self.client.clone(), hash_id: self.hash_id.clone(), program_vk: Vec::new() };
+        // One framed blob (`[u64 LE len][data][pad]`), the same bytes whether
+        // sent inline or streamed. Inputs up to `INLINE_MAX` ride in the
+        // `ProveRequest` as a single inline chunk (today's path); larger ones
+        // go as a `grpc://push` stream URI and are pushed in `CHUNK_BYTES`
+        // pieces below, so the 128 MiB inline cap no longer bounds a block.
+        let framed = frame_input(input);
+        // `INLINE_MAX` by default; `ZISK_INLINE_MAX_BYTES` overrides it (e.g. 0
+        // forces every input through the stream path — used to test streaming).
+        let inline_max = std::env::var("ZISK_INLINE_MAX_BYTES")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(INLINE_MAX);
+        let (input_kind, to_stream) = if framed.len() <= inline_max {
+            (grpc::input_kind::Kind::Inline(grpc::InputChunk { data: framed }), None)
+        } else {
+            (grpc::input_kind::Kind::StreamUri("grpc://push".into()), Some(framed))
+        };
         let prove = grpc::job_kind::Kind::Prove(grpc::ProveRequest {
             hash_id: this.hash_id.clone(),
-            input: Some(grpc::InputKind {
-                kind: Some(grpc::input_kind::Kind::Inline(grpc::InputChunk { data: frame_input(input) })),
-            }),
+            input: Some(grpc::InputKind { kind: Some(input_kind) }),
             proof_timeout: None,
             proof_dest: grpc::ProofKind::Stark as i32,
             hints: None,
@@ -197,6 +246,14 @@ impl CoordinatorProver {
             return Ok(Outcome::Cancelled);
         };
         info!(%job_id, "submitted proving job");
+        // The job is accepted only once a worker is assigned (`submit_when_free`
+        // retries past "busy"), so the coordinator is ready for the pushed input.
+        if let Some(framed) = to_stream {
+            if this.push_input(&job_id, framed, cancel).await?.is_none() {
+                info!(%job_id, "cancelled a newer block's proof while streaming its input");
+                return Ok(Outcome::Cancelled);
+            }
+        }
         let t0 = std::time::Instant::now();
         let Some(result) = this.wait(&job_id, cancel).await? else {
             info!(%job_id, "cancelled the in-flight proof for a newer block");
@@ -218,6 +275,42 @@ impl CoordinatorProver {
         }
         Ok(Outcome::Proved(Proof { data: proof.data, root: None }))
     }
+
+    /// Push the framed input of an already-submitted `grpc://push` job in
+    /// `CHUNK_BYTES` pieces over the client-streaming `PushJobInput` RPC,
+    /// closing the stream to signal EOF. Cancellable like `wait()`: if a newer
+    /// block supersedes this one mid-upload, `cancel` fires, the half-open
+    /// stream is dropped and the job is `CancelJob`-ed to free the worker;
+    /// returns `None` in that case, `Some(())` once all chunks are accepted.
+    async fn push_input(&mut self, job_id: &str, framed: Vec<u8>, cancel: &CancellationToken) -> Result<Option<()>> {
+        let framed = prost::bytes::Bytes::from(framed);
+        let chunks = framed.len().div_ceil(CHUNK_BYTES);
+        info!(%job_id, bytes = framed.len(), chunks, "streaming input");
+        if framed.len() as u64 > grpc_zisk_max_input() {
+            warn!(%job_id, bytes = framed.len(), "framed input exceeds the 1 GiB zkVM input cap; the coordinator may reject it");
+        }
+        // Lazily yield chunks (one `to_vec` copy in flight at a time, not a
+        // second full copy of the input) tagged with `job_id`.
+        let body = futures::stream::iter(input_chunks(job_id.to_string(), framed));
+        tokio::select! {
+            r = self.client.push_job_input(body) => { r?; Ok(Some(())) }
+            _ = cancel.cancelled() => {
+                let r = self.client.cancel_job(grpc::CancelJobRequest { job_id: job_id.to_string() }).await;
+                match r {
+                    Ok(r) => info!(job_id, cancelled = r.into_inner().cancelled, "cancelled proving job mid-upload"),
+                    Err(e) => warn!(job_id, "CancelJob failed: {e}"),
+                }
+                Ok(None)
+            }
+        }
+    }
+}
+
+/// The coordinator's zkVM input-region cap (`MAX_INPUT_SIZE`), 1 GiB today.
+/// A soft client-side check only — the coordinator is the authority, so the
+/// coming 1→2 GiB bump needs no change here.
+fn grpc_zisk_max_input() -> u64 {
+    0x4000_0000
 }
 
 
@@ -278,4 +371,63 @@ mod tests {
         assert_eq!(frame_input(&[0; 8]).len(), 16);
     }
 
+    /// The streamed chunks must reconstruct the framed input byte-for-byte,
+    /// each stay within `CHUNK_BYTES`, and all carry the same `job_id`.
+    #[test]
+    fn chunking_reconstructs_framed_input() {
+        for raw_len in [0usize, 1, CHUNK_BYTES - 1, CHUNK_BYTES, CHUNK_BYTES + 1, 3 * CHUNK_BYTES, 3 * CHUNK_BYTES + 7] {
+            let input = vec![0xabu8; raw_len];
+            let framed = frame_input(&input);
+            let job = "job-123";
+            let reqs: Vec<_> = input_chunks(job.to_string(), prost::bytes::Bytes::from(framed.clone())).collect();
+
+            // At least one chunk (the server rejects an empty stream), and the
+            // expected count.
+            assert!(!reqs.is_empty());
+            assert_eq!(reqs.len(), framed.len().div_ceil(CHUNK_BYTES).max(1));
+
+            let mut rebuilt = Vec::new();
+            for (i, r) in reqs.iter().enumerate() {
+                assert_eq!(r.job_id, job);
+                let data = &r.chunk.as_ref().unwrap().data;
+                assert!(data.len() <= CHUNK_BYTES);
+                // Every chunk but the last is exactly CHUNK_BYTES.
+                if i + 1 < reqs.len() {
+                    assert_eq!(data.len(), CHUNK_BYTES);
+                }
+                rebuilt.extend_from_slice(data);
+            }
+            assert_eq!(rebuilt, framed, "raw_len={raw_len}");
+        }
+    }
+
+    /// Live end-to-end streaming prove against a real coordinator. Ignored by
+    /// default; run with the coordinator + ELF + a RAW (unframed) ZEG0 input:
+    ///   ZISK_COORDINATOR_URL=http://79.117.32.66:7000 \
+    ///   TEST_ELF=/path/zisk_eth_guest.elf \
+    ///   TEST_INPUT_RAW=/path/input.raw \
+    ///   TEST_PROOF_OUT=/path/proof.bin \
+    ///   cargo test --release prover::tests::stream_prove_live -- --ignored --nocapture
+    /// A >128 MiB input exercises the `grpc://push` stream path. Prints the
+    /// program VK so the proof can be checked with `zisk-proof-engine verify`.
+    #[tokio::test]
+    #[ignore]
+    async fn stream_prove_live() -> Result<()> {
+        let url = std::env::var("ZISK_COORDINATOR_URL").expect("ZISK_COORDINATOR_URL");
+        let elf = std::env::var("TEST_ELF").expect("TEST_ELF");
+        let raw = std::env::var("TEST_INPUT_RAW").expect("TEST_INPUT_RAW");
+        let out = std::env::var("TEST_PROOF_OUT").unwrap_or_else(|_| "proof.bin".into());
+        let prover = CoordinatorProver::connect(&url, std::path::Path::new(&elf)).await?;
+        println!("PROGRAM_VK=0x{}", hex::encode(&prover.program_vk));
+        let input = std::fs::read(&raw)?;
+        println!("raw input {} bytes (framed {}; stream path at >{} MiB)", input.len(), input.len() + 16, INLINE_MAX >> 20);
+        match prover.prove(&input, &CancellationToken::new()).await? {
+            Outcome::Proved(p) => {
+                std::fs::write(&out, &p.data)?;
+                println!("PROVED proof_bytes={} written to {out}", p.data.len());
+            }
+            Outcome::Cancelled => panic!("unexpected cancellation"),
+        }
+        Ok(())
+    }
 }
