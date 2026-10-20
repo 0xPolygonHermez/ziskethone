@@ -6,10 +6,9 @@
 // evmone::crypto::ecc::add_affine for ECADD, each as zkvm_bn254_* calls. Replaces evmone's
 // software bn254.cpp + pairing/bn254/pairing.cpp (excluded from the build).
 //
-// Boundary: evmone AffinePoint coords are FieldElement in Montgomery form — use
-// .value() for the canonical uint256 and FE{uint256} to build results. AffinePoint /
-// ExtPoint coords (pairing input) are plain uint256. The EF ABI takes 32-byte
-// big-endian field elements.
+// Boundary: AffinePoint / ExtPoint coords are Fq elements, kept canonical by
+// add_affine_spec.hpp — use .value() for the uint256 and Fq::from_bytes to build
+// results. The EF ABI takes 32-byte big-endian field elements.
 
 #include <vector>
 
@@ -26,9 +25,12 @@ inline void store_g1(const AffinePoint& p, uint8_t b[64]) {
     intx::be::unsafe::store(b, p.x.value());
     intx::be::unsafe::store(b + 32, p.y.value());
 }
+// Through from_bytes, not the Fp{} constructor: add_affine_spec.hpp keeps the base
+// field canonical only for elements made by from_bytes. ABI results are < p.
 inline AffinePoint load_g1(const uint8_t b[64]) {
-    return { evmone::crypto::bn254::Curve::Fp{intx::be::unsafe::load<uint256>(b)},
-             evmone::crypto::bn254::Curve::Fp{intx::be::unsafe::load<uint256>(b + 32)} };
+    using evmone::crypto::bn254::Fq;
+    return { *Fq::from_bytes(std::span<const uint8_t, 32>{b, 32}),
+             *Fq::from_bytes(std::span<const uint8_t, 32>{b + 32, 32}) };
 }
 }  // namespace
 
