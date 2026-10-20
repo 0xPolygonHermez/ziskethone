@@ -1,0 +1,31 @@
+diff --git a/lib/evmone/instructions.hpp b/lib/evmone/instructions.hpp
+--- a/lib/evmone/instructions.hpp
++++ b/lib/evmone/instructions.hpp
+@@ -744,7 +744,27 @@
+ 
+ inline void coinbase(StackTop stack, ExecutionState& state) noexcept
+ {
++#if defined(ZEG_ZISK)
++    // be::load copies block_coinbase's 20 bytes through a stack buffer and builds the
++    // result in another stack temporary; under -mtune=size GCC does the copy with 8-byte
++    // loads/stores that cross a ZisK memory word (7 costly unaligned accesses per
++    // COINBASE). block_coinbase is 4 mod 8 by type: evmc_tx_context is 8-aligned and
++    // places it at offset 52. So its bytes [4, 20) are two aligned words: load them and
++    // the first 4 bytes straight into registers.
++    static_assert(alignof(evmc_tx_context) >= 8);
++    static_assert(offsetof(evmc_tx_context, block_coinbase) % 8 == 4);
++    const uint8_t* const a = state.get_tx_context().block_coinbase.bytes;
++    uint32_t hi;
++    uint64_t mid;
++    uint64_t lo;
++    std::memcpy(&hi, __builtin_assume_aligned(a, 4), sizeof(hi));
++    std::memcpy(&mid, __builtin_assume_aligned(a + 4, 8), sizeof(mid));
++    std::memcpy(&lo, __builtin_assume_aligned(a + 12, 8), sizeof(lo));
++    stack.push(uint256{
++        __builtin_bswap64(lo), __builtin_bswap64(mid), uint64_t{__builtin_bswap32(hi)}, 0});
++#else
+     stack.push(intx::be::load<uint256>(state.get_tx_context().block_coinbase));
++#endif
+ }
+ 
+ inline void timestamp(StackTop stack, ExecutionState& state) noexcept

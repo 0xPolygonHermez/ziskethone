@@ -71,6 +71,11 @@ endif()
 #       thousands of distinct contracts no longer OOMs the heap. Ungated.
 #       (ZisK 256-bit div/mod/sdiv/smod are handled in-circuit by patch 03's
 #       u256 ABI under 1.4.0, so the former patch 08 is dropped.)
+#   11: COINBASE without misaligned accesses, gated on ZEG_ZISK. block_coinbase
+#       is 4 mod 8 in the tx context and be::load copied it through 8-byte
+#       loads/stores that cross a ZisK memory word (7 costly unaligned accesses
+#       per opcode under -mtune=size); read it as one 32-bit + two aligned
+#       64-bit words instead.
 # Each patch is checked with `git apply --reverse --check` first; if it
 # is already applied we skip — that keeps the configure step idempotent
 # across rebuilds.
@@ -83,6 +88,7 @@ set(_evmone_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/07-evmone-precompile-reused-output.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/09-evmone-zisk-analyze-into-buffer.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/10-evmone-selfbalance-cache.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/11-evmone-zisk-coinbase-aligned-load.patch"
 )
 find_program(GIT_EXECUTABLE git REQUIRED)
 foreach(_patch IN LISTS _evmone_patches)
