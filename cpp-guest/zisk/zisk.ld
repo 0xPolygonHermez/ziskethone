@@ -1,32 +1,27 @@
-/* Copy of zisk's own ziskbuild/zisk_linker_script.ld, taken from the
- * pre-develop-1.2.0-alpha pin (commit 4b11d589c). Sourced directly from
- * upstream instead of hand-maintained, so it can be re-diffed against the
- * pinned zisk repo on any future toolchain bump.
+/* Copy of zisk's own ziskbuild/zisk_linker_script.ld, taken verbatim from the
+ * pre-develop-1.4.0-alpha pin (commit aaa8c4982, "feature/input-2gb"). Sourced
+ * directly from upstream so it can be re-diffed against the pinned zisk repo on
+ * any future toolchain bump.
  *
- * ONE deviation from upstream: the `text` segment is FLAGS(1) (execute-only),
- * not FLAGS(5) (execute-and-read) — see the PHDRS block below. */
+ * New memory map (2 GB input): input data at 0x1000_0000 (2 GB), ROM at
+ * 0x9000_0000 (128 MB), a 128 MB PROT_NONE stack guard below RAM, and a 192 KB
+ * ZisK-library scratch region (_zisklib_ram_data_size) reserved at the top of
+ * RAM just below the 64 KB float-ram window (so the heap now tops out at
+ * 0xBFFC_0000 instead of 0xBFFF_0000).
+ *
+ * No local deviation any more: upstream now ships the execute-only `.text`
+ * (FLAGS(1) = PF_X without PF_R) that this file previously patched in by hand. */
 
 OUTPUT_FORMAT("elf64-littleriscv")
 OUTPUT_ARCH("riscv")
 ENTRY(_start)
 
 MEMORY {
-  rom   (xa) : ORIGIN = 0x80000000, LENGTH = 0x08000000
+  rom   (xa) : ORIGIN = 0x90000000, LENGTH = 0x08000000
   ram   (wxa) : ORIGIN = 0xa0000000, LENGTH = 0x20000000
 }
 
 PHDRS {
-  /* FLAGS(1) = PF_X only: execute, NOT read. ZisK's ELF loader treats a
-     PF_X | PF_R segment as "could be code or data anywhere", so it materializes
-     the WHOLE segment a second time as read-only ROM data (elf_extraction.rs,
-     `if is_read { out.ro.push(...) }`) and prints a WARNING banner saying
-     execute-and-read is slower. Our .text is code only — every constant lands in
-     .rodata/.srodata below, and memset.s's jump table is jumped into, not loaded
-     — so dropping PF_R costs nothing and keeps 1.2 MB of instructions out of the
-     readable ROM image. Upstream ships FLAGS(5); this is the only difference.
-     Guard: if something ever does read from .text, its bytes are no longer in ROM
-     data, reads return 0, and the block hash changes — the end-to-end check
-     catches it. */
   text PT_LOAD FLAGS(1);
   rodata PT_LOAD FLAGS(4);
   data PT_LOAD FLAGS(6);
@@ -42,19 +37,21 @@ _general_registers_data_size = 0x8000;    /* 32 kB */
 _float_registers_data_size   = 0x8000;    /* 32 kB */
 _output_data_size            = 0x20000;   /* 128 KB reserved */
 _float_ram_data_size         = 0x10000;   /* 64 KB reserved */
+_zisklib_ram_data_size       = 0x30000;   /* 192 KB reserved (ZisK library scratch);
+                                             keep in sync with ZISKLIB_RAM_SIZE in core/src/mem.rs */
 
 /*
 
-0x4000_0000  ┌────────────────────┐← free input entry
+0x1000_0000  ┌────────────────────┐← free input entry
              │    input data      │
-             │       (1GB)        │
-0x7FFF_FFFF  └────────────────────┘
-0x8000_0000  ┌────────────────────┐
+             │       (2GB)        │
+0x8FFF_FFFF  └────────────────────┘
+0x9000_0000  ┌────────────────────┐
              │     ROM data       │
              │      (128MB)       │
-0x87FF_FFFF  └────────────────────┘
+0x97FF_FFFF  └────────────────────┘
                        ↑
-                    384 MB
+                    128 MB (stack guard)
                        ↓
 0xA000_0000  ┌────────────────────┐← _init_stack_bottom
              │                    │
@@ -78,8 +75,11 @@ _float_ram_data_size         = 0x10000;   /* 64 KB reserved */
              │                    │
              │                    │
              │                    │
-0xBFFF_0000  ├────────────────────┤ ← _heap_top
-             │ float ram          │
+0xBFFC_0000  ├────────────────────┤ ← _heap_top
+             │ zisklib ram        │  192 KB reserved (ZisK library scratch)
+             │  0x30000 bytes     │  = ZISKLIB_RAM (core/src/mem.rs)
+0xBFFF_0000  ├────────────────────┤
+             │ float ram          │  64 KB reserved
 0xC000_0000  └────────────────────┘
 
 */
@@ -119,16 +119,16 @@ SECTIONS
   /* reserved space for stack data */
   .stack_data (NOLOAD): {
   PROVIDE(_stack_start = .);
-  PROVIDE(_init_stack_bottom = .); # alias for the start of the reserved stack region
+  PROVIDE(_init_stack_bottom = .); /* alias for the start of the reserved stack region */
   . = . + _stack_size;
-  PROVIDE(_init_stack_top = .); # reserve 4M bytes for the initialisation stack
+  PROVIDE(_init_stack_top = .); /* reserve 4M bytes for the initialisation stack */
   } >ram AT>ram :stack_data
-
+  
   /* reserved space for general registers */
 
   .general_registers_data (NOLOAD) : {
     PROVIDE(_general_registers_data_start = .);
-    . = . + _general_registers_data_size;
+    . = . + _general_registers_data_size; 
     PROVIDE(_general_registers_data_end = .);
   } >ram AT>ram :general_registers_data
 
@@ -136,7 +136,7 @@ SECTIONS
 
   .float_registers_data (NOLOAD) : {
     PROVIDE(_float_registers_data_start = .);
-    . = . + _float_registers_data_size;
+    . = . + _float_registers_data_size; 
     PROVIDE(_float_registers_data_end = .);
   } >ram AT>ram :float_registers_data
 
@@ -144,7 +144,7 @@ SECTIONS
 
   .output_data (NOLOAD) : {
     PROVIDE(_output_data_start = .);
-    . = . + _output_data_size;
+    . = . + _output_data_size; 
     PROVIDE(_output_data_end = .);
   } >ram AT>ram :output_data
 
@@ -153,12 +153,27 @@ SECTIONS
   .bss : {
     PROVIDE(_bss_start = .);
     *(.bss .bss.* .sbss .sbss.*);
-    PROVIDE(_bss_end = .); # ... and one at the end
+    PROVIDE(_bss_end = .); /* ... and one at the end */
   } >ram AT>ram :bss
 
   PROVIDE(_heap_bottom = .);
-  PROVIDE(_heap_top = ORIGIN(ram) + LENGTH(ram) - _float_ram_data_size);
+  PROVIDE(_heap_top = ORIGIN(ram) + LENGTH(ram) - _float_ram_data_size - _zisklib_ram_data_size);
   PROVIDE(_heap_size = _heap_top - _heap_bottom);
+
+  /* EF zkVM standard §9 names the allocator bounds `_heap_start` / `_heap_end`.
+     Same two addresses as `_heap_bottom` / `_heap_top` above; added alongside them
+     rather than renaming, so ziskos's allocator (which reads _heap_bottom /
+     _heap_size) is untouched.
+
+     Assigned UNCONDITIONALLY, not with PROVIDE: PROVIDE only materializes a symbol
+     that some input object *references*, and an EF consumer discovers these by
+     reading the ELF symbol table — it never references them at link time. Under
+     PROVIDE they would be absent from .symtab for any guest that does not itself
+     mention them, i.e. exactly the case the standard requires them for. The values
+     are recomputed rather than aliased so they do not depend on the PROVIDEs above
+     having materialized either. */
+  _heap_start = .;
+  _heap_end = ORIGIN(ram) + LENGTH(ram) - _float_ram_data_size - _zisklib_ram_data_size;
 
   _end = .;
 }

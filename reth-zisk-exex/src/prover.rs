@@ -37,7 +37,7 @@ const CHUNK_BYTES: usize = 3 * 1024 * 1024;
 /// Largest framed input still sent as a single inline `InputChunk`. Above this
 /// the input is streamed in `CHUNK_BYTES` pieces via `PushJobInput`, which
 /// lifts the 128 MiB inline cap up to the zkVM input-region limit
-/// (`MAX_INPUT_SIZE` = 1 GiB today, ~2 GiB in the next coordinator release).
+/// (`MAX_INPUT_SIZE` = 2 GiB on the pre-develop-1.4.0-alpha coordinator).
 /// A margin under the 128 MiB message cap leaves room for the 16-byte frame
 /// header and the `ProveRequest` protobuf overhead.
 const INLINE_MAX: usize = 100 * 1024 * 1024;
@@ -287,7 +287,7 @@ impl CoordinatorProver {
         let chunks = framed.len().div_ceil(CHUNK_BYTES);
         info!(%job_id, bytes = framed.len(), chunks, "streaming input");
         if framed.len() as u64 > grpc_zisk_max_input() {
-            warn!(%job_id, bytes = framed.len(), "framed input exceeds the 1 GiB zkVM input cap; the coordinator may reject it");
+            warn!(%job_id, bytes = framed.len(), "framed input exceeds the 2 GiB zkVM input cap; the coordinator may reject it");
         }
         // Lazily yield chunks (one `to_vec` copy in flight at a time, not a
         // second full copy of the input) tagged with `job_id`.
@@ -306,11 +306,11 @@ impl CoordinatorProver {
     }
 }
 
-/// The coordinator's zkVM input-region cap (`MAX_INPUT_SIZE`), 1 GiB today.
-/// A soft client-side check only — the coordinator is the authority, so the
-/// coming 1→2 GiB bump needs no change here.
+/// The coordinator's zkVM input-region cap (`MAX_INPUT_SIZE`): 2 GiB on
+/// pre-develop-1.4.0-alpha (`core/src/mem.rs` `MAX_INPUT_SIZE = 0x8000_0000`).
+/// A soft client-side check only — the coordinator is the authority.
 fn grpc_zisk_max_input() -> u64 {
-    0x4000_0000
+    0x8000_0000
 }
 
 
