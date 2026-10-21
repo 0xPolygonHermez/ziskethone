@@ -6,21 +6,23 @@ ZisK DMA precompile markers in place, instead of calling the out-of-line `mem*`
 in `zkvm_mem.s` (the ZisK memory ABI's weak libc functions). It cuts about 12% of a block's steps and 3–4% of its area, and it does
 not change the block hash.
 
-The flag only exists in a patched GCC 14.3.0. A stock compiler cannot build with
+The flag only exists in a patched GCC, 14.3.0 or 15.2.0 (one patch per release
+under `cpp-guest/patches/gcc/gcc-<version>/`). A stock compiler cannot build with
 it, so the CMake option `ZEG_ZISK_DMA` is **OFF** by default. For how the
 lowering works and where the numbers come from, see
 [`../patches/gcc/README.md`](../patches/gcc/README.md).
 
 ## Prerequisites
 
-- **xPack `riscv-none-elf-gcc` 14.3.0-1**, unpacked at
-  `~/.local/xPacks/xpack-riscv-none-elf-gcc-14.3.0-1` (download the linux-x64
-  tarball from the
+- **xPack `riscv-none-elf-gcc` of the same release**, 14.3.0-1 or 15.2.0-1,
+  unpacked at `~/.local/xPacks/xpack-riscv-none-elf-gcc-<version>-1` (download
+  the linux-x64 tarball from the
   [xPack releases](https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases)).
   The patched compiler reuses its C++ headers, assembler and linker, so it must be
-  exactly this version. If it is installed somewhere else, set `ZISK_XPACK_DIR`.
+  exactly the version being built. If it is installed somewhere else, set
+  `ZISK_XPACK_DIR`.
 - **A host `g++-13`, `g++-12` or `g++-11`** with the matching `gcc`. GCC 14's
-  sources do not build with a newer host compiler. The script picks one of these
+  sources do not build with a newer host compiler (15's build with the same one). The script picks one of these
   automatically; otherwise set `CC` and `CXX`.
 - `curl`, `tar`, `make`, and a few GB free for the GCC build tree (`/tmp` by
   default).
@@ -30,12 +32,14 @@ lowering works and where the numbers come from, see
 ## 1. Build the patched compiler (once)
 
 ```bash
-cpp-guest/patches/gcc/build-toolchain.sh
+cpp-guest/patches/gcc/build-toolchain.sh              # GCC 14.3.0, the default
+cpp-guest/patches/gcc/build-toolchain.sh --gcc 15.2.0
 ```
 
-The script downloads GCC 14.3.0, applies
-`0001-riscv-zisk-dma-lowering.patch`, builds only the compiler (about 10
-minutes) and installs it into `~/.local/xPacks/zisk-dma-gcc-14.3.0`. Before it
+The script downloads that GCC release, applies
+`gcc-<version>/0001-riscv-zisk-dma-lowering.patch`, builds only the compiler
+(about 10 minutes) and installs it into `~/.local/xPacks/zisk-dma-gcc-<version>`.
+`ZISK_GCC_VERSION` in the environment selects the release too. Before it
 finishes, it checks that the new compiler accepts `-mzisk-dma` and really emits
 the DMA markers.
 
@@ -45,16 +49,17 @@ example after changing the patch.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ZISK_DMA_GCC_PREFIX` | `~/.local/xPacks/zisk-dma-gcc-14.3.0` | where the patched compiler is installed |
-| `ZISK_XPACK_DIR` | `~/.local/xPacks/xpack-riscv-none-elf-gcc-14.3.0-1` | the xPack toolchain it borrows from |
-| `ZISK_DMA_GCC_BUILD_DIR` | `$TMPDIR/zisk-dma-gcc-build` | sources and build tree |
+| `ZISK_GCC_VERSION` | `14.3.0` | GCC release to build (`--gcc` overrides it); `15.2.0` is the other port |
+| `ZISK_DMA_GCC_PREFIX` | `~/.local/xPacks/zisk-dma-gcc-<version>` | where the patched compiler is installed |
+| `ZISK_XPACK_DIR` | `~/.local/xPacks/xpack-riscv-none-elf-gcc-<version>-1` | the xPack toolchain it borrows from |
+| `ZISK_DMA_GCC_BUILD_DIR` | `$TMPDIR/zisk-dma-gcc-build-<version>` | sources and build tree |
 | `CC`, `CXX` | first `gcc-N`/`g++-N` found, N = 13, 12, 11 | host compiler for the build |
 
 ## 2. Put it first on `PATH`
 
 ```bash
-export PATH="$HOME/.local/xPacks/zisk-dma-gcc-14.3.0/bin:$PATH"
-riscv-none-elf-g++ --version | head -1   # should print 14.3.0
+export PATH="$HOME/.local/xPacks/zisk-dma-gcc-14.3.0/bin:$PATH"   # or zisk-dma-gcc-15.2.0
+riscv-none-elf-g++ --version | head -1   # should print 14.3.0 (or 15.2.0)
 ```
 
 `toolchain.cmake` uses the first `riscv-none-elf-g++` it finds on `PATH`, so the
@@ -110,8 +115,11 @@ wrong hash without any error.
   compiler. Either the patched one is not first on `PATH`, or the build directory
   was configured with another compiler before. Fix `PATH` and use a new build
   directory.
-- **`xPack 14.3.0 not found`**: install the xPack 14.3.0-1 toolchain or point
-  `ZISK_XPACK_DIR` at it. No other version works.
+- **`xPack <version> not found`**: install the xPack toolchain of that same
+  release (14.3.0-1 or 15.2.0-1) or point `ZISK_XPACK_DIR` at it. No other
+  version works.
+- **`no patches found in .../gcc-<version>`**: there is no port of the lowering
+  to that GCC release; only 14.3.0 and 15.2.0 have one.
 - **`no g++-13/12/11 found for the host build`**: install one, for example
   `sudo apt install g++-13`, or set `CC` and `CXX`.
 - **The build fails inside `libcody` with `char8_t` errors**: the host compiler is
