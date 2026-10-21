@@ -582,9 +582,7 @@ evmc::bytes32 ZiskStateDB::get_block_hash(int64_t block_number) const noexcept {
     bal_commit_pending();
     const int64_t current = static_cast<int64_t>(consensus_.number());
     const int64_t diff    = current - block_number;
-    // EVM BLOCKHASH semantics: zero outside [1, 256] (the opcode's own
-    // depth limit; EIP-2935 history extends this via the system
-    // contract, not via the opcode).
+    // EVM BLOCKHASH semantics: zero outside the opcode's [1, 256] depth window.
     if (diff < 1 || diff > 256) {
         return {};
     }
@@ -595,60 +593,23 @@ evmc::bytes32 ZiskStateDB::get_block_hash(int64_t block_number) const noexcept {
     if (dump_used) std::fprintf(stderr, "USED blockhash %llu\n", static_cast<unsigned long long>(target));
 #endif
 
-    // Prague+ (EIP-2935): serve BLOCKHASH from the history-storage contract,
-    // not the input ancestor set. The start-of-block system call wrote slot
-    // (N-1) % kHistoryServeWindow = hash(N-1) (see pre_execute_block), and the
-    // slots for [N-256, N-2] are already in the pre-execution (parent) state.
-    // Reading slot target % kHistoryServeWindow is authenticated by the MPT
-    // against the committed parent state root, so the prover can neither forge
-    // an ancestor (old: a sparse unlinked record) nor suppress one to zero
-    // (old: a missing record). We read the slot DIRECTLY (not through the
-    // predeploy bytecode) and must NOT perturb EIP-2929 warm / BAL tracking —
-    // this is a protocol read, not an SLOAD, so no mark_touched_at.
-    if (is_prague_or_later()) {
-        const uint64_t slot = target % kHistoryServeWindow;
-        evmc::bytes32 key{};
-        for (int i = 0; i < 8; ++i) {
-            key.bytes[31 - i] = static_cast<uint8_t>(slot >> (8 * i));
-        }
-        const size_t idx = storages_.find(kHistoryStorageAddress, key);
-        if (idx != Storages::npos) {
-            const evmc::bytes32 v = storages_.value_at(idx);
-            bool nonzero = false;
-            for (uint8_t b : v.bytes) {
-                if (b != 0) { nonzero = true; break; }
-            }
-            if (nonzero) {
-                // Post-fork: the slot holds hash(target), trie-authenticated
-                // against the committed parent state root. This is the only
-                // branch the live post-Prague networks ever take, and the
-                // prover cannot forge or zero it. Sound by construction.
-                return v;
-            }
-            // Slot present but zero: the 2935 ring buffer has not recorded
-            // `target` yet. A real block hash is never zero, so this happens
-            // ONLY in the <256-block warm-up right after the Prague transition
-            // (pre-fork ancestors still within the opcode's 256 window) — a
-            // scenario that cannot occur on the live post-Prague networks. Fall
-            // through to the input ancestor set for that transition-only case,
-            // matching reth's header-based BLOCKHASH there.
-        } else {
-            // Slot absent from the witness. On a live post-Prague block every
-            // in-window ancestor's slot is populated and witnessed, so a miss
-            // means an incomplete witness — halt rather than fall back to the
-            // unauthenticated (forgeable) ancestor set. Never fall through here.
-            fatal("get_block_hash: EIP-2935 history slot not in witness");
-        }
-    }
-
-    // Pre-Prague (EEST / historical replay only), or the post-Prague transition
-    // warm-up (slot present == 0) — neither occurs on the live post-Prague
-    // networks, so the sparse-ancestor-set caveat does not weaken live
-    // soundness. NB: consensus.parent_hash() is the parent's STATE_ROOT in this
-    // guest's binary format, NOT the parent's block hash — never use it here.
+    // Serve BLOCKHASH from the input's block chain. PreviousBlocks has already
+    // verified that the WHOLE list is a contiguous parent_hash-linked chain
+    // anchored at index 0 (the parent, whose hash is pinned to the committed
+    // block's parent_hash — see run.cpp), so every record is provably the real
+    // ancestor and a forged or gapped list is rejected at construction. The
+    // witness carries every block from the parent down to the deepest BLOCKHASH
+    // target, so an in-window number that is missing means an incomplete
+    // witness — halt rather than return an unproven hash.
+    //
+    // NB: EIP-2935's start-of-block system call still runs in pre_execute_block
+    // (it updates the history-storage contract's state); it is simply not used
+    // as the BLOCKHASH source. consensus.parent_hash() is the parent's
+    // STATE_ROOT in this guest's binary format, NOT the parent's block hash.
     if (const evmc::bytes32* h = previous_blocks_.hash_of_number(target)) {
         return *h;
     }
+    zeg::fatal("get_block_hash: requested ancestor not in the verified block chain");
     return {};
 }
 

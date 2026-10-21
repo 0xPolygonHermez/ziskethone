@@ -162,22 +162,23 @@ PreviousBlocks::PreviousBlocks(const uint8_t*& cursor) {
     }
     advance_checked(cursor, count * kRecordSize);
 
-    // Linkage check — SPARSE-tolerant. The ancestor set carries only the
-    // blocks the witness referenced for BLOCKHASH, so it may have gaps
-    // (e.g. {parent, N-100}). We therefore verify parent_hash linkage ONLY
-    // between records that are consecutive BY NUMBER (child.number ==
-    // next.number + 1); a gap is legitimate and is not an error. Records
-    // are ordered descending by number (index 0 = parent), so a genuine
-    // adjacency shows up as a 1-step decrement between neighbours.
-    //
-    // The link from hash(block[0]) to the current block's parent_hash is
-    // checked outside this class, against `ConsensusInfo::parent_hash()`.
+    // Full-chain verification. The records are ordered descending by number,
+    // index 0 = parent. Require the WHOLE list to be a contiguous
+    // parent_hash-linked chain: every adjacent pair decrements the number by
+    // exactly 1 AND links by parent_hash. Index 0's hash is pinned to the
+    // committed block's parent_hash (checked in run.cpp), so a chain that
+    // verifies is provably the real sequence of ancestors — a prover can
+    // neither forge an ancestor (the link would break) nor omit one (the number
+    // would jump by more than 1). BLOCKHASH then serves from it directly
+    // (ZiskStateDB::get_block_hash). The input builders (exex, input-gen, EEST
+    // bridge) ship every block from the parent down to the deepest BLOCKHASH
+    // target, so the chain is never sparse.
     for (size_t i = 0; i + 1 < views_.size(); ++i) {
-        const uint64_t child_num = views_[i].number();
-        const uint64_t next_num  = views_[i + 1].number();
-        if (child_num == next_num + 1 &&
-            views_[i].parent_hash() != hashes_[i + 1]) {
-            fatal("PreviousBlocks: parent_hash chain mismatch");
+        if (views_[i].number() != views_[i + 1].number() + 1) {
+            fatal("PreviousBlocks: ancestor chain is not contiguous");
+        }
+        if (views_[i].parent_hash() != hashes_[i + 1]) {
+            fatal("PreviousBlocks: ancestor chain parent_hash link broken");
         }
     }
 }

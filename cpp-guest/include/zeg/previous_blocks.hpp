@@ -126,11 +126,13 @@ public:
         std::span<const uint8_t> extra_data() const noexcept;
     };
 
-    // Parse `u64 count` followed by `count` × 768-byte records, compute
-    // each header's keccak hash, verify parent-linkage between records
-    // that are consecutive by number (gaps allowed — sparse sets are
-    // valid), and build the number→index map. Aborts via zeg::fatal on a
-    // linkage mismatch between adjacent records.
+    // Parse `u64 count` followed by `count` × 768-byte records (ordered
+    // descending by number, index 0 = parent) and compute each header's keccak
+    // hash. Then VERIFY the whole list is a contiguous parent_hash-linked chain:
+    // every adjacent pair must decrement the number by exactly 1 and link by
+    // parent_hash. Index 0's hash is pinned to the committed block's parent_hash
+    // (run.cpp), so a verified chain authenticates every ancestor — BLOCKHASH
+    // serves from it directly. Aborts via zeg::fatal on any gap or broken link.
     explicit PreviousBlocks(const uint8_t*& cursor);
 
     size_t size () const noexcept { return views_.size(); }
@@ -141,9 +143,10 @@ public:
     const View&          at  (size_t idx) const { return views_[idx]; }
     const evmc::bytes32& hash(size_t idx) const { return hashes_[idx]; }
 
-    // Look up a record by its block number and return its recomputed hash,
-    // or nullptr if absent. Used by BLOCKHASH so a sparse ancestor set
-    // resolves the right hash for each depth the block referenced.
+    // Look up a record by its block number and return its recomputed hash, or
+    // nullptr if absent. Used by BLOCKHASH. The constructor has verified the
+    // whole list is a contiguous parent_hash-linked chain anchored at the pinned
+    // parent, so every record it returns is an authenticated ancestor.
     const evmc::bytes32* hash_of_number(uint64_t number) const noexcept;
 
 private:

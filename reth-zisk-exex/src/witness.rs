@@ -271,14 +271,17 @@ where
     let state = state_provider.witness(Default::default(), hashed, ExecutionWitnessMode::Legacy)?;
     let proofs = t.elapsed();
 
-    // The parent and every BLOCKHASH target execution read.
+    // The CONTIGUOUS parent_hash-linked chain from the parent down to the
+    // deepest BLOCKHASH target execution read — not just the parent and the read
+    // targets. The guest authenticates a BLOCKHASH ancestor by walking this
+    // chain from the parent (whose hash is pinned to the committed block's
+    // parent_hash), so every block on the chain down to the deepest read must be
+    // present; a sparse set leaves a deep read unprovable (it halted the guest
+    // with "ancestor neither in the EIP-2935 history nor on the contiguous
+    // witness chain"). The intermediate headers the block does not itself read
+    // cost ~768 B each and do not change the committed root.
     let lowest = exec.block_hashes.iter().copied().min().unwrap_or(number.saturating_sub(1)).min(number.saturating_sub(1));
-    let mut headers = Vec::new();
-    for (n, rlp) in ancestor_headers_numbered(provider, block.parent_hash, lowest)? {
-        if n + 1 == number || exec.block_hashes.contains(&n) {
-            headers.push(rlp);
-        }
-    }
+    let headers = ancestor_headers(provider, block.parent_hash, lowest)?;
 
     let exec_codes_outside: usize = exec.codes.iter().filter(|h| !code_hashes.contains(*h)).count();
     let witness = rust_input_gen::rpc::ExecutionWitness { state, codes, keys, headers };
@@ -577,27 +580,6 @@ fn account_part(
         slots,
         code,
     })
-}
-
-/// `ancestor_headers` with each header's number.
-fn ancestor_headers_numbered<P>(provider: &P, parent: B256, lowest: u64) -> Result<Vec<(u64, alloy_primitives::Bytes)>>
-where
-    P: HeaderProvider<Header = alloy_consensus::Header>,
-{
-    let mut out = Vec::new();
-    let mut hash = parent;
-    loop {
-        let header = provider.header(hash)?.with_context(|| format!("ancestor header {hash} not found"))?;
-        let n = header.number;
-        hash = header.parent_hash;
-        let mut buf = Vec::new();
-        alloy_rlp::Encodable::encode(&header, &mut buf);
-        out.push((n, buf.into()));
-        if n <= lowest || n == 0 {
-            break;
-        }
-    }
-    Ok(out)
 }
 
 /// RLP headers from `parent` back by parent hash (not by number, so a block

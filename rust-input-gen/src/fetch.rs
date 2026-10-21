@@ -40,7 +40,7 @@ pub(crate) async fn fetch_offline_sources_online(
 
     // Witness first (a non-archive node prunes trie state within a few blocks
     // of head, so grab it before anything else). Sequential — no concurrency.
-    let witness = client
+    let mut witness = client
         .execution_witness(current.header.number, block_hash)
         .await?;
     info!(
@@ -50,6 +50,44 @@ pub(crate) async fn fetch_offline_sources_online(
         headers = witness.headers.len(),
         "fetched execution witness",
     );
+
+    // Backfill the ancestor headers into a CONTIGUOUS parent_hash-linked chain
+    // from the parent down to the deepest ancestor the block referenced. The
+    // guest serves BLOCKHASH from this chain (not EIP-2935) and verifies the
+    // WHOLE list is contiguous and linked, so a sparse witness set (only the
+    // referenced headers, which is all debug_executionWitness returns) would
+    // make a deep BLOCKHASH unprovable. Walk the canonical chain by parent hash
+    // and fetch each header's exact RLP with debug_getRawHeader.
+    {
+        use alloy::consensus::Header;
+        use alloy::rlp::Decodable;
+        let parent_number = current.header.number.saturating_sub(1);
+        // Deepest ancestor number the witness references (default: the parent).
+        let mut lowest = parent_number;
+        for raw in &witness.headers {
+            let mut s: &[u8] = raw.as_ref();
+            if let Ok(h) = Header::decode(&mut s) {
+                lowest = lowest.min(h.number);
+            }
+        }
+        let mut chain: Vec<alloy::primitives::Bytes> = Vec::new();
+        let mut hash = parent_hash;
+        loop {
+            let raw = client.raw_header_by_hash(hash).await?;
+            let mut s: &[u8] = raw.as_ref();
+            let h = Header::decode(&mut s)
+                .map_err(|e| anyhow::anyhow!("decoding raw ancestor header {hash}: {e}"))?;
+            let n = h.number;
+            let parent = h.parent_hash;
+            chain.push(raw);
+            if n <= lowest || n == 0 {
+                break;
+            }
+            hash = parent;
+        }
+        info!(from = parent_number, to = lowest, count = chain.len(), "backfilled contiguous ancestor chain");
+        witness.headers = chain;
+    }
 
     // Every account and slot the block accesses must become a leaf in the
     // StateRoot section (an empty one if it doesn't exist), so the guest can

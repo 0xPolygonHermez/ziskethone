@@ -633,14 +633,21 @@ Regressions are unchanged with the groundwork in place:
 An external static audit of the C++ guest reported 9 findings. All were verified
 against the code; the remediation (branch work on top of `24492dd`) is:
 
-- **#3 BLOCKHASH (Critical).** `ZiskStateDB::get_block_hash` now serves the opcode
-  from the EIP-2935 history-storage contract (`0x…2935`, slot `n % 8191`), read
-  directly and trie-authenticated against the committed parent state root — the
-  prover can no longer forge or zero an ancestor via a sparse/unlinked input set.
-  A present-but-zero slot (only possible in the <256-block warm-up right after
-  the Prague transition, which cannot occur on the live post-Prague networks)
-  falls back to the input ancestor set; an *absent* slot halts (never a forgeable
-  zero). Pre-Prague keeps the ancestor path (EEST only).
+- **#3 BLOCKHASH (Critical).** The input always carries the FULL contiguous
+  block chain from the parent down to the deepest BLOCKHASH target, and
+  `PreviousBlocks` verifies the whole list is a parent_hash-linked,
+  1-decrementing chain. Index 0 (the parent) is pinned to the committed block's
+  `parent_hash`, so a verified chain authenticates every ancestor — a prover can
+  neither forge an ancestor (the link breaks) nor omit one (the number jumps).
+  `get_block_hash` serves the opcode directly from this verified chain and halts
+  if a requested in-window ancestor is missing. (An earlier revision read the
+  EIP-2935 history contract instead, but the exex serves BLOCKHASH from headers
+  and does not put those slots in the witness, so it failed on any depth ≥ 2;
+  the linked-list approach needs no 2935 state. The EIP-2935 start-of-block
+  system call still runs — it updates the contract's state — it is just not the
+  BLOCKHASH source.) The input builders all ship the full chain: the exex
+  (`witness.rs`, both the BAL and re-exec paths), `input-gen` (`fetch.rs`
+  backfills it via `debug_getRawHeader`), and the EEST bridge (already contiguous).
 - **#1/#2/#8 fork + blob schedule (Critical/Low).** By default (the safe
   behavior, no flag needed), `ConsensusInfo::fork_id()` and the three blob
   accessors derive their values from the block's committed timestamp via the

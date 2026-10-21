@@ -43,11 +43,6 @@ constexpr evmc::address kHistoryStorageAddress{{
     0x10, 0xcb, 0x7A, 0x02, 0x33, 0x5B, 0x17, 0x53,
     0x20, 0x00, 0x29, 0x35,
 }};
-// EIP-2935 ring-buffer size (HISTORY_SERVE_WINDOW): the history-storage
-// contract keeps the last 8191 block hashes, with block n's hash at storage
-// slot n % 8191. The BLOCKHASH opcode's own [N-256, N-1] window is a subset,
-// so slot n % 8191 holds hash(n) for every n the opcode may request.
-constexpr uint64_t kHistoryServeWindow = 8191;
 // EIP-7002: withdrawal-requests predeploy. Dequeues pending withdrawal
 // requests when called with empty calldata. Each record is 76 bytes:
 // 20 source_address || 48 validator_pubkey || 8 amount_gwei (BE).

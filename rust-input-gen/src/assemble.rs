@@ -253,13 +253,12 @@ fn parent_from_witness(witness: &rpc::ExecutionWitness, parent_hash: B256) -> Re
 /// RLP-encoded ancestor headers reth's execution touched. No RPC. Returns
 /// the list parent-first (index 0 = parent), descending by number.
 ///
-/// SPARSE-OK. `witness.headers` contains only the ancestors the block
-/// actually referenced for BLOCKHASH — which may be sparse (a tx doing
-/// BLOCKHASH(N-1) and BLOCKHASH(N-100) yields just those two). The cpp-guest
-/// now resolves BLOCKHASH BY BLOCK NUMBER over this set (not positionally),
-/// so gaps are fine: any depth the block never asks for is simply absent and
-/// the guest returns zero for it (never queried). We therefore emit whatever
-/// the witness carries, without a contiguity requirement.
+/// The caller passes a CONTIGUOUS `witness.headers` (the RPC path backfills it
+/// to a full parent_hash-linked chain from the parent down to the deepest
+/// BLOCKHASH target; see `fetch.rs`). The cpp-guest serves BLOCKHASH from this
+/// chain and verifies the whole list is contiguous and linked, so a sparse set
+/// would make a deep BLOCKHASH unprovable. This function only orders/dedups the
+/// headers parent-first; it does not itself enforce contiguity.
 ///
 /// Index 0 is always the already-recovered parent `Block` (it carries the
 /// anchor the guest checks against `ConsensusInfo::parent_hash`). If
