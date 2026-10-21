@@ -111,7 +111,18 @@ The host compiler matters too: GCC 14's bundled `libcody` does not build with a
 host g++ newer than ~14 (`u8""` literals became `char8_t`). The script picks
 g++-13/12/11 if one is installed; otherwise set `CXX`/`CC` yourself.
 
-## Two traps worth remembering
+## Three traps worth remembering
+
+* GCC must see the assembler at configure time. Without it (only `all-gcc` is
+  built, and the xPack binutils are grafted in afterwards) configure assumes no
+  assembler features, `HAVE_COMDAT_GROUP` among them, and inline-function
+  statics go to `.gnu.linkonce.b.*`. `zisk.ld` did not collect those, so
+  modexp's 64 KB `exp_bits_buf` ended up at `_heap_bottom`, on top of the heap,
+  and any block with a MODEXP call corrupted the first heap allocation. It only
+  bit where no `riscv-none-elf-as` happened to be on `PATH` during the build.
+  The script now passes `--with-as`/`--with-ld` and refuses (and rebuilds over)
+  a compiler that emits linkonce sections; `zisk.ld` also gathers
+  `.gnu.linkonce.*` as a backstop.
 
 * The `P` mode iterator expands a pattern once per mode, so a `define_insn` using
   it needs `<mode>` in its name or the build dies on duplicate definitions.
