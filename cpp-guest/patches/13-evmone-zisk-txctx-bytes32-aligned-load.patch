@@ -1,0 +1,99 @@
+--- a/lib/evmone/instructions.hpp
++++ b/lib/evmone/instructions.hpp
+@@ -513,6 +513,27 @@
+         // The address is the last 20 of the 24 bytes.
+         return {w2, w1, w0 & 0xffffffff, 0};
+ }
++
++/// The evmc_uint256be (32 big-endian bytes) at byte Offset of `owner`, read as a uint256
++/// straight from registers. Like zisk_load_address but for a full 32-byte value: intx::be::load
++/// copies the 32 bytes (alignment 1) through a stack buffer, which under -mtune=size becomes
++/// word-crossing unaligned ZisK accesses. Owner is 8-aligned and Offset is a multiple of 8, so
++/// the value is four aligned 8-byte words; read them, bswap, and assemble the limbs directly.
++template <typename Owner, size_t Offset>
++inline uint256 zisk_load_bytes32(const Owner& owner) noexcept
++{
++    static_assert(alignof(Owner) >= 8);
++    static_assert(Offset % 8 == 0);
++    static_assert(Offset + 32 <= sizeof(Owner));
++    const auto* const p = reinterpret_cast<const uint8_t*>(&owner) + Offset;
++    const auto word = [p](size_t i) noexcept {
++        uint64_t w;
++        std::memcpy(&w, __builtin_assume_aligned(p + 8 * i, 8), sizeof(w));
++        return __builtin_bswap64(w);  // the first byte is the most significant
++    };
++    // intx::uint256 limb[0] is least significant; big-endian puts the most significant word first.
++    return {word(3), word(2), word(1), word(0)};
++}
+ #endif
+ 
+ inline void address(StackTop stack, ExecutionState& state) noexcept
+@@ -560,7 +581,11 @@
+ 
+ inline void callvalue(StackTop stack, ExecutionState& state) noexcept
+ {
++#if defined(ZEG_ZISK)
++    stack.push(zisk_load_bytes32<evmc_message, offsetof(evmc_message, value)>(*state.msg));
++#else
+     stack.push(intx::be::load<uint256>(state.msg->value));
++#endif
+ }
+ 
+ inline void calldataload(StackTop stack, ExecutionState& state) noexcept
+@@ -652,12 +677,20 @@
+ 
+ inline void gasprice(StackTop stack, ExecutionState& state) noexcept
+ {
++#if defined(ZEG_ZISK)
++    stack.push(zisk_load_bytes32<evmc_tx_context, offsetof(evmc_tx_context, tx_gas_price)>(state.get_tx_context()));
++#else
+     stack.push(intx::be::load<uint256>(state.get_tx_context().tx_gas_price));
++#endif
+ }
+ 
+ inline void basefee(StackTop stack, ExecutionState& state) noexcept
+ {
++#if defined(ZEG_ZISK)
++    stack.push(zisk_load_bytes32<evmc_tx_context, offsetof(evmc_tx_context, block_base_fee)>(state.get_tx_context()));
++#else
+     stack.push(intx::be::load<uint256>(state.get_tx_context().block_base_fee));
++#endif
+ }
+ 
+ inline void blobhash(StackTop stack, ExecutionState& state) noexcept
+@@ -672,7 +705,11 @@
+ 
+ inline void blobbasefee(StackTop stack, ExecutionState& state) noexcept
+ {
++#if defined(ZEG_ZISK)
++    stack.push(zisk_load_bytes32<evmc_tx_context, offsetof(evmc_tx_context, blob_base_fee)>(state.get_tx_context()));
++#else
+     stack.push(intx::be::load<uint256>(state.get_tx_context().blob_base_fee));
++#endif
+ }
+ 
+ inline void slotnum(StackTop stack, ExecutionState& state) noexcept
+@@ -828,7 +865,11 @@
+ 
+ inline void prevrandao(StackTop stack, ExecutionState& state) noexcept
+ {
++#if defined(ZEG_ZISK)
++    stack.push(zisk_load_bytes32<evmc_tx_context, offsetof(evmc_tx_context, block_prev_randao)>(state.get_tx_context()));
++#else
+     stack.push(intx::be::load<uint256>(state.get_tx_context().block_prev_randao));
++#endif
+ }
+ 
+ inline void gaslimit(StackTop stack, ExecutionState& state) noexcept
+@@ -838,7 +879,11 @@
+ 
+ inline void chainid(StackTop stack, ExecutionState& state) noexcept
+ {
++#if defined(ZEG_ZISK)
++    stack.push(zisk_load_bytes32<evmc_tx_context, offsetof(evmc_tx_context, chain_id)>(state.get_tx_context()));
++#else
+     stack.push(intx::be::load<uint256>(state.get_tx_context().chain_id));
++#endif
+ }
+ 
+ inline void selfbalance(StackTop stack, ExecutionState& state) noexcept

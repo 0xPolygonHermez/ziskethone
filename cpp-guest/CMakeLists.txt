@@ -82,6 +82,11 @@ endif()
 #       reads an evmc address as the three aligned 8-byte words of its 8-aligned
 #       owner (evmc_message / evmc_tx_context) that cover it, whether it is 0 or
 #       4 mod 8.
+#   13: GASPRICE, CALLVALUE, BASEFEE, BLOBBASEFEE, PREVRANDAO and CHAINID the
+#       same way, gated on ZEG_ZISK: a 32-byte sibling helper (zisk_load_bytes32)
+#       reads the evmc_uint256be field as four aligned 8-byte bswap loads instead
+#       of a byte-wise intx::be::load. Every target field is 8-aligned in its
+#       8-aligned owner (evmc_tx_context / evmc_message), so no 4-mod-8 case.
 # Each patch is checked with `git apply --reverse --check` first; if it
 # is already applied we skip — that keeps the configure step idempotent
 # across rebuilds.
@@ -96,6 +101,7 @@ set(_evmone_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/10-evmone-selfbalance-cache.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/11-evmone-zisk-coinbase-aligned-load.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/12-evmone-zisk-address-aligned-load.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/13-evmone-zisk-txctx-bytes32-aligned-load.patch"
 )
 find_program(GIT_EXECUTABLE git REQUIRED)
 foreach(_patch IN LISTS _evmone_patches)
