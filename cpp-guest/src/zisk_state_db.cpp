@@ -588,19 +588,64 @@ evmc::bytes32 ZiskStateDB::get_block_hash(int64_t block_number) const noexcept {
     if (diff < 1 || diff > 256) {
         return {};
     }
-    // The ancestor set is SPARSE (only the blocks the witness referenced), so
-    // resolve by block number, not positionally. A missing ancestor yields
-    // zero — correct, since the witness ships every depth the block asks for.
-    //
-    // NB: consensus.parent_hash() is the parent's STATE_ROOT in this guest's
-    // binary format (the pre-execution root anchor), NOT the parent's block
-    // hash — never use it for BLOCKHASH.
     const uint64_t target = static_cast<uint64_t>(block_number);
 #if !defined(ZEG_ZISK)
     // DEBUG (host): report each BLOCKHASH depth used (see Contracts::index_of).
     static const bool dump_used = std::getenv("ZEG_DUMP_USED") != nullptr;
     if (dump_used) std::fprintf(stderr, "USED blockhash %llu\n", static_cast<unsigned long long>(target));
 #endif
+
+    // Prague+ (EIP-2935): serve BLOCKHASH from the history-storage contract,
+    // not the input ancestor set. The start-of-block system call wrote slot
+    // (N-1) % kHistoryServeWindow = hash(N-1) (see pre_execute_block), and the
+    // slots for [N-256, N-2] are already in the pre-execution (parent) state.
+    // Reading slot target % kHistoryServeWindow is authenticated by the MPT
+    // against the committed parent state root, so the prover can neither forge
+    // an ancestor (old: a sparse unlinked record) nor suppress one to zero
+    // (old: a missing record). We read the slot DIRECTLY (not through the
+    // predeploy bytecode) and must NOT perturb EIP-2929 warm / BAL tracking —
+    // this is a protocol read, not an SLOAD, so no mark_touched_at.
+    if (is_prague_or_later()) {
+        const uint64_t slot = target % kHistoryServeWindow;
+        evmc::bytes32 key{};
+        for (int i = 0; i < 8; ++i) {
+            key.bytes[31 - i] = static_cast<uint8_t>(slot >> (8 * i));
+        }
+        const size_t idx = storages_.find(kHistoryStorageAddress, key);
+        if (idx != Storages::npos) {
+            const evmc::bytes32 v = storages_.value_at(idx);
+            bool nonzero = false;
+            for (uint8_t b : v.bytes) {
+                if (b != 0) { nonzero = true; break; }
+            }
+            if (nonzero) {
+                // Post-fork: the slot holds hash(target), trie-authenticated
+                // against the committed parent state root. This is the only
+                // branch the live post-Prague networks ever take, and the
+                // prover cannot forge or zero it. Sound by construction.
+                return v;
+            }
+            // Slot present but zero: the 2935 ring buffer has not recorded
+            // `target` yet. A real block hash is never zero, so this happens
+            // ONLY in the <256-block warm-up right after the Prague transition
+            // (pre-fork ancestors still within the opcode's 256 window) — a
+            // scenario that cannot occur on the live post-Prague networks. Fall
+            // through to the input ancestor set for that transition-only case,
+            // matching reth's header-based BLOCKHASH there.
+        } else {
+            // Slot absent from the witness. On a live post-Prague block every
+            // in-window ancestor's slot is populated and witnessed, so a miss
+            // means an incomplete witness — halt rather than fall back to the
+            // unauthenticated (forgeable) ancestor set. Never fall through here.
+            fatal("get_block_hash: EIP-2935 history slot not in witness");
+        }
+    }
+
+    // Pre-Prague (EEST / historical replay only), or the post-Prague transition
+    // warm-up (slot present == 0) — neither occurs on the live post-Prague
+    // networks, so the sparse-ancestor-set caveat does not weaken live
+    // soundness. NB: consensus.parent_hash() is the parent's STATE_ROOT in this
+    // guest's binary format, NOT the parent's block hash — never use it here.
     if (const evmc::bytes32* h = previous_blocks_.hash_of_number(target)) {
         return *h;
     }
@@ -1857,24 +1902,11 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item& auth_item,
     // would be accepted, bumping the signer's nonce + setting code
     // and diverging from reth's empty-diff result.
     //
-    // secp256k1_N/2 = floor(N/2)
-    //   = 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0
-    static constexpr uint8_t kSecp256k1NHalf[32] = {
-        0x7f,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
-        0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
-        0x5d,0x57,0x6e,0x73,0x57,0xa4,0x50,0x1d,
-        0xdf,0xe9,0x2f,0x46,0x68,0x1b,0x20,0xa0,
-    };
-    {
-        // Lexicographic big-endian compare: a_s > N/2 -> skip.
-        int cmp = std::memcmp(a_s.bytes, kSecp256k1NHalf, 32);
-        if (cmp > 0) return 0;
-        // s == 0 is also invalid (no signature).
-        bool s_is_zero = true;
-        for (uint8_t b : a_s.bytes) {
-            if (b != 0) { s_is_zero = false; break; }
-        }
-        if (s_is_zero) return 0;
+    // The low-s bound (s in [1, secp256k1n/2]) lives in zeg/zisk_crypto.hpp
+    // as is_canonical_low_s (shared with transaction sender recovery). A
+    // non-canonical auth is skipped (return 0), not fatal, per EIP-7702.
+    if (!is_canonical_low_s(a_s)) {
+        return 0;
     }
 
     // Auth signing hash: keccak256(0x05 || rlp([chain_id, address,

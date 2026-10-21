@@ -15,12 +15,18 @@ namespace zeg {
 
 Contracts::Contracts(const uint8_t*& cursor) {
     const uint64_t count = read_u64_le(cursor);
+    // Each contract needs at least its 8-byte size prefix, so a count beyond
+    // that many remaining bytes is a malformed/oversized input — reject before
+    // the huge reserve and the loop (bounds checks, see zeg/stream.hpp).
+    if (count > stream_remaining(cursor) / 8) {
+        fatal("Contracts: count exceeds input size");
+    }
     contracts_.reserve(count);
     hash_reserve_empty(index_, count);  // not .reserve(): see zeg/hash_reserve.hpp
     for (uint64_t i = 0; i < count; ++i) {
         const uint64_t size = read_u64_le(cursor);
         const uint8_t* code = cursor;
-        cursor += size;
+        advance_checked(cursor, size);
         align_to_u64(cursor, size);
 
         const auto digest = ethash::keccak256(code, size);

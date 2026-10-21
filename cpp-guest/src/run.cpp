@@ -28,6 +28,7 @@
 #include "zeg/fatal.hpp"
 #include "zeg/previous_blocks.hpp"
 #include "zeg/rlp.hpp"
+#include "zeg/stream.hpp"
 #include "zeg/state_root.hpp"
 #include "zeg/storages.hpp"
 #include "zeg/system_addresses.hpp"
@@ -63,6 +64,11 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
     const zeg::HashSeed table_seed = zeg::HashSeed::derive(input + 8);
     const uint8_t* cursor = input + 24;
     const uint8_t* file_base = input;  // base for the SROOT_OFFSET debug dump
+
+    // Bound every subsequent stream read to the input buffer (see zeg/stream.hpp):
+    // a truncated or oversized-`count` input now halts cleanly instead of reading
+    // out of bounds. Set once, before any section constructor runs.
+    zeg::set_stream_end(input + len);
 
     // 2. Parse the input-stream collections. Stream order must match the
     //    prover's write order: consensus_info → transactions → contracts →

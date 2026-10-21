@@ -228,6 +228,18 @@ else()
     message(FATAL_ERROR "ZEG_CHAIN must be mainnet | sepolia (got ${ZEG_CHAIN})")
 endif()
 
+# Audit #1/#2/#8: by default the guest derives the fork + blob parameters from
+# the committed block timestamp via the compile-time per-chain schedule
+# (zeg/fork_schedule.hpp), ignoring the prover-supplied input fields — the safe
+# behavior every DEPLOYED ELF wants, with no extra flag. Turn this ON ONLY for
+# EEST conformance builds, which replay historical forks at synthetic activation
+# times and so must take the fork/blob from the input instead.
+option(ZEG_FORK_FROM_INPUT
+       "Take fork+blob params from the input, not the compile-time schedule (EEST only)" OFF)
+if(ZEG_FORK_FROM_INPUT)
+    list(APPEND ZEG_CHAIN_DEFS ZEG_FORK_FROM_INPUT)
+endif()
+
 add_executable(zisk_eth_guest ${GUEST_SOURCES})
 
 target_include_directories(zisk_eth_guest PUBLIC include)

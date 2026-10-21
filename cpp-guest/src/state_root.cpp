@@ -76,7 +76,7 @@ PackedPath read_nibbles(const uint8_t*& cursor) {
     // the copy it always was minus the unpacking loop.
     PackedPath out;
     out.assign(cursor, /*first_off=*/0, n);
-    cursor += ((n + 1) / 2 + 7) / 8 * 8;
+    advance_checked(cursor, ((n + 1) / 2 + 7) / 8 * 8);
     return out;
 }
 
@@ -685,8 +685,11 @@ Child build_phantom_leaf_node(const uint8_t*& cursor,
             if (value_len > kMaxLeafValue) {
                 fatal("state_root: phantom leaf value exceeds the trie-leaf bound");
             }
+            if (value_len > stream_remaining(cursor)) {
+                fatal("state_root: phantom leaf value past end of input");
+            }
             std::vector<uint8_t> value(cursor, cursor + value_len);
-            cursor += value_len;
+            advance_checked(cursor, value_len);
             align_to_u64(cursor, value_len);
 
             return Child{NodeType::PhantomLeaf,

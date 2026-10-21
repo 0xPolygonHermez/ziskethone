@@ -125,6 +125,11 @@ Item decode_item(BytesView data) {
         if (data.size() < total) {
             fatal("rlp::decode_item: short string truncated");
         }
+        // Canonical: a single byte < 0x80 must be encoded bare, never as a
+        // length-1 string (0x81 xx with xx < 0x80).
+        if (payload_len == 1 && data[1] < 0x80) {
+            fatal("rlp::decode_item: non-canonical single byte (0x81 form)");
+        }
         return Item{ItemKind::String,
                     BytesView{data.data(), total},
                     BytesView{data.data() + 1, payload_len}};
@@ -134,13 +139,21 @@ Item decode_item(BytesView data) {
         if (data.size() < 1 + len_of_len) {
             fatal("rlp::decode_item: long string length truncated");
         }
+        // Canonical length: minimally encoded (no leading zero byte).
+        if (data[1] == 0) {
+            fatal("rlp::decode_item: long string length has leading zero");
+        }
         const size_t payload_len = read_be(data.data() + 1, len_of_len);
-        const size_t total       = 1 + len_of_len + payload_len;
-        if (data.size() < total) {
+        // Canonical form: a payload that fits the short form must use it.
+        if (payload_len <= 55) {
+            fatal("rlp::decode_item: non-canonical long string (fits short form)");
+        }
+        // Overflow-safe bound (avoids 1+len_of_len+payload_len wrapping).
+        if (payload_len > data.size() - (1 + len_of_len)) {
             fatal("rlp::decode_item: long string body truncated");
         }
         return Item{ItemKind::String,
-                    BytesView{data.data(), total},
+                    BytesView{data.data(), 1 + len_of_len + payload_len},
                     BytesView{data.data() + 1 + len_of_len, payload_len}};
     }
     if (b <= 0xf7) {
@@ -158,13 +171,18 @@ Item decode_item(BytesView data) {
     if (data.size() < 1 + len_of_len) {
         fatal("rlp::decode_item: long list length truncated");
     }
+    if (data[1] == 0) {
+        fatal("rlp::decode_item: long list length has leading zero");
+    }
     const size_t payload_len = read_be(data.data() + 1, len_of_len);
-    const size_t total       = 1 + len_of_len + payload_len;
-    if (data.size() < total) {
+    if (payload_len <= 55) {
+        fatal("rlp::decode_item: non-canonical long list (fits short form)");
+    }
+    if (payload_len > data.size() - (1 + len_of_len)) {
         fatal("rlp::decode_item: long list body truncated");
     }
     return Item{ItemKind::List,
-                BytesView{data.data(), total},
+                BytesView{data.data(), 1 + len_of_len + payload_len},
                 BytesView{data.data() + 1 + len_of_len, payload_len}};
 }
 
@@ -186,6 +204,10 @@ evmc::uint256be as_u256(const Item& it) {
     if (it.payload.size() > 32) {
         fatal("rlp::as_u256: payload > 32 bytes");
     }
+    // Canonical integer: no leading zero byte (zero is the empty string).
+    if (!it.payload.empty() && it.payload[0] == 0) {
+        fatal("rlp::as_u256: non-canonical integer (leading zero)");
+    }
     evmc::uint256be out{};
     const size_t off = 32 - it.payload.size();
     std::memcpy(out.bytes + off, it.payload.data(), it.payload.size());
@@ -198,6 +220,10 @@ uint64_t as_u64(const Item& it) {
     }
     if (it.payload.size() > 8) {
         fatal("rlp::as_u64: payload > 8 bytes");
+    }
+    // Canonical integer: no leading zero byte (zero is the empty string).
+    if (!it.payload.empty() && it.payload[0] == 0) {
+        fatal("rlp::as_u64: non-canonical integer (leading zero)");
     }
     uint64_t v = 0;
     for (size_t i = 0; i < it.payload.size(); ++i) {

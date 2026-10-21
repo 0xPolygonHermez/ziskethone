@@ -627,3 +627,62 @@ Regressions are unchanged with the groundwork in place:
 - The Prague + Osaka subset is at 0 FAIL on both backends.
 - Mainnet block 26167511 matches the chain hash on the host (both backends) and
   on both ZisK ELFs (GCC 14).
+
+## External audit remediation (2026-10)
+
+An external static audit of the C++ guest reported 9 findings. All were verified
+against the code; the remediation (branch work on top of `24492dd`) is:
+
+- **#3 BLOCKHASH (Critical).** `ZiskStateDB::get_block_hash` now serves the opcode
+  from the EIP-2935 history-storage contract (`0x…2935`, slot `n % 8191`), read
+  directly and trie-authenticated against the committed parent state root — the
+  prover can no longer forge or zero an ancestor via a sparse/unlinked input set.
+  A present-but-zero slot (only possible in the <256-block warm-up right after
+  the Prague transition, which cannot occur on the live post-Prague networks)
+  falls back to the input ancestor set; an *absent* slot halts (never a forgeable
+  zero). Pre-Prague keeps the ancestor path (EEST only).
+- **#1/#2/#8 fork + blob schedule (Critical/Low).** By default (the safe
+  behavior, no flag needed), `ConsensusInfo::fork_id()` and the three blob
+  accessors derive their values from the block's committed timestamp via the
+  compile-time per-`ZEG_CHAIN` table in `zeg/fork_schedule.hpp` (mirroring
+  `rust-input-gen`'s `fork_params`), ignoring the prover-supplied input fields.
+  Mainnet has no Amsterdam row, so a mainnet ELF never activates Amsterdam (#8).
+  The opt-out `ZEG_FORK_FROM_INPUT` reverts to reading the fork/blob from the
+  input; it is used ONLY by EEST builds, which replay historical forks at
+  synthetic activation times. No ZEG0 format change.
+- **#4 strict RLP (High).** `rlp::decode_item` rejects non-canonical encodings
+  (bare single byte, needless long form, leading-zero lengths); `as_u64`/`as_u256`
+  reject leading zeros; tx envelopes reject trailing bytes and extra list fields.
+- **#5 low-s (High).** `recover_sender` enforces `s ∈ [1, secp256k1n/2]`
+  (`is_canonical_low_s`, shared with EIP-7702 auths). The ECRECOVER precompile
+  (0x01) stays malleable per spec.
+- **#9 input bounds (Low).** Stream reads are bounded to the input buffer
+  (`zeg/stream.hpp` + per-section `count`/size pre-checks); a truncated or
+  oversized-`count` input halts cleanly instead of reading out of bounds.
+
+Two findings are not code changes:
+
+- **#6 NewPayloadRequest root shape (interop).** The audit read EIP-8025's text
+  (plain `Container` + `ProgressiveList` versioned_hashes). The guest instead
+  follows consensus-specs **gloas**, which is what the **deployed Lighthouse**
+  (`sigp/lighthouse` `unstable` ≥ `16ce0a0728`) actually implements: the outer
+  `NewPayloadRequest` is a `progressive_container active_fields(1,1,1,1)`,
+  `versioned_hashes` a bounded `VariableList<Hash256, U4096>`, and
+  `ExecutionPayloadGloas` a 19-field progressive container — matching
+  `new_payload_request.cpp` exactly. This is why live Sepolia proofs verify VALID.
+  **No change**: the guest intentionally tracks Lighthouse, not the EIP-8025 text
+  (`scripts/npr_root_ref.py` documents the intent). Monitor upstream convergence.
+- **#7 invalidity result (completeness).** The guest halts on an invalid block
+  rather than emitting a provable `false` `StatelessValidationResult`. This is
+  sound (an invalid block simply yields no proof). Adopting the full EIP-8025
+  result schema (a `valid` bool + explicit `chain_id`/`schema_id`) is a tracked
+  follow-up, to be designed with #6's output shape against what the PE/Lighthouse
+  consume. Note #1's enforcement already binds the fork via the committed
+  timestamp and `kChainId`, closing most of #7's "nothing binds the fork" concern.
+
+**Deploy note:** the deployed ELF needs only the usual `-DZEG_CHAIN=…` — fork/blob
+enforcement is the default (safe). The EEST conformance build must add
+`-DZEG_FORK_FROM_INPUT=ON` to replay historical forks at synthetic activation
+times. All guest changes above are root-preserving for valid live blocks, so the
+new ELF yields the same NewPayloadRequest roots as the current one (the
+re-mint/redeploy and PE re-pin are still required because the ELF bytes change).

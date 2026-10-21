@@ -253,6 +253,14 @@ if(NOT ZEG_CHAIN MATCHES "^(mainnet|sepolia)$")
   message(FATAL_ERROR "ZEG_CHAIN must be mainnet | sepolia (got ${ZEG_CHAIN})")
 endif()
 
+# Audit #1/#2/#8: by default (safe) the guest derives the fork + blob parameters
+# from the committed block timestamp via the compile-time schedule
+# (zeg/fork_schedule.hpp), ignoring the prover-supplied input fields — so every
+# DEPLOYED ELF is safe with no extra flag. Turn this ON ONLY for the EEST
+# conformance ELF (synthetic per-fixture forks), which must take them from input.
+option(ZEG_FORK_FROM_INPUT
+       "Take fork+blob params from the input, not the compile-time schedule (EEST only)" OFF)
+
 # Byte size of the fixed per-contract JUMPDEST-analysis cache arena (bounds the
 # guest heap against blocks that execute many distinct max-size contracts). 80
 # MiB covers the absolute worst case: 1025 live frames x the Amsterdam (64 KiB)
@@ -264,6 +272,7 @@ target_compile_definitions(zisk_eth_guest.elf PRIVATE
   ZEG_ZISK
   ZEG_ANALYSIS_CACHE_BYTES=${ZEG_ANALYSIS_CACHE_BYTES}
   $<$<STREQUAL:${ZEG_CHAIN},sepolia>:ZEG_CHAIN_SEPOLIA>
+  $<$<BOOL:${ZEG_FORK_FROM_INPUT}>:ZEG_FORK_FROM_INPUT>
   $<$<STREQUAL:${EVM_BACKEND},zevm>:USE_ZEVM>
   $<$<BOOL:${ZEG_BSWAP_BUILTIN}>:ZEG_BSWAP_BUILTIN>
   $<$<BOOL:${ZEG_JUMPDEST_SW}>:ZEG_JUMPDEST_SW>

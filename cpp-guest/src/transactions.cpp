@@ -54,6 +54,15 @@ Item next_required(ListIter& it) {
     return it.next();
 }
 
+// Require the outer tx list to be fully consumed after the last schema field
+// (`s`). Extra trailing fields make the envelope non-canonical — a block the
+// network rejects — so the guest must not accept it.
+void require_end(ListIter& it) {
+    if (it.has_next()) {
+        fatal("Transactions: tx RLP list has trailing fields");
+    }
+}
+
 // `to` is either an empty string (contract creation) or a 20-byte
 // address. Anything else is malformed.
 void parse_to(Transactions::View& v, const Item& it,
@@ -232,6 +241,15 @@ evmc::address recover_sender(const Transactions::View& v) {
         recid = static_cast<unsigned>(vv);
     }
 
+    // EIP-2: the signature must be low-s (s in [1, secp256k1n/2]). A high-s
+    // signature recovers the same sender and executes identically, but it is a
+    // distinct, non-canonical envelope that every conforming EL rejects — so
+    // the block the guest would commit to is one the network refuses. (The
+    // ECRECOVER precompile 0x01 stays malleable; this gate is tx-only.)
+    if (!is_canonical_low_s(v.s())) {
+        fatal("Transactions: signature s is not low-s (EIP-2)");
+    }
+
     evmc::address sender;
     if (!ecrecover_address(z, v.r(), v.s(), recid, sender)) {
         fatal("Transactions: sender recovery failed");
@@ -312,6 +330,7 @@ void Transactions::parse_legacy(View& v, std::span<const uint8_t> outer_payload)
     v.v_or_y_parity_ = as_u64 (next_required(it));
     v.r_             = as_u256(next_required(it));
     v.s_             = as_u256(next_required(it));
+    require_end(it);
 
     // EIP-155: chain_id is implicit in v. Pre-EIP-155 legacy txs (v
     // is 27 or 28) carry no chain id.
@@ -331,6 +350,7 @@ void Transactions::parse_access_list(View& v, std::span<const uint8_t> outer_pay
     v.v_or_y_parity_   = as_u64 (next_required(it));
     v.r_               = as_u256(next_required(it));
     v.s_               = as_u256(next_required(it));
+    require_end(it);
 }
 
 void Transactions::parse_dynamic_fee(View& v, std::span<const uint8_t> outer_payload) {
@@ -347,6 +367,7 @@ void Transactions::parse_dynamic_fee(View& v, std::span<const uint8_t> outer_pay
     v.v_or_y_parity_            = as_u64 (next_required(it));
     v.r_                        = as_u256(next_required(it));
     v.s_                        = as_u256(next_required(it));
+    require_end(it);
 }
 
 void Transactions::parse_blob(View& v, std::span<const uint8_t> outer_payload) {
@@ -365,6 +386,7 @@ void Transactions::parse_blob(View& v, std::span<const uint8_t> outer_payload) {
     v.v_or_y_parity_             = as_u64 (next_required(it));
     v.r_                         = as_u256(next_required(it));
     v.s_                         = as_u256(next_required(it));
+    require_end(it);
 }
 
 void Transactions::parse_set_code(View& v, std::span<const uint8_t> outer_payload) {
@@ -382,6 +404,7 @@ void Transactions::parse_set_code(View& v, std::span<const uint8_t> outer_payloa
     v.v_or_y_parity_            = as_u64 (next_required(it));
     v.r_                        = as_u256(next_required(it));
     v.s_                        = as_u256(next_required(it));
+    require_end(it);
 }
 
 // EIP-7873 / Osaka: same field order as SetCode, with `initcodes`
@@ -403,6 +426,7 @@ void Transactions::parse_osaka(View& v, std::span<const uint8_t> outer_payload) 
     v.v_or_y_parity_            = as_u64 (next_required(it));
     v.r_                        = as_u256(next_required(it));
     v.s_                        = as_u256(next_required(it));
+    require_end(it);
 }
 
 // ============================================================================
@@ -412,6 +436,12 @@ void Transactions::parse_osaka(View& v, std::span<const uint8_t> outer_payload) 
 
 Transactions::Transactions(const uint8_t*& cursor) {
     const uint64_t count = read_u64_le(cursor);
+    // Each tx needs at least its 8-byte envelope-size prefix; a count beyond
+    // that many remaining bytes is malformed — reject before the reserve and
+    // loop (bounds checks, see zeg/stream.hpp).
+    if (count > stream_remaining(cursor) / 8) {
+        fatal("Transactions: count exceeds input size");
+    }
     views_.reserve(count);
 
     // Builds the canonical transactions trie alongside the per-tx
@@ -424,7 +454,7 @@ Transactions::Transactions(const uint8_t*& cursor) {
         const uint64_t env_size = read_u64_le(cursor);
 
         const uint8_t* env = cursor;
-        cursor += env_size;
+        advance_checked(cursor, env_size);
         align_to_u64(cursor, env_size);
 
         if (env_size == 0) {
@@ -450,6 +480,13 @@ Transactions::Transactions(const uint8_t*& cursor) {
         const Item outer = rlp::decode_item(whole);
         if (outer.kind != ItemKind::List) {
             fatal("Transactions: outer envelope item is not a list");
+        }
+        // The decoded outer list must cover the whole envelope — no trailing
+        // bytes after it. Trailing bytes make the envelope non-canonical (a
+        // block the network rejects) even though the signed fields recover the
+        // same sender.
+        if (outer.raw.size() != whole.size()) {
+            fatal("Transactions: trailing bytes after tx envelope");
         }
 
         switch (v.type_) {

@@ -144,6 +144,13 @@ evmc::bytes32 compute_header_hash(const PreviousBlocks::View& v) {
 
 PreviousBlocks::PreviousBlocks(const uint8_t*& cursor) {
     const uint64_t count   = read_u64_le(cursor);
+    // Each ancestor record is kRecordSize bytes; a count beyond what remains is
+    // malformed — reject before the reserves and the record-reading loop so a
+    // forged count can't drive an out-of-bounds read (see zeg/stream.hpp). The
+    // bound also makes `count * kRecordSize` below overflow-free.
+    if (count > stream_remaining(cursor) / kRecordSize) {
+        fatal("PreviousBlocks: count exceeds input size");
+    }
     const uint8_t* records = cursor;
 
     views_.reserve(count);
@@ -153,7 +160,7 @@ PreviousBlocks::PreviousBlocks(const uint8_t*& cursor) {
         views_.push_back(View{records + i * kRecordSize});
         hashes_.push_back(compute_header_hash(views_.back()));
     }
-    cursor += count * kRecordSize;
+    advance_checked(cursor, count * kRecordSize);
 
     // Linkage check — SPARSE-tolerant. The ancestor set carries only the
     // blocks the witness referenced for BLOCKHASH, so it may have gaps
