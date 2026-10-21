@@ -78,6 +78,10 @@ endif()
 #       loads/stores that cross a ZisK memory word (7 costly unaligned accesses
 #       per opcode under -mtune=size); read it as one 32-bit + two aligned
 #       64-bit words instead.
+#   12: ADDRESS, CALLER and ORIGIN the same way, gated on ZEG_ZISK: one helper
+#       reads an evmc address as the three aligned 8-byte words of its 8-aligned
+#       owner (evmc_message / evmc_tx_context) that cover it, whether it is 0 or
+#       4 mod 8.
 # Each patch is checked with `git apply --reverse --check` first; if it
 # is already applied we skip — that keeps the configure step idempotent
 # across rebuilds.
@@ -91,6 +95,7 @@ set(_evmone_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/09-evmone-zisk-analyze-into-buffer.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/10-evmone-selfbalance-cache.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/11-evmone-zisk-coinbase-aligned-load.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/12-evmone-zisk-address-aligned-load.patch"
 )
 find_program(GIT_EXECUTABLE git REQUIRED)
 foreach(_patch IN LISTS _evmone_patches)
