@@ -41,16 +41,18 @@ endif()
 #   charges every state-independent CALL cost — memory, value, cold access —
 #   before the delegation probe. Only the new-account cost now comes after
 #   the probe, and that target has no code, so 02 bails on it.)
-#   03: Route MUL/EXP/ADDMOD/MULMOD through the ZisK arith256/arith256_mod
-#       precompiles instead of intx's software bigint (the analogue of reth's
-#       ruint patch). Gated on ZEG_ZISK, so the host build keeps intx and
-#       stays the independent reference for the host-vs-guest comparison.
+#   03: Route MUL, DIV/SDIV/MOD/SMOD, ADDMOD, MULMOD and EXP through ZisK's
+#       little-endian U256 ABI (zkvm_u256_le.h) instead of intx's software
+#       bigint (the analogue of reth's ruint patch). Gated on ZEG_ZISK, so the
+#       host build keeps intx and stays the independent reference for the
+#       host-vs-guest comparison.
 #   04: Walk a pointer, not an index, in analyze_jumpdests — the software
 #       JUMPDEST analysis both builds still use (host always; ZisK when 05 is
 #       compiled out via -DZEG_JUMPDEST_SW=ON).
-#   05: Replace that walk with the ZisK jump_dest_bitmap precompile (CSR 0x81C),
-#       one op per contract instead of a byte walk. Applies on top of 04 and is
-#       likewise gated on ZEG_ZISK, so the host keeps the software reference.
+#   05: Replace that walk with the ZisK EVM ABI's zkvm_evm_jumpdest_bitmap
+#       (zisk/evm/jump_dest_bitmap.hpp), one op per contract instead of a byte
+#       walk. Applies on top of 04 and is likewise gated on ZEG_ZISK, so the
+#       host keeps the software reference.
 #   06: Fused superinstructions in evmone's cgoto dispatch, gated on
 #       ZEG_ZISK. The patch is only a hook (a guarded #include plus one line
 #       in the dispatch macro); the fusions themselves live in the guest tree

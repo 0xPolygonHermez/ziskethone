@@ -9,8 +9,13 @@
  * RAM just below the 64 KB float-ram window (so the heap now tops out at
  * 0xBFFC_0000 instead of 0xBFFF_0000).
  *
- * No local deviation any more: upstream now ships the execute-only `.text`
- * (FLAGS(1) = PF_X without PF_R) that this file previously patched in by hand. */
+ * Upstream now ships the execute-only `.text` (FLAGS(1) = PF_X without PF_R)
+ * that this file previously patched in by hand. One local deviation remains:
+ * each output section also gathers its .gnu.linkonce.* counterpart. A GCC
+ * configured without COMDAT support (e.g. a patched -mzisk-dma compiler built
+ * without seeing the assembler, see patches/gcc/) emits those in place of COMDAT
+ * .text.* and .bss.* groups, and an uncollected linkonce .bss became an orphan
+ * placed at _heap_bottom, overlapping the heap (modexp's exp_bits_buf). */
 
 OUTPUT_FORMAT("elf64-littleriscv")
 OUTPUT_ARCH("riscv")
@@ -86,11 +91,11 @@ _zisklib_ram_data_size       = 0x30000;   /* 192 KB reserved (ZisK library scrat
 
 SECTIONS
 {
-  .text : { *(.text.init) *(.text .text.*)} >rom AT>rom :text
+  .text : { *(.text.init) *(.text .text.* .gnu.linkonce.t.*)} >rom AT>rom :text
 
   . = ALIGN(8);
   PROVIDE(_global_pointer = .);
-  .rodata : { *(.rodata .rodata.*)} >rom AT>rom :rodata
+  .rodata : { *(.rodata .rodata.* .gnu.linkonce.r.*)} >rom AT>rom :rodata
 
   /* C++ static constructors / destructors (run by _start before/after main),
      placed in ROM: the entries are link-time-constant function pointers, never
@@ -148,11 +153,11 @@ SECTIONS
     PROVIDE(_output_data_end = .);
   } >ram AT>ram :output_data
 
-  .data : { *(.data .data.* .sdata .sdata.*) } >ram AT>ram :data
+  .data : { *(.data .data.* .sdata .sdata.* .gnu.linkonce.d.* .gnu.linkonce.s.*) } >ram AT>ram :data
 
   .bss : {
     PROVIDE(_bss_start = .);
-    *(.bss .bss.* .sbss .sbss.*);
+    *(.bss .bss.* .sbss .sbss.* .gnu.linkonce.b.* .gnu.linkonce.sb.*);
     PROVIDE(_bss_end = .); /* ... and one at the end */
   } >ram AT>ram :bss
 
