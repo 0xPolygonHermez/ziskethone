@@ -103,6 +103,15 @@ pub struct CoordinatorProver {
     pub program_vk: Vec<u8>,
 }
 
+/// How long a `submit_when_free` spent sending the job vs. waiting for a free
+/// worker. `send` is the accepted `job_request` RPC (the inline-input upload /
+/// network time); `queue_wait` is the busy-retry time before it.
+struct SubmitTiming {
+    send: std::time::Duration,
+    queue_wait: std::time::Duration,
+    attempts: u32,
+}
+
 impl CoordinatorProver {
     /// Connect, register the guest ELF and run its setup (both idempotent on
     /// the coordinator side).
@@ -153,15 +162,32 @@ impl CoordinatorProver {
     /// concurrently, so the worker frees within a poll or two. Returns `None`
     /// if `cancel` fires before the job is accepted (this block, in turn, was
     /// superseded while waiting for the worker).
-    async fn submit_when_free(&mut self, kind: grpc::job_kind::Kind, cancel: &CancellationToken) -> Result<Option<String>> {
+    ///
+    /// The returned `SubmitTiming` splits the wall time into `send` (the one
+    /// accepted `job_request` RPC — for an inline input this carries the whole
+    /// input, so it is the upload / network time) and `queue_wait` (the
+    /// busy-retry time spent before a worker was free, i.e. coordinator queue
+    /// time, not network).
+    async fn submit_when_free(
+        &mut self,
+        kind: grpc::job_kind::Kind,
+        cancel: &CancellationToken,
+    ) -> Result<Option<(String, SubmitTiming)>> {
         let t0 = std::time::Instant::now();
+        let mut attempts = 0u32;
         loop {
             if cancel.is_cancelled() {
                 return Ok(None);
             }
             let req = grpc::JobRequestMessage { job_kind: Some(grpc::JobKind { kind: Some(kind.clone()) }) };
+            attempts += 1;
+            let send_t = std::time::Instant::now();
             match self.client.job_request(req).await {
-                Ok(r) => return Ok(Some(r.into_inner().job_id)),
+                Ok(r) => {
+                    let send = send_t.elapsed();
+                    let timing = SubmitTiming { send, queue_wait: t0.elapsed().saturating_sub(send), attempts };
+                    return Ok(Some((r.into_inner().job_id, timing)));
+                }
                 Err(e) if e.code() == tonic::Code::Unavailable
                     && e.message().contains("busy running another job")
                     && t0.elapsed() < BUSY_RETRY =>
@@ -221,6 +247,7 @@ impl CoordinatorProver {
         // go as a `grpc://push` stream URI and are pushed in `CHUNK_BYTES`
         // pieces below, so the 128 MiB inline cap no longer bounds a block.
         let framed = frame_input(input);
+        let input_bytes = framed.len();
         // `INLINE_MAX` by default; `ZISK_INLINE_MAX_BYTES` overrides it (e.g. 0
         // forces every input through the stream path — used to test streaming).
         let inline_max = std::env::var("ZISK_INLINE_MAX_BYTES")
@@ -242,10 +269,24 @@ impl CoordinatorProver {
             // rejected unless it is configured to allow them). New in 1.4.0.
             random_seed: None,
         });
-        let Some(job_id) = this.submit_when_free(prove, cancel).await? else {
+        let Some((job_id, submit)) = this.submit_when_free(prove, cancel).await? else {
             return Ok(Outcome::Cancelled);
         };
-        info!(%job_id, "submitted proving job");
+        // For an inline input the accepted `job_request` carried the whole
+        // input, so `submit.send` is its upload/network time; `queue_wait` is
+        // the time a worker was busy before accepting. (For a streamed input
+        // `job_request` carried only the stream URI — the upload is timed in
+        // `push_input` below.) These feed the proof-stats collector's network
+        // breakdown.
+        info!(
+            %job_id,
+            input_bytes,
+            inline = to_stream.is_none(),
+            send_ms = submit.send.as_millis() as u64,
+            queue_wait_ms = submit.queue_wait.as_millis() as u64,
+            submit_attempts = submit.attempts,
+            "submitted proving job"
+        );
         // The job is accepted only once a worker is assigned (`submit_when_free`
         // retries past "busy"), so the coordinator is ready for the pushed input.
         if let Some(framed) = to_stream {
@@ -284,16 +325,31 @@ impl CoordinatorProver {
     /// returns `None` in that case, `Some(())` once all chunks are accepted.
     async fn push_input(&mut self, job_id: &str, framed: Vec<u8>, cancel: &CancellationToken) -> Result<Option<()>> {
         let framed = prost::bytes::Bytes::from(framed);
+        let input_bytes = framed.len();
         let chunks = framed.len().div_ceil(CHUNK_BYTES);
-        info!(%job_id, bytes = framed.len(), chunks, "streaming input");
+        info!(%job_id, bytes = input_bytes, chunks, "streaming input");
         if framed.len() as u64 > grpc_zisk_max_input() {
             warn!(%job_id, bytes = framed.len(), "framed input exceeds the 2 GiB zkVM input cap; the coordinator may reject it");
         }
         // Lazily yield chunks (one `to_vec` copy in flight at a time, not a
         // second full copy of the input) tagged with `job_id`.
         let body = futures::stream::iter(input_chunks(job_id.to_string(), framed));
+        let send_t = std::time::Instant::now();
         tokio::select! {
-            r = self.client.push_job_input(body) => { r?; Ok(Some(())) }
+            r = self.client.push_job_input(body) => {
+                r?;
+                // Mirrors the inline log in `prove`: `send_ms` is the stream
+                // upload / network time for the full input.
+                info!(
+                    %job_id,
+                    input_bytes,
+                    inline = false,
+                    send_ms = send_t.elapsed().as_millis() as u64,
+                    chunks,
+                    "input streamed to coordinator"
+                );
+                Ok(Some(()))
+            }
             _ = cancel.cancelled() => {
                 let r = self.client.cancel_job(grpc::CancelJobRequest { job_id: job_id.to_string() }).await;
                 match r {

@@ -45,6 +45,13 @@ RE_SUBMITTED = re.compile(r"submitted proof number=(\d+) slot=(\d+)")
 RE_JOB_FINISHED = re.compile(r'job finished number=(\d+) hash=(0x[0-9a-f]+) stage="([^"]*)"')
 RE_PROOF_READY = re.compile(
     r"proof ready job_id=(\S+) bytes=(\d+) steps=(\d+) elapsed=([0-9.]+)(ms|s|µs|us|ns)")
+# input upload: inline inputs ride the job_request ('submitted proving job'),
+# streamed ones are pushed afterwards ('input streamed to coordinator').
+RE_SUBMIT_JOB = re.compile(
+    r"submitted proving job job_id=(\S+) input_bytes=(\d+) inline=(?:true|false) "
+    r"send_ms=(\d+) queue_wait_ms=(\d+)")
+RE_INPUT_STREAMED = re.compile(
+    r"input streamed to coordinator job_id=(\S+) input_bytes=(\d+) inline=false send_ms=(\d+)")
 # proof engine
 RE_PE = re.compile(r'(VALID|INVALID) root="([0-9a-f]+)" bytes=(\d+)')
 RE_ELAPSED = re.compile(r"elapsed=([0-9.]+)(ms|s|µs|us|ns)")
@@ -107,7 +114,8 @@ class Collector:
             self.db.executescript(f.read())
         # idempotent migration: add columns introduced after the DB was first created
         have = {r[1] for r in self.db.execute("PRAGMA table_info(blocks)")}
-        for col, decl in (("gas_used", "INTEGER"),):
+        for col, decl in (("gas_used", "INTEGER"), ("input_bytes", "INTEGER"),
+                          ("input_send_ms", "REAL"), ("queue_wait_ms", "REAL")):
             if col not in have:
                 self.db.execute("ALTER TABLE blocks ADD COLUMN %s %s" % (col, decl))
         self.db.commit()
@@ -116,6 +124,7 @@ class Collector:
         # unmatched PE verify events: (verify_finish_ms, root, validity, bytes, validation_ms, reason)
         self.pe_pending = deque()
         self.last_proof_ready = None  # (job_id, bytes, steps, prove_elapsed_ms)
+        self.last_input_send = None   # {job_id, input_bytes, input_send_ms, queue_wait_ms}
         self.inserted = 0
 
     # ---- block record helpers ----
@@ -140,6 +149,24 @@ class Collector:
             self.last_proof_ready = (m.group(1), int(m.group(2)), int(m.group(3)),
                                      elapsed_to_ms(m.group(4), m.group(5)))
             return
+        m = RE_SUBMIT_JOB.search(msg)
+        if m:
+            # Inline input: send_ms is the upload. (A streamed job re-reports
+            # send_ms in RE_INPUT_STREAMED below; queue_wait is kept from here.)
+            self.last_input_send = {"job_id": m.group(1), "input_bytes": int(m.group(2)),
+                                    "input_send_ms": float(m.group(3)),
+                                    "queue_wait_ms": float(m.group(4))}
+            return
+        m = RE_INPUT_STREAMED.search(msg)
+        if m:
+            s = self.last_input_send
+            if s and s.get("job_id") == m.group(1):
+                s["input_bytes"] = int(m.group(2))
+                s["input_send_ms"] = float(m.group(3))  # the real stream upload time
+            else:
+                self.last_input_send = {"job_id": m.group(1), "input_bytes": int(m.group(2)),
+                                        "input_send_ms": float(m.group(3)), "queue_wait_ms": None}
+            return
         m = RE_SIGNED.search(msg)
         if m:
             b = self.block(int(m.group(1)))
@@ -150,6 +177,11 @@ class Collector:
             if self.last_proof_ready and "job_id" not in b:
                 b["job_id"], b["proof_bytes"], b["steps"], b["prove_elapsed_ms"] = self.last_proof_ready
                 self.last_proof_ready = None
+            if self.last_input_send and "input_send_ms" not in b:
+                b["input_bytes"] = self.last_input_send["input_bytes"]
+                b["input_send_ms"] = self.last_input_send["input_send_ms"]
+                b["queue_wait_ms"] = self.last_input_send["queue_wait_ms"]
+                self.last_input_send = None
             return
         m = RE_SUBMITTED.search(msg)
         if m:
@@ -260,7 +292,8 @@ class Collector:
             "prove_done_ms", "executed_ms", "signed_ms", "submitted_ms", "verify_start_ms",
             "verify_finish_ms", "recv_lag_ms", "input_build_ms", "witness_ms", "prove_ms",
             "sign_ms", "propagation_ms", "validation_ms", "roundtrip_ms", "end_to_end_ms",
-            "gas_used", "steps", "proof_bytes", "prove_elapsed_ms", "job_id", "timings_json",
+            "gas_used", "steps", "proof_bytes", "prove_elapsed_ms", "input_bytes",
+            "input_send_ms", "queue_wait_ms", "job_id", "timings_json",
             "ingested_at_ms"]
 
     def upsert(self, b):

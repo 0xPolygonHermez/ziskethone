@@ -42,6 +42,9 @@ CREATE TABLE IF NOT EXISTS blocks (
     steps           INTEGER,            -- ZisK steps (from prover 'proof ready')
     proof_bytes     INTEGER,
     prove_elapsed_ms REAL,              -- prover-reported coordinator round-trip
+    input_bytes     INTEGER,            -- framed input size sent to the coordinator (bytes)
+    input_send_ms   REAL,               -- exex→coordinator input upload / network time
+    queue_wait_ms   REAL,               -- busy-retry time before a worker accepted the job
     job_id          TEXT,
     timings_json    TEXT,               -- raw exex timings object, for future recomputation
     ingested_at_ms  INTEGER
