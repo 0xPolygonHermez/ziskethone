@@ -80,6 +80,15 @@ inline void advance_checked(const uint8_t*& cursor, uint64_t n) {
     cursor += n;
 }
 
+// Abort unless at least `n` bytes remain from `cursor`, WITHOUT advancing. Use
+// before a fixed-width field copy that reads `n` bytes via a bare `cursor += n`
+// (which would otherwise bypass the end guard and read past a truncated input).
+inline void require_bytes(const uint8_t* cursor, uint64_t n) {
+    if (stream_remaining(cursor) < n) {
+        fatal("stream: fixed-field read past end of input");
+    }
+}
+
 // Advance `cursor` to the next 8-byte boundary if the previous chunk's
 // `consumed` byte count was not already a multiple of 8.
 inline void align_to_u64(const uint8_t*& cursor, uint64_t consumed) {

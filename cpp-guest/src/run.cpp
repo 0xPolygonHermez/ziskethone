@@ -254,6 +254,13 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
         std::fprintf(stderr, "SROOT_OFFSET=%zu\n", (size_t)(cursor - file_base));
     }
     zeg::StateRoot state_root(cursor, accounts, storages);
+    // StateRoot is the final input section: the cursor must now sit exactly at
+    // the input end. Trailing bytes mean a malformed / over-long input — reject
+    // rather than silently ignore them (the per-section readers only guard their
+    // own fields, not consumption of the whole stream).
+    if (cursor != input + len) {
+        zeg::fatal("run: input has trailing bytes after the final section");
+    }
     if (state_root.old_state_root() != consensus.parent_hash()) {
         zeg::fatal("pre-execution state root mismatch");
     }

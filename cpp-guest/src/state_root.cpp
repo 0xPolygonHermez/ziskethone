@@ -75,6 +75,7 @@ PackedPath read_nibbles(const uint8_t*& cursor) {
     // The witness already carries them packed from a byte boundary, so this is
     // the copy it always was minus the unpacking loop.
     PackedPath out;
+    require_bytes(cursor, (n + 1) / 2);  // bytes assign() copies, before it reads
     out.assign(cursor, /*first_off=*/0, n);
     advance_checked(cursor, ((n + 1) / 2 + 7) / 8 * 8);
     return out;
@@ -599,6 +600,7 @@ Child build_node(const uint8_t*& cursor,
 
         case Op::Hash: {
             evmc::bytes32 h;
+            require_bytes(cursor, sizeof(h.bytes));
             zeg::zisk::zisk_xmemcpy<sizeof(h.bytes)>(h.bytes, cursor);
             cursor += sizeof(h.bytes);  // 32 B — already 8-aligned
             return Child{NodeType::Hash, aux_emplace<HashR>(ctx, h)};
@@ -607,6 +609,7 @@ Child build_node(const uint8_t*& cursor,
         case Op::ExtensionHash: {
             PackedPath ext = read_nibbles(cursor);
             evmc::bytes32 h;
+            require_bytes(cursor, sizeof(h.bytes));
             zeg::zisk::zisk_xmemcpy<sizeof(h.bytes)>(h.bytes, cursor);
             cursor += sizeof(h.bytes);
             return Child{NodeType::ExtensionHash,
@@ -662,6 +665,7 @@ Child build_branch_node(const uint8_t*& cursor,
                 continue;  // already zeroed above
             case kTagHash: {
                 evmc::bytes32 h;
+                require_bytes(cursor, sizeof(h.bytes));
                 zeg::zisk::zisk_xmemcpy<sizeof(h.bytes)>(h.bytes, cursor);
                 cursor += sizeof(h.bytes);  // 32 B — already 8-aligned
                 bn.children[k] = Child{NodeType::Hash, aux_emplace<HashR>(ctx, h)};
@@ -735,13 +739,16 @@ Child build_leaf_node(const uint8_t*& cursor,
             if (kind == TreeKind::State) {
                 // address(20) pad(4) balance(u256be,32) nonce(u64) code_hash(32)
                 evmc::address addr;
+                require_bytes(cursor, sizeof(addr.bytes) + 4);
                 std::memcpy(addr.bytes, cursor, sizeof(addr.bytes));
                 cursor += sizeof(addr.bytes) + 4;
                 evmc::uint256be balance;
+                require_bytes(cursor, sizeof(balance.bytes));
                 std::memcpy(balance.bytes, cursor, sizeof(balance.bytes));
                 cursor += sizeof(balance.bytes);
                 const uint64_t nonce = read_u64_le(cursor);
                 evmc::bytes32 code_hash;
+                require_bytes(cursor, sizeof(code_hash.bytes));
                 std::memcpy(code_hash.bytes, cursor, sizeof(code_hash.bytes));
                 cursor += sizeof(code_hash.bytes);
                 const uint64_t next_sorted          = read_u64_le(cursor);
@@ -776,9 +783,11 @@ Child build_leaf_node(const uint8_t*& cursor,
                     fatal("state_root: storage leaf outside any account");
                 }
                 evmc::bytes32 position;
+                require_bytes(cursor, sizeof(position.bytes));
                 std::memcpy(position.bytes, cursor, sizeof(position.bytes));
                 cursor += sizeof(position.bytes);
                 evmc::bytes32 value;
+                require_bytes(cursor, sizeof(value.bytes));
                 std::memcpy(value.bytes, cursor, sizeof(value.bytes));
                 cursor += sizeof(value.bytes);
                 const uint64_t next_sorted = read_u64_le(cursor);
