@@ -1190,6 +1190,13 @@ bool ZiskStateDB::init_create_account(const evmc::address& new_addr,
     // EIP-684 collision check (EIP-7610 clarifies storage also counts).
     // A brand-new contract address is a row too (an empty leaf). It must
     // look empty (nonce == 0, code_hash == EMPTY, and no non-zero storage).
+    //
+    // DELIBERATE DEVIATION (audit #20): we treat non-empty storage at the
+    // target as a collision (EIP-7610). execution-specs v21 and revm currently
+    // check only nonce and code, NOT storage. The cases differ only for a CREATE
+    // whose target address already has storage but no nonce/code — which
+    // requires grinding a specific 160-bit address, so no mainnet/Sepolia block
+    // reaches it today. Revisit/align if execution-specs adopts EIP-7610.
     const size_t new_idx = account_row(new_addr);
     if (accounts_.nonce_at(new_idx) != 0 ||
         accounts_.code_hash_at(new_idx) != EMPTY_CODE_HASH ||
