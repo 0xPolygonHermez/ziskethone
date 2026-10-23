@@ -21,7 +21,8 @@ Contracts::Contracts(const uint8_t*& cursor) {
     if (count > stream_remaining(cursor) / 8) {
         fatal("Contracts: count exceeds input size");
     }
-    contracts_.reserve(count);
+    // contracts_ is a std::deque (stable element addresses for the AnalysisCache),
+    // which has no reserve(); the count bound above already rejects oversized input.
     hash_reserve_empty(index_, count);  // not .reserve(): see zeg/hash_reserve.hpp
     for (uint64_t i = 0; i < count; ++i) {
         const uint64_t size = read_u64_le(cursor);

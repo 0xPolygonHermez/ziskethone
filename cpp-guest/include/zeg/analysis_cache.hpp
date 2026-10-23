@@ -62,9 +62,17 @@ public:
                                  std::size_t code_size) {
         if (*owner != nullptr) {  // hit: still resident
             const int64_t i = slot_of(*owner);
-            ++meta_[i].pin;
-            lru_touch(i);
-            return *owner;
+            // Defense-in-depth: the handle must point at a real slot that still
+            // belongs to THIS owner. With stable Contract storage this always
+            // holds; the check turns any future pointer-provenance bug into a
+            // clean re-prepare instead of running another contract's analysis.
+            if (i >= 0 && static_cast<std::size_t>(i) < num_slots_ &&
+                meta_[i].owner == owner) {
+                ++meta_[i].pin;
+                lru_touch(i);
+                return *owner;
+            }
+            *owner = nullptr;  // stale/foreign handle: fall through to a miss
         }
         const int64_t i = alloc_slot();  // miss: free slot or evict an unpinned one
         uint8_t* buf = arena_ + static_cast<std::size_t>(i) * slot_bytes_;
