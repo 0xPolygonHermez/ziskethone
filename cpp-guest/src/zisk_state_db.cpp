@@ -2358,8 +2358,12 @@ ZiskStateDB::TxGasUsed ZiskStateDB::settle_tx_gas(const Transactions::View& tx,
     // floor applies to the regular one.
     TxGasUsed used{static_cast<uint64_t>(gas_used), static_cast<uint64_t>(gas_used), 0};
     if (is_amsterdam_or_later()) {
-        const int64_t state_used =
+        int64_t state_used =
             tx_state_gas_limit_ - result.state_gas.left + result.state_gas.spilled;
+        // Spec (gas.py:settle_transaction_gas) clamps state gas used at 0; a
+        // negative value would wrap when cast to u64 below (and inflate
+        // block_regular). No known path reaches a negative value today.
+        state_used = std::max<int64_t>(0, state_used);
         used.block_regular =
             static_cast<uint64_t>(std::max(gas_used_pre - state_used, tx_floor_gas_));
         used.block_state = static_cast<uint64_t>(state_used);
