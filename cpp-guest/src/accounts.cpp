@@ -53,11 +53,24 @@ const NodeR* Accounts::build_value(size_t idx,
     // Build from the ORIGINAL (block-start) fields. A leaf is absent (Empty)
     // only if its storage is empty too: otherwise a prover could hang
     // arbitrary slots under an account that doesn't exist and the root
-    // would never see them. (An account with empty fields but storage is a
-    // real trie leaf — the EIP-7610 case — and hashes as one.)
-    if (lc.storage_empty &&
-        is_empty_account(nonce_orig_at(idx), balance_orig_at(idx), code_hash_orig_at(idx))) {
-        lc.cached.emplace<EmptyR>();
+    // would never see them.
+    if (is_empty_account(nonce_orig_at(idx), balance_orig_at(idx), code_hash_orig_at(idx))) {
+        if (lc.storage_empty) {
+            lc.cached.emplace<EmptyR>();
+        } else {
+            // Empty fields but non-empty storage — the legacy EIP-7610 case.
+            // The guest cannot recompute the post-state correctly for every
+            // path: an UNTOUCHED such account must survive (the new-root pass
+            // would wrongly drop it), while a TOUCHED-and-emptied one must be
+            // destroyed (EIP-161), and there is no EIP-161 touched-set to tell
+            // them apart. Refuse rather than risk publishing a non-canonical
+            // root. EIP-7523 implies no such account exists post-Cancun, so this
+            // never fires on a valid Sepolia block; it must be confirmed against
+            // the ~28 mainnet EIP-7610 candidates before mainnet. (The trusted
+            // old-root anchor pins the witness to real pre-state, so a crafted
+            // witness cannot manufacture this case.)
+            fatal("state_root: empty account with non-empty storage (EIP-7610) unsupported");
+        }
     } else {
         lc.cached.emplace<AccountLeafR>(nib, idx,
                                             storage_root);
