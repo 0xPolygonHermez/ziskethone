@@ -146,6 +146,16 @@ ConsensusInfo::ConsensusInfo(const uint8_t*& cursor) {
     if (u64_at(header_ + kForkIdOffset) > static_cast<uint64_t>(ForkId::Amsterdam)) {
         fatal("ConsensusInfo: unknown fork_id");
     }
+    // EIP-7843: slot_number enters the header only at Amsterdam. Before Amsterdam
+    // it is not part of the header or the block hash, yet execution_payload_root
+    // folds it into the published NPR root. An honest pre-Amsterdam input carries
+    // 0 (rust-input-gen writes slot_number.unwrap_or(0)); reject a non-zero value
+    // so the output stays a unique function of the block — otherwise the prover
+    // could publish up to 2^64 distinct roots for one block. Changes no valid root.
+    if (u64_at(header_ + kForkIdOffset) < static_cast<uint64_t>(ForkId::Amsterdam) &&
+        u64_at(header_ + kSlotNumberOffset) != 0) {
+        fatal("ConsensusInfo: non-zero slot_number before Amsterdam");
+    }
 
     const uint64_t n = u64_at(header_ + kWithdrawalsCountOffset);
     // Each withdrawal record is kWithdrawalRecordSize bytes; a count beyond what
