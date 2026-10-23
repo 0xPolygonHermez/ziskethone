@@ -195,17 +195,28 @@ PreviousBlocks::PreviousBlocks(const uint8_t*& cursor) {
 }
 
 const evmc::bytes32* PreviousBlocks::hash_of_number(uint64_t number) const noexcept {
-    // Linear scan by block number. The ancestor set is tiny (≤256, and in
-    // practice 1 — just the parent), and the BLOCKHASH depth guard already
-    // bounds callers to [1,256], so a scan is cheaper than an unordered_map
-    // (which on the bare-metal ZisK target drags in the soft-float load-factor
-    // runtime — no FP support here). First match wins; index 0 = parent.
-    for (size_t i = 0; i < views_.size(); ++i) {
-        if (views_[i].number() == number) {
-            return &hashes_[i];
-        }
+    // Direct index, not a linear scan: the constructor verified the records are a
+    // contiguous chain ordered descending by number (index 0 = parent, the
+    // highest number), so the record for `number` is at `newest - number`. This
+    // keeps BLOCKHASH O(1) — an author cannot inflate proving cost by running it
+    // in a loop over the whole 256-deep window.
+    if (views_.empty()) {
+        return nullptr;
     }
-    return nullptr;
+    const uint64_t newest = views_[0].number();  // parent = highest number
+    if (number > newest) {
+        return nullptr;
+    }
+    const uint64_t idx = newest - number;
+    if (idx >= views_.size()) {
+        return nullptr;
+    }
+    // Contiguity is guaranteed by the constructor; the equality is a cheap
+    // defensive assert that the computed slot really holds `number`.
+    if (views_[idx].number() != number) {
+        return nullptr;
+    }
+    return &hashes_[static_cast<size_t>(idx)];
 }
 
 } // namespace zeg
