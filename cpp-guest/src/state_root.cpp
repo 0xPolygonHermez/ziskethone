@@ -433,7 +433,8 @@ evmc::bytes32 finalize(const NodeR& r,
 NodeR reduce_branch(const std::array<const NodeR*, 16>& children,
                     const Accounts& accounts,
                     const Storages& storages,
-                    ValueSet which)
+                    ValueSet which,
+                    int orig_nonempty)
 {
     int count = 0;
     int single = -1;
@@ -467,6 +468,22 @@ NodeR reduce_branch(const std::array<const NodeR*, 16>& children,
             return mk_node<PhantomLeafR>(std::move(copy));
         }
         if (const auto* h = std::get_if<HashR>(&only)) {
+            // Orphan-sibling guard. A branch the witness showed with >=2 children
+            // has collapsed, in the post-state, to this single surviving child
+            // (a deletion: SSTORE-to-0 or an account going empty), and the
+            // survivor is an opaque witness hash. Folding it as [nibble]->hash is
+            // canonical only if the hash's preimage is itself a branch; if it is
+            // a leaf/extension the canonical fold would merge `nibble` into that
+            // node's path, yielding a different root. The guest cannot tell from
+            // a bare 32-byte hash, and this new root is unanchored (unlike the
+            // old-root pass, which is checked against the trusted anchor), so we
+            // refuse rather than publish a possibly non-canonical root. Honest
+            // input-gen always reveals the surviving sibling in full on a
+            // deletion (reth TrieWitness Legacy mode), so a valid block never
+            // reaches here with an opaque survivor; only guard the Current pass.
+            if (which == ValueSet::Current && orig_nonempty >= 2) {
+                fatal("state_root: unresolved orphan sibling after branch collapse");
+            }
             PackedPath one;          // assign() takes packed bytes; this is a
             one.prepend(nibble);     // loose nibble, so let prepend place it
             return mk_node<ExtR>(std::move(one), h->hash);
@@ -666,8 +683,12 @@ Child build_branch_node(const uint8_t*& cursor,
         child_results[k] = result_ptr(bn.children[k], ctx.branch_nodes,
                                       ctx.aux, ctx.accounts, ctx.storages);
     }
+    int orig_nonempty = 0;
+    for (const auto& ch : bn.children) {
+        if (ch.type != NodeType::Empty) ++orig_nonempty;
+    }
     bn.cached = reduce_branch(child_results, ctx.accounts, ctx.storages,
-                              ValueSet::Original);
+                              ValueSet::Original, orig_nonempty);
 
     if (ctx.branch_n + ctx.aux_n >= ctx.node_limit) {
         fatal("state_root: more nodes than declared (numberOfNodes overflow)");
@@ -850,8 +871,12 @@ std::pair<const NodeR*, bool> eval_node(const Child& c, EvalCtx& ctx, std::size_
             if (all_ro) {
                 return {&bn.cached, true};
             }
+            int orig_nonempty = 0;
+            for (const auto& ch : bn.children) {
+                if (ch.type != NodeType::Empty) ++orig_nonempty;
+            }
             bn.cached = reduce_branch(child_results, ctx.accounts, ctx.storages,
-                                      ValueSet::Current);
+                                      ValueSet::Current, orig_nonempty);
             return {&bn.cached, false};
         }
     }
