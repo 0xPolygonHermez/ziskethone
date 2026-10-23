@@ -429,6 +429,52 @@ void Transactions::parse_osaka(View& v, std::span<const uint8_t> outer_payload) 
     require_end(it);
 }
 
+// EIP-7702 authorization list: a list of 6-tuples
+//   [chain_id, address(20 B), nonce, y_parity, r, s].
+// Validate structure strictly in the constructor, before execution, so a tuple
+// with extra fields or a non-canonical / wrong-width field (which every other
+// client rejects) cannot later be applied. Structural failure rejects the block;
+// SEMANTIC validity (y_parity ∈ {0,1}, chain/nonce match, signature recovery) is
+// still decided per-authorization at execution and only skips that authorization,
+// per the spec. Validating in the constructor also means a tuple after a
+// runtime-OOG (Amsterdam stops applying there) is still structurally checked.
+// Returns the entry count (used for the 25000-per-authorization intrinsic gas).
+// Mirrors execution-specs `Authorization` (exact arity) and alloy.
+size_t validate_authorization_list(std::span<const uint8_t> auth_list_rlp) {
+    const Item outer = rlp::decode_item(auth_list_rlp);
+    if (outer.kind != ItemKind::List) {
+        fatal("Transactions: authorization_list not an RLP list");
+    }
+    size_t n = 0;
+    ListIter it{outer.payload};
+    while (it.has_next()) {
+        const Item tuple = it.next();
+        if (tuple.kind != ItemKind::List) {
+            fatal("Transactions: authorization tuple is not a list");
+        }
+        ListIter tit{tuple.payload};
+        (void)as_u256(next_required(tit));          // chain_id: canonical, <=32 B
+        const Item addr = next_required(tit);        // address: exactly 20 bytes
+        if (addr.kind != ItemKind::String || addr.payload.size() != 20) {
+            fatal("Transactions: authorization address must be 20 bytes");
+        }
+        (void)as_u64(next_required(tit));            // nonce: canonical U64
+        const Item parity = next_required(tit);      // y_parity: canonical, <=1 byte
+        if (parity.kind != ItemKind::String || parity.payload.size() > 1) {
+            fatal("Transactions: authorization y_parity must be <=1 byte");
+        }
+        (void)as_u64(parity);                        // reject non-canonical 0x00
+        (void)as_u256(next_required(tit));           // r: canonical U256
+        (void)as_u256(next_required(tit));           // s: canonical U256
+        if (tit.has_next()) {
+            fatal("Transactions: authorization tuple has trailing fields");
+        }
+        ++n;
+    }
+    return n;
+}
+
+
 // ============================================================================
 // Constructor — for each tx: read u64 envelope_size + envelope bytes + pad.
 // Decode every field, recover the sender from the signature.
@@ -498,17 +544,11 @@ Transactions::Transactions(const uint8_t*& cursor) {
             case Type::Osaka:      parse_osaka      (v, outer.payload); break;
         }
 
-        // For Type 4 (SetCode / EIP-7702): count the auth-list entries
+        // For Type 4 (SetCode / EIP-7702): structurally validate every auth
+        // tuple (exact arity + canonical/width-checked fields) and count them
         // (the intrinsic-gas calculation charges 25000 per authorization).
         if (v.type_ == Type::SetCode) {
-            const Item auth_outer = rlp::decode_item(v.authorization_list_rlp_);
-            if (auth_outer.kind != ItemKind::List) {
-                fatal("Transactions: authorization_list not an RLP list");
-            }
-            size_t n = 0;
-            ListIter ait{auth_outer.payload};
-            while (ait.has_next()) { (void)ait.next(); ++n; }
-            v.num_authorizations_ = n;
+            v.num_authorizations_ = validate_authorization_list(v.authorization_list_rlp_);
         }
 
         v.envelope_         = {env, env_size};
