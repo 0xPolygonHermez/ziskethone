@@ -151,6 +151,12 @@ PreviousBlocks::PreviousBlocks(const uint8_t*& cursor) {
     if (count > stream_remaining(cursor) / kRecordSize) {
         fatal("PreviousBlocks: count exceeds input size");
     }
+    // BLOCKHASH addresses at most the 256 most recent ancestors (and the depth
+    // guard bounds callers to [1,256]); records beyond 256 are hashed but never
+    // served, so reject them rather than process dead input.
+    if (count > 256) {
+        fatal("PreviousBlocks: more than 256 ancestor records");
+    }
     const uint8_t* records = cursor;
 
     views_.reserve(count);
