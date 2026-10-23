@@ -15,6 +15,7 @@
 #include <evmone_precompiles/bn254.hpp>
 #include "bn254/add_affine_spec.hpp"
 #include "zkvm_accelerators.h"
+#include "zeg/fatal.hpp"
 
 namespace {
 using evmone::crypto::bn254::AffinePoint;
@@ -52,8 +53,12 @@ AffinePoint mul(const AffinePoint& pt, const uint256& c) noexcept {
     zkvm_bn254_scalar k;
     store_g1(pt, p.data);
     intx::be::unsafe::store(k.data, c);
+    // The caller validated P (field + on-curve), so a non-OK status here is not
+    // an invalid-input signal but an accelerator error — abort rather than
+    // silently return the identity (which the caller can't distinguish from a
+    // real zero result). Unreachable today; a guard against future changes.
     if (zkvm_bn254_g1_mul(&p, &k, &r) != ZKVM_EOK)
-        return {};
+        zeg::fatal("zkvm_bn254_g1_mul failed");
     return load_g1(r.data);
 }
 
@@ -95,8 +100,13 @@ AffinePoint<evmone::crypto::bn254::Curve> add_affine<evmone::crypto::bn254::Curv
     zkvm_bn254_g1_point a, b, r;
     store_g1(p, a.data);
     store_g1(q, b.data);
+    // Both inputs are caller-validated and canonical (the ABI handles
+    // identities), so a non-OK status is an accelerator error, not an
+    // invalid-input signal — abort rather than return the identity silently.
+    // (validate() above intentionally uses g1_add's status as a validity check;
+    // that path is separate and unchanged.) Unreachable today.
     if (zkvm_bn254_g1_add(&a, &b, &r) != ZKVM_EOK)
-        return {};
+        zeg::fatal("zkvm_bn254_g1_add failed");
     return load_g1(r.data);
 }
 }  // namespace evmone::crypto::ecc

@@ -13,13 +13,18 @@
 
 #include <evmone_precompiles/ripemd160.hpp>
 #include "zkvm_accelerators.h"
+#include "zeg/fatal.hpp"
 
 namespace evmone::crypto {
 
 void ripemd160(std::byte hash[RIPEMD160_HASH_SIZE], const std::byte* data,
                std::size_t size) noexcept {
     zkvm_ripemd160_hash word;
-    zkvm_ripemd160(reinterpret_cast<const uint8_t*>(data), size, &word);
+    // Abort on any non-OK accelerator status rather than copy an undefined
+    // digest. Unreachable today; a guard against future zisklib changes.
+    if (zkvm_ripemd160(reinterpret_cast<const uint8_t*>(data), size, &word) != ZKVM_EOK) {
+        zeg::fatal("zkvm_ripemd160 failed");
+    }
     std::memcpy(hash, reinterpret_cast<const uint8_t*>(&word) + 32 - RIPEMD160_HASH_SIZE,
                 RIPEMD160_HASH_SIZE);
 }

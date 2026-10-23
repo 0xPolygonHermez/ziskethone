@@ -13,13 +13,19 @@
 
 #include <evmone_precompiles/modexp.hpp>  // declaration
 #include "zkvm_accelerators.h"
+#include "zeg/fatal.hpp"
 
 namespace evmone::crypto {
 
 void modexp(std::span<const uint8_t> base, std::span<const uint8_t> exp,
             std::span<const uint8_t> mod, uint8_t* output) noexcept {
-    zkvm_modexp(base.data(), base.size(), exp.data(), exp.size(),
-                mod.data(), mod.size(), output);
+    // Abort on any non-OK accelerator status rather than proceed with an
+    // undefined `output`. Unreachable today (evmone validates the inputs first);
+    // a guard against future zisklib changes.
+    if (zkvm_modexp(base.data(), base.size(), exp.data(), exp.size(),
+                    mod.data(), mod.size(), output) != ZKVM_EOK) {
+        zeg::fatal("zkvm_modexp failed");
+    }
 }
 
 }  // namespace evmone::crypto

@@ -16,13 +16,18 @@
 
 #include <evmone_precompiles/sha256.hpp>
 #include "zkvm_accelerators.h"
+#include "zeg/fatal.hpp"
 
 namespace evmone::crypto {
 
 void sha256(std::byte hash[SHA256_HASH_SIZE], const std::byte* data, size_t size) {
     // The caller's hash buffer has any alignment; zkvm_sha256_hash is 8-byte aligned.
     zkvm_sha256_hash out;
-    zkvm_sha256(reinterpret_cast<const uint8_t*>(data), size, &out);
+    // Abort on any non-OK accelerator status rather than copy an undefined
+    // digest. Unreachable today; a guard against future zisklib changes.
+    if (zkvm_sha256(reinterpret_cast<const uint8_t*>(data), size, &out) != ZKVM_EOK) {
+        zeg::fatal("zkvm_sha256 failed");
+    }
     std::memcpy(hash, out.data, sizeof out.data);
 }
 

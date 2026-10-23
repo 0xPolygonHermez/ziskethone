@@ -15,15 +15,20 @@
 
 #include <evmone_precompiles/blake2b.hpp>
 #include "zkvm_accelerators.h"
+#include "zeg/fatal.hpp"
 
 namespace evmone::crypto {
 
 void blake2b_compress(uint32_t rounds, uint64_t h[8], const uint64_t m[16],
                       const uint64_t t[2], bool last) noexcept {
-    zkvm_blake2f(rounds, reinterpret_cast<zkvm_blake2f_state*>(h),
-                 reinterpret_cast<const zkvm_blake2f_message*>(m),
-                 reinterpret_cast<const zkvm_blake2f_offset*>(t),
-                 static_cast<uint8_t>(last));
+    // Abort on any non-OK accelerator status rather than leave `h` undefined.
+    // Unreachable today; a guard against future zisklib changes.
+    if (zkvm_blake2f(rounds, reinterpret_cast<zkvm_blake2f_state*>(h),
+                     reinterpret_cast<const zkvm_blake2f_message*>(m),
+                     reinterpret_cast<const zkvm_blake2f_offset*>(t),
+                     static_cast<uint8_t>(last)) != ZKVM_EOK) {
+        zeg::fatal("zkvm_blake2f failed");
+    }
 }
 
 }  // namespace evmone::crypto
