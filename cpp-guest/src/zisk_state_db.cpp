@@ -2608,6 +2608,21 @@ evmc::Result ZiskStateDB::system_call(const evmc::address&     target,
     ++tx_counter_;
     transient_.reset();
 
+    // A system call runs as SYSTEM_ADDRESS, not as any transaction. Give the
+    // frame its own context — origin = SYSTEM_ADDRESS, gas_price = base fee, and
+    // no blob hashes (a leftover type-3 blob_hashes pointer from the last tx
+    // would otherwise dangle/leak) — while keeping the block-level fields
+    // (number/timestamp/coinbase/…). Save and restore the surrounding context so
+    // a per-tx context is never clobbered. Defensive today: the predeploys read
+    // none of ORIGIN/GASPRICE/BLOBHASH, so none of this changes a valid block.
+    const evmc_tx_context saved_ctx = tx_context_;
+    evmc_tx_context sys_ctx         = tx_context_;
+    sys_ctx.tx_origin         = kSystemAddress;
+    sys_ctx.tx_gas_price      = sys_ctx.block_base_fee;
+    sys_ctx.blob_hashes       = nullptr;
+    sys_ctx.blob_hashes_count = 0;
+    set_tx_context(sys_ctx);
+
     evmc_message msg{};
     msg.kind         = EVMC_CALL;
     msg.sender       = kSystemAddress;
@@ -2637,6 +2652,7 @@ evmc::Result ZiskStateDB::system_call(const evmc::address&     target,
     auto result = evmc::Result{run_frame(&msg, entry_code.data(), entry_code.size(),
         analysis_for(entry_code_hash))};
     in_system_call_ = false;
+    set_tx_context(saved_ctx);  // restore the surrounding block/tx context
     if (result.status_code != EVMC_SUCCESS) {
         rollback(cp);
     }
