@@ -429,6 +429,47 @@ void Transactions::parse_osaka(View& v, std::span<const uint8_t> outer_payload) 
     require_end(it);
 }
 
+// EIP-2930 access list: a list of entries [address(20 B), [storageKey(32 B)…]].
+// The outer tx list is decoded strictly (require_end); this enforces the SAME
+// strictness on each access-list entry — exact 2-field arity, 20-byte address,
+// 32-byte keys, no trailing fields — so a tx the rest of the network rejects
+// (extra entry field, wrong-width key) is not silently accepted by the guest.
+// Mirrors execution-specs `Access` (decode_to) and alloy-eip2930. The 20/32-byte
+// checks previously lived only in `pre_warm_for_tx`; validating here makes every
+// downstream reader (intrinsic gas + warm-up) inherit a pre-validated list.
+void validate_access_list(std::span<const uint8_t> access_list_rlp) {
+    const Item outer = rlp::decode_item(access_list_rlp);
+    if (outer.kind != ItemKind::List) {
+        fatal("Transactions: access_list is not an RLP list");
+    }
+    ListIter it{outer.payload};
+    while (it.has_next()) {
+        const Item entry = it.next();
+        if (entry.kind != ItemKind::List) {
+            fatal("Transactions: access_list entry is not a list");
+        }
+        ListIter eit{entry.payload};
+        const Item addr = next_required(eit);
+        if (addr.kind != ItemKind::String || addr.payload.size() != 20) {
+            fatal("Transactions: access_list address must be 20 bytes");
+        }
+        const Item keys = next_required(eit);
+        if (keys.kind != ItemKind::List) {
+            fatal("Transactions: access_list keys field is not a list");
+        }
+        ListIter kit{keys.payload};
+        while (kit.has_next()) {
+            const Item k = kit.next();
+            if (k.kind != ItemKind::String || k.payload.size() != 32) {
+                fatal("Transactions: access_list storage key must be 32 bytes");
+            }
+        }
+        if (eit.has_next()) {
+            fatal("Transactions: access_list entry has trailing fields");
+        }
+    }
+}
+
 // EIP-7702 authorization list: a list of 6-tuples
 //   [chain_id, address(20 B), nonce, y_parity, r, s].
 // Validate structure strictly in the constructor, before execution, so a tuple
@@ -473,7 +514,6 @@ size_t validate_authorization_list(std::span<const uint8_t> auth_list_rlp) {
     }
     return n;
 }
-
 
 // ============================================================================
 // Constructor — for each tx: read u64 envelope_size + envelope bytes + pad.
@@ -542,6 +582,12 @@ Transactions::Transactions(const uint8_t*& cursor) {
             case Type::Blob:       parse_blob       (v, outer.payload); break;
             case Type::SetCode:    parse_set_code   (v, outer.payload); break;
             case Type::Osaka:      parse_osaka      (v, outer.payload); break;
+        }
+
+        // Every typed tx carries an access list; validate its inner entries
+        // strictly here (the outer tx list is already strict). Legacy has none.
+        if (v.type_ != Type::Legacy) {
+            validate_access_list(v.access_list_rlp_);
         }
 
         // For Type 4 (SetCode / EIP-7702): structurally validate every auth
