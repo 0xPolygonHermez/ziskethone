@@ -2622,6 +2622,11 @@ evmc::Result ZiskStateDB::system_call(const evmc::address&     target,
     sys_ctx.blob_hashes       = nullptr;
     sys_ctx.blob_hashes_count = 0;
     set_tx_context(sys_ctx);
+    // Clear the per-tx "created this tx" set so a post-block system call does
+    // not inherit the last transaction's freshly-created accounts. Only
+    // SELFDESTRUCT reads it and the predeploys don't SELFDESTRUCT, so this is
+    // defensive.
+    created_this_tx_idx_.clear();
 
     evmc_message msg{};
     msg.kind         = EVMC_CALL;
