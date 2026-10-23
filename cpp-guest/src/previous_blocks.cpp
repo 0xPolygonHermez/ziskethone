@@ -158,6 +158,11 @@ PreviousBlocks::PreviousBlocks(const uint8_t*& cursor) {
 
     for (uint64_t i = 0; i < count; ++i) {
         views_.push_back(View{records + i * kRecordSize});
+        // Yellow-paper rule: extra_data is at most 32 bytes. Cap the ancestor's
+        // length before re-hashing so a forged length can't read past the field.
+        if (views_.back().extra_data().size() > 32) {
+            fatal("PreviousBlocks: ancestor extra_data_len > 32");
+        }
         hashes_.push_back(compute_header_hash(views_.back()));
     }
     advance_checked(cursor, count * kRecordSize);
