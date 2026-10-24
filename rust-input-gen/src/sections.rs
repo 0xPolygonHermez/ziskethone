@@ -424,7 +424,14 @@ pub fn storage_original_values(
 /// `ancestors[0]` is the parent (block `N-1`), `ancestors[1]` the
 /// grandparent, etc. Each record is 768 B with all 23 Amsterdam header
 /// fields. Older blocks have zero-defaulted optional fields.
+///
+/// At most the 256 most recent ancestors are written: BLOCKHASH reaches no
+/// further back, and the guest rejects a longer list (`PreviousBlocks: more
+/// than 256 ancestor records`). Sources that carry the whole chain (EEST
+/// manifests past block 256) would otherwise produce an unprovable input.
 pub fn write_previous_blocks(w: &mut Writer, ancestors: &[Block]) {
+    const MAX_ANCESTORS: usize = 256;
+    let ancestors = &ancestors[..ancestors.len().min(MAX_ANCESTORS)];
     w.u64_le(ancestors.len() as u64);
     for blk in ancestors {
         let h = &blk.header;
