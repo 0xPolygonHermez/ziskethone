@@ -435,7 +435,8 @@ NodeR reduce_branch(const std::array<const NodeR*, 16>& children,
                     const Accounts& accounts,
                     const Storages& storages,
                     ValueSet which,
-                    int orig_nonempty)
+                    int orig_nonempty,
+                    uint32_t opaque_children)  // bit k: child k is an opaque witness hash
 {
     int count = 0;
     int single = -1;
@@ -482,7 +483,10 @@ NodeR reduce_branch(const std::array<const NodeR*, 16>& children,
             // input-gen always reveals the surviving sibling in full on a
             // deletion (reth TrieWitness Legacy mode), so a valid block never
             // reaches here with an opaque survivor; only guard the Current pass.
-            if (which == ValueSet::Current && orig_nonempty >= 2) {
+            // Only an opaque witness hash is ambiguous: a revealed branch child
+            // also reduces to a HashR, but its fold [nibble]->hash is canonical.
+            if (which == ValueSet::Current && orig_nonempty >= 2 &&
+                ((opaque_children >> single) & 1U)) {
                 fatal("state_root: unresolved orphan sibling after branch collapse");
             }
             PackedPath one;          // assign() takes packed bytes; this is a
@@ -692,7 +696,8 @@ Child build_branch_node(const uint8_t*& cursor,
         if (ch.type != NodeType::Empty) ++orig_nonempty;
     }
     bn.cached = reduce_branch(child_results, ctx.accounts, ctx.storages,
-                              ValueSet::Original, orig_nonempty);
+                              ValueSet::Original, orig_nonempty,
+                              /*opaque_children=*/0);  // the guard is Current-only
 
     if (ctx.branch_n + ctx.aux_n >= ctx.node_limit) {
         fatal("state_root: more nodes than declared (numberOfNodes overflow)");
@@ -881,11 +886,14 @@ std::pair<const NodeR*, bool> eval_node(const Child& c, EvalCtx& ctx, std::size_
                 return {&bn.cached, true};
             }
             int orig_nonempty = 0;
-            for (const auto& ch : bn.children) {
-                if (ch.type != NodeType::Empty) ++orig_nonempty;
+            uint32_t opaque_children = 0;
+            for (int k = 0; k < 16; ++k) {
+                const NodeType t = bn.children[k].type;
+                if (t != NodeType::Empty) ++orig_nonempty;
+                if (t == NodeType::Hash) opaque_children |= 1U << k;
             }
             bn.cached = reduce_branch(child_results, ctx.accounts, ctx.storages,
-                                      ValueSet::Current, orig_nonempty);
+                                      ValueSet::Current, orig_nonempty, opaque_children);
             return {&bn.cached, false};
         }
     }
