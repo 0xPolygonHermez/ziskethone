@@ -462,6 +462,10 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
         }
     }
 
+#if defined(ZEG_PUBLIC_OUTPUT_BLOCK_HASH)
+    // 8. ZEG_PUBLIC_OUTPUT=block_hash: no EIP-8025; the block hash is the output.
+    std::memcpy(out, execution_block_hash.bytes, 32);
+#else
     // 8. EIP-8025: the SSZ root of the NewPayloadRequest this block is the
     //    payload of — what the proof attests.
     const evmc::bytes32 npr_root = zeg::new_payload_request_root(
@@ -477,6 +481,7 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
     }
 
     std::memcpy(out, npr_root.bytes, 32);
+#endif
     if (block_hash_out != nullptr) {
         std::memcpy(block_hash_out, execution_block_hash.bytes, 32);
     }

@@ -261,6 +261,14 @@ endif()
 option(ZEG_FORK_FROM_INPUT
        "Take fork+blob params from the input, not the compile-time schedule (EEST only)" OFF)
 
+# The public output (see the host CMakeLists): `npr` (default, EIP-8025, what
+# the exex proves) or `block_hash` (no EIP-8025; ethproofs / benchmarks /
+# zisk-eth-client only — never the exex).
+set(ZEG_PUBLIC_OUTPUT "npr" CACHE STRING "Public output: npr | block_hash")
+if(NOT ZEG_PUBLIC_OUTPUT MATCHES "^(npr|block_hash)$")
+  message(FATAL_ERROR "ZEG_PUBLIC_OUTPUT must be npr | block_hash (got ${ZEG_PUBLIC_OUTPUT})")
+endif()
+
 # Byte size of the fixed per-contract JUMPDEST-analysis cache arena (bounds the
 # guest heap against blocks that execute many distinct max-size contracts). 80
 # MiB covers the absolute worst case: 1025 live frames x the Amsterdam (64 KiB)
@@ -273,6 +281,7 @@ target_compile_definitions(zisk_eth_guest.elf PRIVATE
   ZEG_ANALYSIS_CACHE_BYTES=${ZEG_ANALYSIS_CACHE_BYTES}
   $<$<STREQUAL:${ZEG_CHAIN},sepolia>:ZEG_CHAIN_SEPOLIA>
   $<$<BOOL:${ZEG_FORK_FROM_INPUT}>:ZEG_FORK_FROM_INPUT>
+  $<$<STREQUAL:${ZEG_PUBLIC_OUTPUT},block_hash>:ZEG_PUBLIC_OUTPUT_BLOCK_HASH>
   $<$<STREQUAL:${EVM_BACKEND},zevm>:USE_ZEVM>
   $<$<BOOL:${ZEG_BSWAP_BUILTIN}>:ZEG_BSWAP_BUILTIN>
   $<$<BOOL:${ZEG_JUMPDEST_SW}>:ZEG_JUMPDEST_SW>
