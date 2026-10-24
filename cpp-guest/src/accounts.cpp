@@ -78,6 +78,7 @@ const NodeR* Accounts::build_value(size_t idx,
     return &lc.cached;
 }
 
+// Must return cached_at(idx): eval_node relies on it.
 const NodeR* Accounts::update_value(size_t idx,
                                     const PackedPath& nib,
                                     const evmc::bytes32& storage_root) {

@@ -301,6 +301,12 @@ private:
     std::vector<Mods>      mods_;
     std::vector<LeafCache> leaf_;
     std::unordered_map<Key, size_t, KeyHash, KeyEq> index_;
+    // Last `find` and its answer (opcodes look a slot up twice in a row);
+    // reserve/append invalidate it.
+    mutable evmc::address last_addr_{};
+    mutable evmc::bytes32 last_pos_{};
+    mutable size_t        last_idx_ = 0;
+    mutable uint64_t      last_valid_ = 0;  // u64: byte flags are costly on ZisK
     // address -> its storage indices (see slots_of).
     std::unordered_map<evmc::address, std::vector<size_t>, AddressHash, AddressEq>
         addr_slots_;
