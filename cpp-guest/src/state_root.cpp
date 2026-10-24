@@ -486,7 +486,8 @@ NodeR reduce_branch(const BranchNode& bn, const Ctx& ctx, ValueSet which)
         const Child& oc = children[single];
         // Orphan-sibling guard (audit #2): a branch the witness showed with >= 2
         // children that collapses, in the post-state, to one opaque hash cannot be
-        // folded canonically (the hash may be a leaf/extension), so refuse.
+        // folded canonically (the hash may be a leaf/extension), so refuse. A
+        // revealed branch child also reduces to a HashR, but its fold is canonical.
         const auto check_orphan = [&] {
             if (which != ValueSet::Current) return;
             int orig_nonempty = 0;
@@ -521,7 +522,7 @@ NodeR reduce_branch(const BranchNode& bn, const Ctx& ctx, ValueSet which)
             return mk_node<PhantomLeafR>(std::move(copy));
         }
         if (const auto* h = std::get_if<HashR>(&only)) {
-            check_orphan();
+            if (oc.type == NodeType::Hash) check_orphan();
             PackedPath one;          // assign() takes packed bytes; this is a
             one.prepend(nibble);     // loose nibble, so let prepend place it
             return mk_node<ExtR>(std::move(one), h->hash);
