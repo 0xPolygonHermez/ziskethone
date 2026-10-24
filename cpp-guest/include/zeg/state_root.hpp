@@ -21,6 +21,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
+#include <memory>
 #include <vector>
 
 #include <evmc/evmc.hpp>
@@ -73,6 +75,8 @@ private:
     // root.
     std::vector<BranchNode> branch_nodes_;
     std::vector<NodeR>      aux_;
+    std::deque<std::vector<uint8_t>> phantom_values_;  // PhantomLeafR points in; never moves
+    std::unique_ptr<uint8_t[]> hash_pool_;  // 32 B per PoolHash child
     Child                   root_{};
 };
 
