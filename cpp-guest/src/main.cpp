@@ -99,7 +99,8 @@ int main(int argc, char** argv) {
     print_hex_line(execution_block_hash);
 #endif
 
-    // 3. Emit the new_payload_request_root as the sole public output.
+    // 3. Emit the new_payload_request_root as the sole public output (the block
+    //    hash under ZEG_PUBLIC_OUTPUT=block_hash).
     emit_public_output(new_payload_request_root);
 
     return 0;

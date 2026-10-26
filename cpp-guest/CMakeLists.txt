@@ -253,6 +253,19 @@ if(ZEG_FORK_FROM_INPUT)
     list(APPEND ZEG_CHAIN_DEFS ZEG_FORK_FROM_INPUT)
 endif()
 
+# The public output: `npr` (default) is the EIP-8025 new_payload_request_root
+# the exex / proof-engine / Lighthouse pipeline verifies. `block_hash` publishes
+# the execution block hash instead and skips the NewPayloadRequest SSZ root (all
+# its SHA-256) — a different ELF, only for consumers outside that pipeline
+# (ethproofs, benchmarks, zisk-eth-client). Never use it for the exex.
+set(ZEG_PUBLIC_OUTPUT "npr" CACHE STRING "Public output: npr | block_hash")
+set_property(CACHE ZEG_PUBLIC_OUTPUT PROPERTY STRINGS npr block_hash)
+if(ZEG_PUBLIC_OUTPUT STREQUAL "block_hash")
+    list(APPEND ZEG_CHAIN_DEFS ZEG_PUBLIC_OUTPUT_BLOCK_HASH)
+elseif(NOT ZEG_PUBLIC_OUTPUT STREQUAL "npr")
+    message(FATAL_ERROR "ZEG_PUBLIC_OUTPUT must be npr | block_hash (got ${ZEG_PUBLIC_OUTPUT})")
+endif()
+
 add_executable(zisk_eth_guest ${GUEST_SOURCES})
 
 target_include_directories(zisk_eth_guest PUBLIC include)
