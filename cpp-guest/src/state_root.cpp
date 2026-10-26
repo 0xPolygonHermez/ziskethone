@@ -485,8 +485,12 @@ NodeR reduce_branch(const BranchNode& bn, const Ctx& ctx, ValueSet which)
         const uint8_t nibble = static_cast<uint8_t>(single);
         const Child& oc = children[single];
         // Orphan-sibling guard (audit #2): a branch the witness showed with >= 2
-        // children that collapses, in the post-state, to one opaque hash cannot be
-        // folded canonically (the hash may be a leaf/extension), so refuse.
+        // children that collapses, in the post-state, to one opaque witness hash
+        // cannot be folded canonically (the hash may be a leaf/extension), so
+        // refuse. Only an opaque hash (NodeType::Hash / the pooled PoolHash) is
+        // ambiguous: a revealed branch child also reduces to a HashR, but folding
+        // it as [nibble]->hash is canonical because the guest knows it is a branch,
+        // so that case must NOT fire (it would reject valid blocks).
         const auto check_orphan = [&] {
             if (which != ValueSet::Current) return;
             int orig_nonempty = 0;
@@ -521,7 +525,10 @@ NodeR reduce_branch(const BranchNode& bn, const Ctx& ctx, ValueSet which)
             return mk_node<PhantomLeafR>(std::move(copy));
         }
         if (const auto* h = std::get_if<HashR>(&only)) {
-            check_orphan();
+            // A revealed Branch child also reduces to HashR; only fire for a
+            // genuinely opaque witness hash (NodeType::Hash). (PoolHash, the
+            // other opaque form, is handled above.)
+            if (oc.type == NodeType::Hash) check_orphan();
             PackedPath one;          // assign() takes packed bytes; this is a
             one.prepend(nibble);     // loose nibble, so let prepend place it
             return mk_node<ExtR>(std::move(one), h->hash);
