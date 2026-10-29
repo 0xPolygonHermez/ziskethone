@@ -148,7 +148,7 @@ ZiskStateDB::ZiskStateDB(Accounts&             accounts,
                   "the analysis cache must hold every live frame's analysis");
     cache_ = new AnalysisCache(vm2_,
                                std::size_t{ZEG_ANALYSIS_CACHE_SLOTS} * vm2_->analysis_slot_bytes,
-                               vm2_->analysis_slot_bytes);
+                               vm2_->analysis_slot_bytes, kMaxCodeSizeAmsterdam);
 }
 
 ZiskStateDB::~ZiskStateDB() {

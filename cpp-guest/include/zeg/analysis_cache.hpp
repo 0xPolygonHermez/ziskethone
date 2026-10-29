@@ -16,11 +16,18 @@
 // blocks (<=~350 distinct contracts) never evict. Backend-agnostic: it drives
 // the evmc2 `prepare` with a slot buffer and both backends lay their analysis
 // inside it.
+//
+// Slots are sized for the largest deployable code (`max_code_size`). Larger
+// code can only exist through genesis / pre-state injection (EEST does this
+// for system contracts); it bypasses the cache and gets a heap analysis, kept
+// for the rest of the block, since it would not fit a slot (evmone traps,
+// zevm would overflow into the next slot).
 
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "zeg/evmc2.h"
 #include "zeg/fatal.hpp"
@@ -32,8 +39,11 @@ public:
     // `arena_bytes` total reservation; `slot_bytes` = the backend's maximum
     // single-analysis size (so any contract fits any slot — no fragmentation,
     // and slots never move, which pinning requires).
-    AnalysisCache(evmc2_vm* vm, std::size_t arena_bytes, std::size_t slot_bytes)
-        : vm_(vm), slot_bytes_(slot_bytes), num_slots_(arena_bytes / slot_bytes) {
+    // `max_code_size` = the largest code a slot holds.
+    AnalysisCache(evmc2_vm* vm, std::size_t arena_bytes, std::size_t slot_bytes,
+                  std::size_t max_code_size)
+        : vm_(vm), slot_bytes_(slot_bytes), num_slots_(arena_bytes / slot_bytes),
+          max_code_(max_code_size) {
         if (num_slots_ == 0) {
             zeg::fatal("analysis cache: arena smaller than one slot");
         }
@@ -48,6 +58,7 @@ public:
     }
 
     ~AnalysisCache() {
+        release_oversize();
         delete[] arena_;   // no-op under the bump allocator; frees on the host
         delete[] meta_;
     }
@@ -60,6 +71,9 @@ public:
     // Contract's cached-handle field; it is set on prepare and nulled on evict.
     evmc2_pre_execution* acquire(evmc2_pre_execution** owner, const uint8_t* code,
                                  std::size_t code_size) {
+        if (code_size > max_code_) {
+            return acquire_oversize(owner, code, code_size);
+        }
         if (*owner != nullptr) {  // hit: still resident
             const int64_t i = slot_of(*owner);
             // Defense-in-depth: the handle must point at a real slot that still
@@ -89,13 +103,14 @@ public:
 
     // Drop one pin taken by acquire(); the entry stays cached until evicted.
     void release(evmc2_pre_execution* handle) noexcept {
-        if (handle == nullptr) return;
+        if (handle == nullptr || !in_arena(handle)) return;  // null or oversize (heap)
         const int64_t i = slot_of(handle);
         if (meta_[i].pin > 0) --meta_[i].pin;
     }
 
     // Block teardown: clear every owner's cached handle; keep the arena.
     void reset() noexcept {
+        release_oversize();
         for (std::size_t i = 0; i < num_slots_; ++i) {
             if (meta_[i].owner != nullptr) {
                 *meta_[i].owner = nullptr;
@@ -119,6 +134,29 @@ private:
         int64_t lru_prev = -1, lru_next = -1;
         int64_t next_free = -1;
     };
+
+    // Oversize code: one heap analysis per contract, never pinned or evicted.
+    evmc2_pre_execution* acquire_oversize(evmc2_pre_execution** owner, const uint8_t* code,
+                                          std::size_t code_size) {
+        if (*owner == nullptr) {
+            *owner = vm_->prepare(&vm_->base, code, code_size, nullptr, 0);
+            oversize_.push_back(owner);
+        }
+        return *owner;
+    }
+
+    void release_oversize() noexcept {
+        for (evmc2_pre_execution** owner : oversize_) {
+            vm_->release_pre_execution(&vm_->base, *owner);  // no-op free in the guest
+            *owner = nullptr;
+        }
+        oversize_.clear();
+    }
+
+    bool in_arena(evmc2_pre_execution* h) const noexcept {
+        const auto* p = reinterpret_cast<const uint8_t*>(h);
+        return p >= arena_ && p < arena_ + num_slots_ * slot_bytes_;
+    }
 
     int64_t slot_of(evmc2_pre_execution* h) const noexcept {
         return static_cast<int64_t>(
@@ -169,6 +207,8 @@ private:
     evmc2_vm* vm_;
     std::size_t slot_bytes_;
     std::size_t num_slots_;
+    std::size_t max_code_;
+    std::vector<evmc2_pre_execution**> oversize_;  // owners of heap analyses
     uint8_t* arena_ = nullptr;
     Slot* meta_ = nullptr;
     int64_t free_head_ = -1;

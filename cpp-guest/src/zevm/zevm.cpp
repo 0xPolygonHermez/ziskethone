@@ -364,7 +364,8 @@ evmc2_pre_execution* w_prepare(evmc_vm* /*vm*/, const uint8_t* code,
     uint64_t* bitset;
     if (out_buf != nullptr) {
         // Write the bitset into the caller's cache slot (no heap growth);
-        // out_cap is guaranteed >= nWords*8. build_jumpdest_bitset writes every
+        // out_cap is guaranteed >= nWords*8 (AnalysisCache sends code larger
+        // than kMaxCodeSizeAmsterdam to the heap path below). build_jumpdest_bitset writes every
         // word, so no zeroing needed. The cache owns the slot.
         bitset = reinterpret_cast<uint64_t*>(out_buf);
     } else {
