@@ -1,7 +1,7 @@
 #!/bin/bash
 # EEST blockchain-test sweep: bridge every fixture under the given paths
 # through eest-witness-gen → input-gen-from-manifest → zisk_eth_guest and
-# classify each block (see README "Sweeping a full corpus" for the
+# classify each block (see README "Conformance: make eest" for the
 # categories).
 #
 #   scripts/eest_sweep.sh [-g GUEST] [-o OUT] [-j JOBS] PATH...
