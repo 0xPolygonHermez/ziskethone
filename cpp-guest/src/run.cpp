@@ -26,6 +26,7 @@
 #include "zeg/contracts.hpp"
 #include "zeg/fake_exponential.hpp"
 #include "zeg/fatal.hpp"
+#include "zeg/heap_stats.hpp"
 #include "zeg/previous_blocks.hpp"
 #include "zeg/rlp.hpp"
 #include "zeg/stream.hpp"
@@ -81,6 +82,7 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
     zeg::PreviousBlocks previous_blocks (cursor);
     zeg::Accounts       accounts        (table_seed);
     zeg::Storages       storages        (table_seed);
+    zeg::heap_mark("parse");
 
     // 3. Anchor the ancestor chain to the block being computed.
     //    PreviousBlocks[0] must be the parent — every BLOCKHASH
@@ -264,12 +266,14 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
     if (state_root.old_state_root() != consensus.parent_hash()) {
         zeg::fatal("pre-execution state root mismatch");
     }
+    zeg::heap_mark("state_root");
 
     // 5. Construct the state DB. ZiskStateDB borrows the five
     //    collections by reference for the rest of the run; Host
     //    callbacks pass data through them (or fatal-stub for overrides
     //    that need infrastructure not yet built).
     zeg::ZiskStateDB state(accounts, consensus, contracts, previous_blocks, storages, table_seed);
+    zeg::heap_mark("state_db");
 
     // 6. Run the whole block: pre-block system calls, every tx, then
     //    post-block side-effects. `state` owns the evmone VM and
@@ -334,6 +338,7 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
     //    prover-supplied root; instead it feeds step 7' as the
     //    `state_root` field of the reconstructed header.
     const evmc::bytes32 new_state_root = state_root.calculate_new_state_root();
+    zeg::heap_mark("new_root");
 
     // DEBUG: in `none` mode no mutations were applied — the new walk
     // must reproduce the pre-execution root byte-for-byte.
@@ -485,6 +490,7 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
     if (block_hash_out != nullptr) {
         std::memcpy(block_hash_out, execution_block_hash.bytes, 32);
     }
+    zeg::heap_mark("end");
 
     return 0;
 }

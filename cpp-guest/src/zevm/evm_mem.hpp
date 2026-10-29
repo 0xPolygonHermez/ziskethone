@@ -23,9 +23,21 @@ namespace zevm {
 // limit (kMaxMemPerTx), and ideally ~the memory a whole block touches before we
 // must recycle dirty space (kMemBlockSize is the perf knob: bigger => less
 // cleaning). Both are zero-init BSS, so they cost address space, not real pages,
-// until actually touched.
-inline constexpr size_t kMaxMemPerTx   = size_t(1) << 25;  //  32 MiB per frame
-inline constexpr size_t kMemBlockSize  = size_t(1) << 27;  // 128 MiB per zone
+// until actually touched -- but in the ZisK guest they come out of the same
+// 512 MiB RAM as the heap, so every MiB here is a MiB less heap.
+//
+// Why 64 MiB is enough: createMemory() starts a frame in clean space only below
+// kMemBlockSize - kMaxMemPerTx, else right above its same-parity parent, so a
+// chain of live same-parity frames always has >= kMaxMemPerTx (32 MiB) of zone
+// above its lowest member, whatever kMemBlockSize is. Since EIP-7825 caps a
+// tx's regular gas at 2^24 (Amsterdam's EIP-8037 state-gas reservoir never pays
+// for memory), memory gas 3w + w^2/512 plus the 63/64 rule let one parity hold
+// at most ~14 MiB live (worst-case split of the gas over call depth; a single
+// frame tops out at 2.8 MiB). The zone size only sets how much is touched
+// before space gets recycled. A zone overflow is OOG (ensure()'s capacity
+// guard), never a crash, so an older uncapped fork's huge tx just diverges.
+inline constexpr size_t kMaxMemPerTx   = size_t(1) << 25;  // 32 MiB per frame
+inline constexpr size_t kMemBlockSize  = size_t(1) << 26;  // 64 MiB per zone
 inline constexpr size_t kMaxMemHandles = 1025;             // EVM max call depth 1024 + 1 (frames at depths 0..1024)
 
 static_assert(kMemBlockSize > kMaxMemPerTx, "a zone must fit at least one tx");

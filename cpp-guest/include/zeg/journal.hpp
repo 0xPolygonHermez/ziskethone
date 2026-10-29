@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <unordered_set>
 #include <utility>
@@ -25,6 +26,7 @@
 
 #include <evmc/evmc.hpp>
 
+#include "zeg/tx_arena.hpp"
 #include "zeg/warm_keys.hpp"
 
 namespace zeg {
@@ -113,6 +115,17 @@ public:
     // Stack depth (checkpoints + write records).
     size_t size() const noexcept { return entries_.size(); }
 
+    // Drop every entry AND the storage (in the tx arena, see
+    // zeg/tx_arena.hpp). Called at each transaction start, when no
+    // checkpoint is outstanding: rollbacks never reach a previous tx.
+    // init() then reserves the previous tx's capacity (capped) once the
+    // arena is reset, so a run of similar txs doesn't regrow it each time.
+    void release() noexcept {
+        cap_hint_ = std::min(entries_.capacity(), kMaxCapHint);
+        decltype(entries_){}.swap(entries_);
+    }
+    void init() { entries_.reserve(cap_hint_); }
+
 private:
     struct CheckpointMarker {};
     struct NonceEntry    { size_t idx; uint64_t        old_value;
@@ -158,7 +171,9 @@ private:
         WarmKeySlotEntry,
         PendingDestructEntry>;
 
-    std::vector<Entry> entries_;
+    std::vector<Entry, TxArenaAllocator<Entry>> entries_;
+    static constexpr size_t kMaxCapHint = size_t{1} << 15;
+    size_t cap_hint_ = 0;
 };
 
 } // namespace zeg

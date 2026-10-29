@@ -269,16 +269,21 @@ if(NOT ZEG_PUBLIC_OUTPUT MATCHES "^(npr|block_hash)$")
   message(FATAL_ERROR "ZEG_PUBLIC_OUTPUT must be npr | block_hash (got ${ZEG_PUBLIC_OUTPUT})")
 endif()
 
-# Byte size of the fixed per-contract JUMPDEST-analysis cache arena (bounds the
-# guest heap against blocks that execute many distinct max-size contracts). 80
-# MiB covers the absolute worst case: 1025 live frames x the Amsterdam (64 KiB)
-# max analysis ~= 75 MiB, so the pinned set never overflows at any reachable
-# call depth; honest blocks (<=~10 MiB working set) never evict.
-set(ZEG_ANALYSIS_CACHE_BYTES "83886080" CACHE STRING "Analysis cache arena bytes")
+# Slots in the fixed per-contract JUMPDEST-analysis cache (bounds the guest heap
+# against blocks that execute many distinct max-size contracts). Each slot holds
+# the backend's largest analysis (evmone ~72 KiB for 64 KiB Amsterdam code, zevm
+# 8 KiB), so the arena is ~83 MiB on evmone and ~9 MiB on zevm. 1152 > 1025 live
+# frames, so the pinned set never overflows at any reachable call depth; honest
+# blocks (<=~350 distinct contracts) never evict.
+set(ZEG_ANALYSIS_CACHE_SLOTS "1152" CACHE STRING "Analysis cache slots")
+
+# Debug: print heap usage at the run() phase boundaries (zeg/heap_stats.hpp).
+option(ZEG_HEAP_STATS "Print guest heap usage per phase over the UART" OFF)
 
 target_compile_definitions(zisk_eth_guest.elf PRIVATE
   ZEG_ZISK
-  ZEG_ANALYSIS_CACHE_BYTES=${ZEG_ANALYSIS_CACHE_BYTES}
+  $<$<BOOL:${ZEG_HEAP_STATS}>:ZEG_HEAP_STATS>
+  ZEG_ANALYSIS_CACHE_SLOTS=${ZEG_ANALYSIS_CACHE_SLOTS}
   $<$<STREQUAL:${ZEG_CHAIN},sepolia>:ZEG_CHAIN_SEPOLIA>
   $<$<BOOL:${ZEG_FORK_FROM_INPUT}>:ZEG_FORK_FROM_INPUT>
   $<$<STREQUAL:${ZEG_PUBLIC_OUTPUT},block_hash>:ZEG_PUBLIC_OUTPUT_BLOCK_HASH>

@@ -87,6 +87,11 @@ endif()
 #       reads the evmc_uint256be field as four aligned 8-byte bswap loads instead
 #       of a byte-wise intx::be::load. Every target field is 8-aligned in its
 #       8-aligned owner (evmc_tx_context / evmc_message), so no 4-mod-8 case.
+#   14: Allocate each frame's call output in the guest's per-transaction arena
+#       (include/zeg/tx_arena.hpp) instead of evmc_make_result's malloc, gated
+#       on ZEG_ZISK. The bump allocator never frees, so the per-call malloc
+#       leaked every output: a 200M-gas block RETURNing 1 KiB per CALL
+#       exhausted the heap. The arena is reset at every transaction start.
 # Each patch is checked with `git apply --reverse --check` first; if it
 # is already applied we skip — that keeps the configure step idempotent
 # across rebuilds.
@@ -102,6 +107,7 @@ set(_evmone_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/11-evmone-zisk-coinbase-aligned-load.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/12-evmone-zisk-address-aligned-load.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/13-evmone-zisk-txctx-bytes32-aligned-load.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/14-evmone-zisk-tx-arena-call-output.patch"
 )
 find_program(GIT_EXECUTABLE git REQUIRED)
 foreach(_patch IN LISTS _evmone_patches)

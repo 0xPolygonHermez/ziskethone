@@ -35,6 +35,8 @@
 #include "zeg/rlp.hpp"
 #include "zeg/sha256.hpp"
 #include "zeg/system_addresses.hpp"
+#include "zeg/heap_stats.hpp"
+#include "zeg/tx_arena.hpp"
 #include "zeg/zisk_crypto.hpp"  // verify_signature_and_get_signer (EIP-7702)
 
 namespace zeg {
@@ -134,14 +136,18 @@ ZiskStateDB::ZiskStateDB(Accounts&             accounts,
           ),
       transient_(table_seed),
       warm_keys_(table_seed) {
-#ifndef ZEG_ANALYSIS_CACHE_BYTES
-#define ZEG_ANALYSIS_CACHE_BYTES (80u * 1024u * 1024u)
+#ifndef ZEG_ANALYSIS_CACHE_SLOTS
+#define ZEG_ANALYSIS_CACHE_SLOTS 1152u
 #endif
     // Fixed, reusable cache for per-contract JUMPDEST analyses (bounds the heap
-    // regardless of how many distinct contracts a block executes). Sized above
-    // the max simultaneously-pinned set (<= call depth), so eviction never has
-    // to fail a valid block.
-    cache_ = new AnalysisCache(vm2_, ZEG_ANALYSIS_CACHE_BYTES,
+    // regardless of how many distinct contracts a block executes). Sized in
+    // slots above the max simultaneously-pinned set (<= call depth + 1 = 1025),
+    // so eviction never has to fail a valid block; the bytes follow from the
+    // backend's slot size.
+    static_assert(ZEG_ANALYSIS_CACHE_SLOTS > 1025u,
+                  "the analysis cache must hold every live frame's analysis");
+    cache_ = new AnalysisCache(vm2_,
+                               std::size_t{ZEG_ANALYSIS_CACHE_SLOTS} * vm2_->analysis_slot_bytes,
                                vm2_->analysis_slot_bytes);
 }
 
@@ -760,10 +766,12 @@ void ZiskStateDB::rollback(Checkpoint cp) noexcept {
 void ZiskStateDB::execute_block(const Transactions& transactions) noexcept {
     pre_execute_block ();
     process_transactions(transactions);
+    heap_mark("txs");
     post_execute_block();
 
     // EIP-7928: the BAL.
     if (bal_) bal_hash_ = build_block_access_list_hash();
+    heap_mark("bal");
 
     // Receipts trie root: built from the finalized tx_receipts_, one
     // leaf per tx keyed by RLP(tx_index).
@@ -774,6 +782,7 @@ void ZiskStateDB::execute_block(const Transactions& transactions) noexcept {
         }
         receipts_root_ = trie.root_hash();
     }
+    heap_mark("receipts");
 
     // Withdrawals trie root (EIP-4895): one leaf per withdrawal, keyed
     // by RLP(index_in_block), value = rlp_list(index, validator_index,
@@ -1353,7 +1362,15 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         // so SELFDESTRUCT in the new tx only fully-destroys accounts
         // CREATEd by this tx, not by any prior one.
         ++tx_counter_;
-        transient_.reset();
+        // Per-tx arena (zeg/tx_arena.hpp): the journal (no checkpoint
+        // spans a tx), the transient map and every evmone call output of
+        // the previous tx are dead. Drop the containers' storage, reclaim
+        // the arena, and only then allocate their storage for this tx.
+        journal_.release();
+        transient_.release();
+        tx_arena_reset();
+        journal_.init();
+        transient_.init();
         created_this_tx_idx_.clear();
         // pending_destruct_ is also per-tx — `apply_pending_destructs`
         // at the END of the previous iteration drained it, so this

@@ -66,6 +66,14 @@ extern "C" [[noreturn]] void zeg_zisk_halt() {
 // ===========================================================================
 static char *g_next = nullptr;
 
+// Per-transaction arena (zeg/tx_arena.hpp): [g_tx_low, _heap_top), growing
+// down toward g_next. Also the main heap's limit, so malloc's check stays a
+// single compare.
+static char *g_tx_low = &_heap_top;
+#if defined(ZEG_HEAP_STATS)
+static char *g_tx_min = &_heap_top;   // lowest g_tx_low seen (heap_stats.hpp)
+#endif
+
 // memcpy is the ZisK memory ABI's (zkvm_mem.s, one DMA op);
 // declare it so realloc can use it. -fno-builtin (see zisk/CMakeLists.txt) keeps
 // this an out-of-line call to that symbol rather than an inlined byte loop.
@@ -75,10 +83,34 @@ static inline char *heap_alloc(size_t size) {
     if (!g_next) g_next = &_heap_bottom;
     size = (size + 15) & ~size_t(15);            // 16-byte align (max_align_t)
     char *p = g_next;
-    if (p + size > &_heap_top) halt();    // OOM -> stop loudly
+    if (p + size > g_tx_low) halt();      // OOM -> stop loudly
     g_next += size;
     return p;
 }
+
+extern "C" void *zeg_tx_arena_alloc(size_t size) noexcept {
+    if (!g_next) g_next = &_heap_bottom;
+    size = (size + 15) & ~size_t(15);
+    if (size > static_cast<size_t>(g_tx_low - g_next)) halt();   // OOM -> stop loudly
+    g_tx_low -= size;
+#if defined(ZEG_HEAP_STATS)
+    if (g_tx_low < g_tx_min) g_tx_min = g_tx_low;
+#endif
+    return g_tx_low;
+}
+
+extern "C" void zeg_tx_arena_reset() noexcept { g_tx_low = &_heap_top; }
+
+#if defined(ZEG_HEAP_STATS)
+// zeg/heap_stats.hpp: main heap in use, deepest tx arena so far, and the gap
+// left between them now.
+extern "C" void zeg_heap_stats(size_t *used, size_t *tx_peak, size_t *free_bytes) noexcept {
+    char *next = g_next ? g_next : &_heap_bottom;
+    *used = static_cast<size_t>(next - &_heap_bottom);
+    *tx_peak = static_cast<size_t>(&_heap_top - g_tx_min);
+    *free_bytes = static_cast<size_t>(g_tx_low - next);
+}
+#endif
 
 void *malloc(size_t size) { return heap_alloc(size); }
 void  free(void *) {}
