@@ -9,6 +9,12 @@ description = "reth node with an ExEx that proves every new payload with ZisK an
 name = "reth-zisk"
 path = "src/main.rs"
 
+# Batch coordinator-prove driver for the killer-block sweep (reuses the exex's
+# streaming CoordinatorProver via a #[path] include of prover.rs). Not shipped.
+[[bin]]
+name = "kprove"
+path = "src/bin/kprove.rs"
+
 [dependencies]
 # reth v2.7.0, the release the local nodes run (same pin as eest-witness-gen).
 reth-ethereum         = { git = "https://github.com/paradigmxyz/reth", tag = "v2.7.0", features = ["full", "cli"] }
