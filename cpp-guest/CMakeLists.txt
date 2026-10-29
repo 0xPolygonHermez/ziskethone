@@ -92,9 +92,15 @@ endif()
 #       on ZEG_ZISK. The bump allocator never frees, so the per-call malloc
 #       leaked every output: a 200M-gas block RETURNing 1 KiB per CALL
 #       exhausted the heap. The arena is reset at every transaction start.
-# Each patch is checked with `git apply --reverse --check` first; if it
-# is already applied we skip — that keeps the configure step idempotent
-# across rebuilds.
+# The check covers the whole stack, not each patch alone: patches may overlap
+# (13 edits lines in 12's context), so a per-patch `git apply --reverse
+# --check` misreads an applied stack as missing 12. Instead we build
+# "HEAD + every patch" in a scratch index and compare the source tree to it.
+# Equal → already applied, nothing to do. Anything else (pristine, partially
+# patched, or patched with an older version of a patch) → reset the checkout
+# and apply the stack again. That keeps reconfigure idempotent and makes an
+# added or edited patch take effect in an existing build dir. evmone-src is
+# owned by the build: hand edits inside it are discarded.
 set(_evmone_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/02-evmone-delegation-eoa-fastpath.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/03-evmone-zisk-u256-abi.patch"
@@ -110,26 +116,52 @@ set(_evmone_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/14-evmone-zisk-tx-arena-call-output.patch"
 )
 find_program(GIT_EXECUTABLE git REQUIRED)
+set(_patched_index "${CMAKE_CURRENT_BINARY_DIR}/evmone-patched.index")
+set(_git_tmp_index ${CMAKE_COMMAND} -E env GIT_INDEX_FILE=${_patched_index} ${GIT_EXECUTABLE})
+execute_process(
+    COMMAND ${_git_tmp_index} read-tree HEAD
+    WORKING_DIRECTORY "${evmone_SOURCE_DIR}"
+    RESULT_VARIABLE _rc)
+if(NOT _rc EQUAL 0)
+    message(FATAL_ERROR "git read-tree HEAD failed in ${evmone_SOURCE_DIR} (rc=${_rc})")
+endif()
 foreach(_patch IN LISTS _evmone_patches)
     execute_process(
-        COMMAND ${GIT_EXECUTABLE} apply --reverse --check "${_patch}"
+        COMMAND ${_git_tmp_index} apply --cached "${_patch}"
         WORKING_DIRECTORY "${evmone_SOURCE_DIR}"
-        RESULT_VARIABLE _already_applied
-        OUTPUT_QUIET ERROR_QUIET)
-    if(NOT _already_applied EQUAL 0)
+        RESULT_VARIABLE _rc)
+    if(NOT _rc EQUAL 0)
+        message(FATAL_ERROR
+            "evmone patch ${_patch} does not apply on top of the previous ones (rc=${_rc})")
+    endif()
+endforeach()
+execute_process(
+    COMMAND ${_git_tmp_index} diff --quiet
+    WORKING_DIRECTORY "${evmone_SOURCE_DIR}"
+    RESULT_VARIABLE _differs)
+file(REMOVE "${_patched_index}")
+if(_differs EQUAL 0)
+    message(STATUS "evmone patches already applied")
+else()
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} checkout -- .
+        WORKING_DIRECTORY "${evmone_SOURCE_DIR}"
+        RESULT_VARIABLE _rc)
+    if(NOT _rc EQUAL 0)
+        message(FATAL_ERROR "Failed to reset ${evmone_SOURCE_DIR} (rc=${_rc})")
+    endif()
+    foreach(_patch IN LISTS _evmone_patches)
         execute_process(
             COMMAND ${GIT_EXECUTABLE} apply "${_patch}"
             WORKING_DIRECTORY "${evmone_SOURCE_DIR}"
-            RESULT_VARIABLE _apply_rc)
-        if(NOT _apply_rc EQUAL 0)
+            RESULT_VARIABLE _rc)
+        if(NOT _rc EQUAL 0)
             message(FATAL_ERROR
-                "Failed to apply evmone patch ${_patch} (rc=${_apply_rc})")
+                "Failed to apply evmone patch ${_patch} (rc=${_rc})")
         endif()
-        message(STATUS "Applied evmone patch: ${_patch}")
-    else()
-        message(STATUS "evmone patch already applied: ${_patch}")
-    endif()
-endforeach()
+    endforeach()
+    message(STATUS "evmone source reset and all patches applied")
+endif()
 
 # Pull evmone's Cable/Hunter setup into *this* CMakeLists scope before we
 # call project(), so Hunter is happy and Cable's toolchain configuration
