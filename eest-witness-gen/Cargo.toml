@@ -3,6 +3,7 @@ name = "eest-witness-gen"
 version = "0.1.0"
 edition = "2021"
 description = "Loads an EEST blockchain fixture, executes it through reth, captures the execution witness, and emits an OfflineSources manifest the cpp-guest pipeline can consume via `input-gen-from-manifest`."
+license = "MIT OR Apache-2.0"
 
 [[bin]]
 name = "eest-witness-gen"

@@ -3,6 +3,7 @@ name = "rust-input-gen"
 version = "0.1.0"
 edition = "2021"
 description = "Fetches Ethereum block data via RPC and writes a BINARY_FORMAT-conformant input file for the ZisK C++ guest."
+license = "MIT OR Apache-2.0"
 
 [[bin]]
 name = "input-gen"

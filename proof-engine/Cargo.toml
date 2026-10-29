@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.95"
 description = "EIP-8025 proof engine for the beacon node: verifies the ZisK execution proofs of the zisk_eth_guest."
+license = "MIT OR Apache-2.0"
 
 [[bin]]
 name = "zisk-proof-engine"

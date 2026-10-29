@@ -403,3 +403,13 @@ Things to keep in mind:
 | `make eest [EEST_PATHS=]` | The EEST conformance sweep. |
 | `make killer [KILLER_GAS=] [KILLER_PATHS=]` | The prover-killer sweep on the ELF. |
 | `make help` | Lists the variables: `EVM_BACKEND`, `CHAIN`, `JOBS`, `KILLER_JOBS`, `FIXTURES`, `ZISKEMU`, `RISCV_GCC_BIN`. |
+
+## License
+
+All code in this repository is licensed under one of the following options:
+
+- The Apache License, Version 2.0 (see LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0)
+
+- The MIT License (see LICENSE-MIT or http://opensource.org/licenses/MIT)
+
+You may choose either license at your discretion.
