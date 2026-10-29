@@ -182,10 +182,10 @@ transitions.
 
 | | Blocks |
 |---|---:|
-| PASS | 102,662 |
+| PASS | 102,663 |
 | PASS_NEG (correctly rejected invalid blocks) | 10,819 |
 | NA_POS (partial request records, no EIP-8025 root) | 12 |
-| **FAIL** (completeness gap: wrong hash on a valid block) | **13** |
+| **FAIL** (completeness gap: wrong hash on a valid block) | **12** |
 | **FAIL_NEG** (soundness: guest accepts an invalid block) | **0** |
 | MISSING | 20,657 |
 
@@ -195,18 +195,19 @@ Of the MISSING blocks:
   unrecoverable signatures, full blobs inside the block RLP, a blob or set-code transaction
   that creates a contract, and fork-transition headers missing a field.
 
-**Zero failures on Cancun, Prague, Osaka and Amsterdam**, and on the fork transitions. All 13
+**Zero failures on Cancun, Prague, Osaka and Amsterdam**, and on the fork transitions. All 12
 failures are on pre-Cancun forks:
 
 | Fixture | Forks | Blocks | Status |
 |---|---|---:|---|
 | `constantinople/eip1014_create2/recreate/recreate.json` | Berlin, London, Paris, Shanghai | 12 | Pre-Cancun only, won't fix (see below) |
-| `ported_static/stTransactionTest/opcodes_transaction_init` (`prevrandao` variant) | Paris | 1 | Open. evmone and zevm compute the same hash, so it's likely in the bridge or input for this variant. It passes on every other fork. |
 
 Four Amsterdam `system_contract_errors` blocks (EIP-8282, and EIP-7002 / 7251 under
 Amsterdam) also failed. Each injects a system contract larger than the 64 KiB code-size limit
-into the pre-state, which the analysis cache couldn't hold. They now pass; the numbers above
-include that fix.
+into the pre-state, which the analysis cache couldn't hold. A Paris `opcodes_transaction_init`
+block also failed: input-gen labelled every Paris block as London (both have 16 header fields),
+so PREVRANDAO returned the difficulty. Input-gen now marks a 16-field header with difficulty 0
+as Paris. All five now pass; the numbers above include both fixes.
 
 `recreate`: a contract that existed before the block SELFDESTRUCTs, then the same
 address comes back in the same block, because it receives value or is re-created with

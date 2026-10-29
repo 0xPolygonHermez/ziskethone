@@ -73,9 +73,9 @@ pub fn write_magic(w: &mut Writer) {
 /// from this id; `0` (= Unknown) resolves to Prague (mainnet default).
 const FORK_BERLIN: u64 = 1;
 const FORK_LONDON: u64 = 2;
-// FORK_PARIS = 3 exists in the guest enum but is never emitted here:
-// Paris and London share the same header structure (16 fields), so the
-// live-RPC path can't distinguish them and emits FORK_LONDON for both.
+// Paris and London share the same header structure (16 fields); they are
+// told apart by difficulty (EIP-3675: post-Merge difficulty is 0, PoW never).
+const FORK_PARIS: u64 = 3;
 const FORK_SHANGHAI: u64 = 4;
 const FORK_CANCUN: u64 = 5;
 const FORK_PRAGUE: u64 = 6;
@@ -170,6 +170,8 @@ pub fn write_consensus_info(
         FORK_CANCUN
     } else if h.withdrawals_root.is_some() {
         FORK_SHANGHAI
+    } else if h.base_fee_per_gas.is_some() && h.difficulty.is_zero() {
+        FORK_PARIS
     } else if h.base_fee_per_gas.is_some() {
         FORK_LONDON
     } else {
