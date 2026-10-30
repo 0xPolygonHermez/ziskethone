@@ -115,6 +115,7 @@ set(_evmone_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/13-evmone-zisk-txctx-bytes32-aligned-load.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/14-evmone-zisk-tx-arena-call-output.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/15-evmone-depth-limit-all-forks.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/16-evmone-zisk-memory-views.patch"
 )
 find_program(GIT_EXECUTABLE git REQUIRED)
 set(_patched_index "${CMAKE_CURRENT_BINARY_DIR}/evmone-patched.index")

@@ -557,6 +557,11 @@ private:
     evmc::Result system_call(const evmc::address&     target,
                              std::span<const uint8_t> calldata) noexcept;
 
+    // Starts a transaction (or system call) in the per-tx arena: drops the
+    // journal, transient storage and the VM's buffers of the previous one,
+    // resets the arena and re-creates the containers.
+    void reset_tx_arena() noexcept;
+
     // ===== Members =====
 
     Accounts&             accounts_;

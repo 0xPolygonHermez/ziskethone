@@ -8,6 +8,7 @@
 #include <evm/jump_dest_bitmap.hpp>  // ZisK jump_dest_bitmap precompile (CSR 0x81C)
 
 #include "evm_mem.hpp"
+#include "zeg/tx_arena.hpp"  // zeg_tx_arena_alloc (CREATE bitsets in the guest)
 
 namespace zevm {
 
@@ -148,10 +149,17 @@ void EvmState::reset(const evmc_message* msg,
         jumpdestBitset = prebuilt_analysis;  // borrowed (e.g. from evmc2 prepare)
         ownsAnalysis   = false;
     } else if (codeSize != 0) {
-        // JUMPDEST bitset: ceil(codeSize/64) u64 words. malloc (not calloc):
-        // build_jumpdest_bitset writes every word.
+        // JUMPDEST bitset: ceil(codeSize/64) u64 words, uninitialized:
+        // build_jumpdest_bitset writes every word. Only CREATE init code gets
+        // here (deployed code comes from the analysis cache). In the guest it
+        // goes in the per-tx arena, not on the never-freed heap (audit H2);
+        // the frame ends within the transaction.
         const size_t nWords = (codeSize + 63) / 64;
+#if defined(ZEG_ZISK)
+        auto* buf = static_cast<uint64_t*>(zeg_tx_arena_alloc(nWords * sizeof(uint64_t)));
+#else
         auto* buf = static_cast<uint64_t*>(std::malloc(nWords * sizeof(uint64_t)));
+#endif
         build_jumpdest_bitset(code, codeSize, buf);
         jumpdestBitset = buf;
         ownsAnalysis   = true;

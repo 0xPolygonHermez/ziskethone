@@ -576,11 +576,22 @@ evmc::Result ZiskStateDB::ecrecover_precompile(const evmc_message& msg) noexcept
         return evmc::Result{EVMC_SUCCESS, gas_left, 0, nullptr, 0,
                             {.left = msg.state_gas}};  // not recoverable
 
-    // Output: 20-byte address, left-padded to 32 bytes. evmc::Result copies it.
-    uint8_t out[32] = {};
+    // Output: 20-byte address, left-padded to 32 bytes, in one static buffer
+    // (as evmone patch 07 does for the other precompiles): evmc::Result's
+    // copying constructor would malloc 32 bytes per call, which the guest
+    // never frees. The caller only views it until its next call, and no other
+    // ecrecover can run before that (patch 16: return data is a view).
+    static uint8_t out[32];
+    std::memset(out, 0, 12);
     std::memcpy(out + 12, signer.bytes, 20);
-    return evmc::Result{EVMC_SUCCESS, gas_left, 0, out, sizeof(out),
-                        {.left = msg.state_gas}};
+    return evmc::Result{evmc_result{
+        .status_code = EVMC_SUCCESS,
+        .gas_left    = gas_left,
+        .state_gas   = {.left = msg.state_gas},
+        .output_data = out,
+        .output_size = sizeof(out),
+        .release     = nullptr,
+    }};
 }
 
 evmc_tx_context ZiskStateDB::get_tx_context() const noexcept {
@@ -1366,15 +1377,7 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         // so SELFDESTRUCT in the new tx only fully-destroys accounts
         // CREATEd by this tx, not by any prior one.
         ++tx_counter_;
-        // Per-tx arena (zeg/tx_arena.hpp): the journal (no checkpoint
-        // spans a tx), the transient map and every evmone call output of
-        // the previous tx are dead. Drop the containers' storage, reclaim
-        // the arena, and only then allocate their storage for this tx.
-        journal_.release();
-        transient_.release();
-        tx_arena_reset();
-        journal_.init();
-        transient_.init();
+        reset_tx_arena();
         created_this_tx_idx_.clear();
         // pending_destruct_ is also per-tx — `apply_pending_destructs`
         // at the END of the previous iteration drained it, so this
@@ -2623,6 +2626,19 @@ void ZiskStateDB::collect_system_requests(const evmc::address& addr,
     requests_.push_back(std::move(req));
 }
 
+void ZiskStateDB::reset_tx_arena() noexcept {
+    // Per-tx arena (zeg/tx_arena.hpp): the journal (no checkpoint spans a
+    // tx), the transient map, the VM's EVM memory and call outputs (evmone
+    // patch 16) of the previous tx are dead. Drop every user's storage,
+    // reclaim the arena, and only then allocate storage for this tx.
+    journal_.release();
+    transient_.release();
+    if (vm2_->release_tx_buffers != nullptr) vm2_->release_tx_buffers(&vm2_->base);
+    tx_arena_reset();
+    journal_.init();
+    transient_.init();
+}
+
 evmc::Result ZiskStateDB::system_call(const evmc::address&     target,
                                       std::span<const uint8_t> calldata) noexcept {
     // Treat every system call as its own EVM frame for the purposes
@@ -2634,7 +2650,10 @@ evmc::Result ZiskStateDB::system_call(const evmc::address&     target,
     // skip its snapshot. Transient storage (EIP-1153) is also reset
     // per-frame.
     ++tx_counter_;
-    transient_.reset();
+    // A system call is a transaction for the per-tx arena too: the caller of
+    // the previous system call copied its output before returning, and a
+    // tx's output is dead once its receipt is built.
+    reset_tx_arena();
 
     // A system call runs as SYSTEM_ADDRESS, not as any transaction. Give the
     // frame its own context — origin = SYSTEM_ADDRESS, gas_price = base fee, and

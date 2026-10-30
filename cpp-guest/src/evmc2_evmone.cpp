@@ -21,6 +21,7 @@
 #include <evmone/vm.hpp>        // evmone::VM (the type behind the underlying vm)
 
 #include "zeg/system_addresses.hpp"  // kMaxCodeSizeAmsterdam (slot sizing)
+#include "zeg/tx_arena.hpp"          // zeg_tx_arena_alloc (CREATE analyses)
 
 namespace {
 
@@ -109,11 +110,27 @@ evmc_result w_execute2(evmc_vm* vm, const evmc_host_interface* host,
                        const evmc_message* msg, uint8_t const* code,
                        size_t code_size, evmc2_pre_execution* pre) noexcept {
     auto* impl = wrap(vm)->impl;
+#if defined(ZEG_ZISK)
+    // No cached analysis (CREATE init code): analyze into the per-tx arena.
+    // execute() would analyze() onto the never-freed main heap, about the
+    // init code's size per CREATE for the whole block (audit H2). The frame
+    // ends within the transaction, so the arena outlives the analysis.
+    if (pre == nullptr) {
+        const size_t bytes = kAnalysisNode + analyze_storage_bytes(code_size);
+        auto* buf = static_cast<uint8_t*>(zeg_tx_arena_alloc(bytes));
+        pre = w_prepare(vm, code, code_size, buf, bytes);
+    }
+#else
     if (pre == nullptr)  // no prepared analysis → behave exactly like execute()
         return impl->execute(impl, host, ctx, rev, msg, code, code_size);
+#endif
     const auto* analysis = reinterpret_cast<const Analysis*>(pre);
     return evmone::baseline::execute(*static_cast<evmone::VM*>(impl), *host, ctx,
                                      rev, *msg, *analysis);
+}
+
+void w_release_tx_buffers(evmc_vm* vm) noexcept {
+    static_cast<evmone::VM*>(wrap(vm)->impl)->release_tx_buffers();  // patch 16
 }
 
 }  // namespace
@@ -149,6 +166,7 @@ extern "C" evmc2_vm* evmc2_create_evmone(void) {
             /*execute2=*/ w_execute2,
             /*release_pre_execution=*/ w_release,
             /*analysis_slot_bytes=*/ kSlotBytes,
+            /*release_tx_buffers=*/ w_release_tx_buffers,
         },
         /*impl=*/ impl,
     };

@@ -82,6 +82,10 @@ struct evmc2_vm
     // (sized for this backend at the largest possible code size). The analysis
     // cache uses it as its fixed slot size. 0 if the backend has no slot path.
     size_t                         analysis_slot_bytes;
+    // Drops the VM's per-transaction buffers (EVM memory, return data). The
+    // host calls it at each transaction and system-call start, before the
+    // guest's per-transaction arena is reset. NULL if the backend keeps none.
+    void (*release_tx_buffers)(struct evmc_vm* vm);
 };
 
 #ifdef __cplusplus

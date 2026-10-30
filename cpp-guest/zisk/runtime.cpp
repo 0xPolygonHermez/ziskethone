@@ -31,6 +31,7 @@
 #include <utility>
 
 #include <zeg/bswap.hpp>   // zeg::bswap64 — the shared byte-swap implementation
+#include <zeg/zisk_io.hpp> // uart_puts: say why the guest stopped
 
 extern "C" {
 
@@ -61,8 +62,10 @@ extern "C" [[noreturn]] void zeg_zisk_halt() {
 
 // ===========================================================================
 // Bump allocator. Single-shot execution: free() is a no-op. ~0.5 GB heap.
-// (No calloc: nothing links it — the guest uses malloc and relies on ZisK's
-// fresh-RAM-is-zero guarantee where zeroed memory is needed.)
+// (No calloc: nothing links it.) malloc'd memory is NOT guaranteed zero: the
+// main heap grows into space the per-tx arena already used and reset, so
+// callers must initialise what they read. Only memory taken before the first
+// transaction (nothing has been reset yet) is still ZisK's fresh zero RAM.
 // ===========================================================================
 static char *g_next = nullptr;
 
@@ -79,11 +82,21 @@ static char *g_tx_min = &_heap_top;   // lowest g_tx_low seen (heap_stats.hpp)
 // this an out-of-line call to that symbol rather than an inlined byte loop.
 void *memcpy(void *dst, const void *src, size_t n);
 
+// Out of memory: the main heap (growing up) met the per-tx arena (growing
+// down). Say which side asked, so a block that fails this way is told apart
+// from a guest bug, then stop.
+[[noreturn]] static void out_of_memory(const char *who) {
+    zeg::zisk::uart_puts("guest: out of memory (");
+    zeg::zisk::uart_puts(who);
+    zeg::zisk::uart_puts(")\n");
+    halt();
+}
+
 static inline char *heap_alloc(size_t size) {
     if (!g_next) g_next = &_heap_bottom;
     size = (size + 15) & ~size_t(15);            // 16-byte align (max_align_t)
     char *p = g_next;
-    if (p + size > g_tx_low) halt();      // OOM -> stop loudly
+    if (p + size > g_tx_low) out_of_memory("heap");
     g_next += size;
     return p;
 }
@@ -91,7 +104,7 @@ static inline char *heap_alloc(size_t size) {
 extern "C" void *zeg_tx_arena_alloc(size_t size) noexcept {
     if (!g_next) g_next = &_heap_bottom;
     size = (size + 15) & ~size_t(15);
-    if (size > static_cast<size_t>(g_tx_low - g_next)) halt();   // OOM -> stop loudly
+    if (size > static_cast<size_t>(g_tx_low - g_next)) out_of_memory("tx arena");
     g_tx_low -= size;
 #if defined(ZEG_HEAP_STATS)
     if (g_tx_low < g_tx_min) g_tx_min = g_tx_low;
@@ -121,8 +134,11 @@ void *realloc(void *ptr, size_t size) {
     if (!ptr) return heap_alloc(size);
     char *p = heap_alloc(size);
     // Copy the old block up to the new size via the DMA-accelerated memcpy. Safe
-    // because the heap is one contiguous region and old blocks stay mapped; any
-    // bytes past the old allocation are fresh zero (the bump arena is untouched).
+    // because the heap is one contiguous region and old blocks stay mapped (the
+    // source range ends below p + size <= g_tx_low, and the DMA memcpy handles
+    // the overlap when ptr was the last block). Bytes past the old allocation
+    // are unspecified (possibly reused arena memory): callers only read what
+    // they wrote, and evmone's Memory::grow zeroes its new part itself.
     memcpy(p, ptr, size);
     return p;
 }

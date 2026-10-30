@@ -13,8 +13,10 @@
 // provably dies with the transaction lives in it:
 //   * the Journal's entries (checkpoints never span a transaction),
 //   * the TransientStorage map (EIP-1153 clears it per transaction),
-//   * evmone's per-call output buffers (patch 14; each is copied into the
-//     caller's return data / memory, or into Contracts for deployed code).
+//   * evmone's EVM memory (patch 16; dropped by the VM's release_tx_buffers
+//     before the reset). Call outputs and return data are views of it,
+//   * the code analysis of CREATE init code (both backends).
+// A system call counts as a transaction (ZiskStateDB::reset_tx_arena).
 // Anything kept past the transaction (receipts, logs, table rows, BAL,
 // deployed code) stays on the main heap.
 //
