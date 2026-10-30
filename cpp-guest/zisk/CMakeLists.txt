@@ -292,6 +292,16 @@ target_compile_definitions(zisk_eth_guest.elf PRIVATE
   $<$<BOOL:${ZEG_JUMPDEST_SW}>:ZEG_JUMPDEST_SW>
   PROJECT_VERSION="0.24.0")          # normally injected by evmone's CMake
 target_compile_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
+
+# Audit H8: stamp the options that change what the ELF proves into the ELF
+# itself, so a deployed ELF says how it was built (`strings zisk_eth_guest.elf |
+# grep ZEG_BUILD_FLAGS`; the exex logs and checks it). main.cpp places it in
+# .rodata.zeg_build_flags, which zisk.ld KEEPs; it costs no steps.
+set(ZEG_BUILD_FLAGS
+  "chain=${ZEG_CHAIN};backend=${EVM_BACKEND};fork_from_input=$<BOOL:${ZEG_FORK_FROM_INPUT}>;output=${ZEG_PUBLIC_OUTPUT};heap_stats=$<BOOL:${ZEG_HEAP_STATS}>;jumpdest_sw=$<BOOL:${ZEG_JUMPDEST_SW}>;bswap_builtin=$<BOOL:${ZEG_BSWAP_BUILTIN}>;zisk_dma=$<BOOL:${ZEG_ZISK_DMA}>;analysis_cache_slots=${ZEG_ANALYSIS_CACHE_SLOTS};build_type=${CMAKE_BUILD_TYPE}")
+file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/zeg_build_flags.h
+  CONTENT "#define ZEG_BUILD_FLAGS \"${ZEG_BUILD_FLAGS}\"\n")
+target_include_directories(zisk_eth_guest.elf PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_link_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUEST_OPT_LIST}>)
 # runtime.cpp's calloc no longer zero-fills (the bump arena is fresh, ZisK-zero
 # RAM) and realloc copies via memcpy. -fno-builtin keeps that an out-of-line call

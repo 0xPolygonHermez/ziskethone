@@ -63,10 +63,19 @@ cpp:
 
 # The ZisK ELF the prover runs: ZEG_CHAIN=$(CHAIN), fork from the schedule,
 # EIP-8025 public output. The host configure provides evmone's patched source.
+# Every option that changes what the ELF proves is passed explicitly and the
+# ELF dir is configured --fresh, so nothing leaks in from an old CMakeCache
+# (audit H8). The ELF records them: strings <elf> | grep ZEG_BUILD_FLAGS.
+DEPLOY_FLAGS := -DEVM_BACKEND=$(EVM_BACKEND) -DZEG_CHAIN=$(CHAIN) \
+	-DZEG_FORK_FROM_INPUT=OFF -DZEG_PUBLIC_OUTPUT=npr
+DEPLOY_ELF_FLAGS := -DCMAKE_BUILD_TYPE=Release -DZEG_HEAP_STATS=OFF \
+	-DZEG_JUMPDEST_SW=OFF -DZEG_BSWAP_BUILTIN=ON -DZEG_ZISK_DMA=OFF \
+	-DZEG_ANALYSIS_CACHE_SLOTS=1152
+
 elf: toolchain-check
-	cmake -S cpp-guest -B $(DEPLOY_HOST) -DEVM_BACKEND=$(EVM_BACKEND) -DZEG_CHAIN=$(CHAIN)
-	cmake -S cpp-guest/zisk -B $(DEPLOY_ELF) -DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN) \
-		-DCMAKE_BUILD_TYPE=Release -DEVM_BACKEND=$(EVM_BACKEND) -DZEG_CHAIN=$(CHAIN) \
+	cmake -S cpp-guest -B $(DEPLOY_HOST) $(DEPLOY_FLAGS)
+	cmake --fresh -S cpp-guest/zisk -B $(DEPLOY_ELF) -DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN) \
+		$(DEPLOY_FLAGS) $(DEPLOY_ELF_FLAGS) \
 		-DEVMONE_SRC=$(ROOT)/$(DEPLOY_HOST)/_deps/evmone-src
 	cmake --build $(DEPLOY_ELF) --target zisk_eth_guest.elf -j $(JOBS)
 	@echo "ELF: $(DEPLOY_ELF)/zisk_eth_guest.elf"

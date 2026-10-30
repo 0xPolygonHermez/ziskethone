@@ -95,7 +95,7 @@ SECTIONS
 
   . = ALIGN(8);
   PROVIDE(_global_pointer = .);
-  .rodata : { *(.rodata .rodata.* .gnu.linkonce.r.*)} >rom AT>rom :rodata
+  .rodata : { KEEP(*(.rodata.zeg_build_flags)) *(.rodata .rodata.* .gnu.linkonce.r.*)} >rom AT>rom :rodata
 
   /* C++ static constructors / destructors (run by _start before/after main),
      placed in ROM: the entries are link-time-constant function pointers, never

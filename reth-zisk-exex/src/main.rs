@@ -3,6 +3,7 @@
 //! beacon node. See README.md.
 
 mod beacon;
+mod build_flags;
 mod lighthouse;
 mod pipeline;
 mod precheck;
@@ -124,7 +125,15 @@ async fn build_config(args: &ZiskArgs, chain_id: u64) -> anyhow::Result<Config> 
             }
             let validator_index = beacon.validator_index(&signer.pubkey()).await?;
             info!(validator_index, pubkey = %hex::encode(signer.pubkey()), proof_type = ssz::ZISK_PROOF_TYPE, "proof signer");
-            let prover = CoordinatorProver::connect(&args.coordinator, &elf()?).await?;
+            let elf_path = elf()?;
+            let elf_bytes = std::fs::read(&elf_path).with_context(|| format!("reading {}", elf_path.display()))?;
+            let Some(flags) = build_flags::read(&elf_bytes) else {
+                anyhow::bail!("{} has no ZEG_BUILD_FLAGS stamp: rebuild it with `make elf`", elf_path.display());
+            };
+            build_flags::check_deployable(&flags, chain_id)
+                .with_context(|| format!("{} is not a deployable guest", elf_path.display()))?;
+            info!(?flags, "guest build flags");
+            let prover = CoordinatorProver::connect(&args.coordinator, &elf_path).await?;
             std::fs::create_dir_all(&args.out_dir)?;
             std::fs::write(args.out_dir.join("program_vk.hex"), format!("0x{}\n", hex::encode(&prover.program_vk)))?;
             let sub = Submitter { beacon, params, signer, validator_index, submit: args.submit };
