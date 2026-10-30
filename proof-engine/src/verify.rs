@@ -94,9 +94,9 @@ pub fn verify_execution_proof(proof_data: &[u8], public_input: &PublicInput, cfg
         ));
     }
 
-    let expected = zisk_verifier::expected_proof_bytes(&p.hash, false)
+    let expected = zisk_verifier::proof_size(&p.hash, false)
         .ok_or_else(|| format!("no vadcop_final verifier for hash family {:?}", p.hash))?;
-    if p.proof.len() * 8 != expected {
+    if !expected.admits(p.proof.len() * 8) {
         return Err(format!("STARK payload is {} bytes, expected {expected}", p.proof.len() * 8));
     }
     let mut stark_publics = Vec::with_capacity(1 + publics.len());
@@ -191,7 +191,7 @@ mod tests {
     }
 
     fn stark_len() -> usize {
-        zisk_verifier::expected_proof_bytes("blake3", false).unwrap() / 8
+        zisk_verifier::proof_size("blake3", false).unwrap().max_bytes() / 8
     }
 
     fn proof(vk: Vk, root: [u8; 32]) -> Vec<u8> {

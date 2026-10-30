@@ -14,10 +14,11 @@ path = "src/main.rs"
 # The verifier of the ZisK release the prover runs (coordinator protos in
 # reth-zisk-exex/proto are vendored from the same rev). It is no_std and only
 # pulls proofman-verifier/fields, not the prover.
-# ZisK 1.4.0-alpha: fix/worker-cancel-recovery (no v1.4.0 tag yet); proofman rev
-# matches zisk's own Cargo.lock (pil2-proofman branch pre-develop-1.4.0-alpha).
-zisk-verifier = { git = "https://github.com/0xPolygonHermez/zisk", rev = "32a20dc9e2dd5081094dfd17cd7ce7f1acba8863", features = ["std"] }
-proofman-verifier = { git = "https://github.com/0xPolygonHermez/pil2-proofman.git", branch = "pre-develop-1.4.0-alpha", version = "1.4.0-alpha", default-features = false, features = ["std"] }
+# ZisK 1.4.0-alpha: pre-develop-1.4.0-alpha 85f85b99 (no v1.4.0 tag yet). That
+# rev takes proofman from crates.io; proofman-verifier matches it so the proof
+# types are the ones zisk-verifier uses.
+zisk-verifier = { git = "https://github.com/0xPolygonHermez/zisk", rev = "85f85b99e88e0da0ff5503a4d8db12574fd30d63", features = ["std"] }
+proofman-verifier = { version = "1.4.0-alpha", default-features = false, features = ["std"] }
 
 # The proof_data wire format: bincode (standard config) of zisk_common::Proof.
 bincode = { version = "2.0", default-features = false, features = ["serde", "std"] }

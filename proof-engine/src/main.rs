@@ -78,7 +78,7 @@ impl KeyArgs {
         } else {
             parse_vk_hex(&self.setup_vk).map_err(anyhow::Error::msg).context("--setup-vk")?
         };
-        if zisk_verifier::expected_proof_bytes(&self.hash, false).is_none() {
+        if zisk_verifier::proof_size(&self.hash, false).is_none() {
             bail!("no vadcop_final verifier for hash family {:?}", self.hash);
         }
         Ok(Config { chain_id: self.chain_id, program_vks, setup_vk, hash: self.hash.clone() })

@@ -151,7 +151,7 @@ impl CoordinatorProver {
     }
 
     async fn submit(&mut self, kind: grpc::job_kind::Kind) -> Result<String> {
-        let req = grpc::JobRequestMessage { job_kind: Some(grpc::JobKind { kind: Some(kind) }) };
+        let req = grpc::JobRequestMessage { job_kind: Some(grpc::JobKind { kind: Some(kind) }), metadata: Default::default() };
         Ok(self.client.job_request(req).await?.into_inner().job_id)
     }
 
@@ -179,7 +179,7 @@ impl CoordinatorProver {
             if cancel.is_cancelled() {
                 return Ok(None);
             }
-            let req = grpc::JobRequestMessage { job_kind: Some(grpc::JobKind { kind: Some(kind.clone()) }) };
+            let req = grpc::JobRequestMessage { job_kind: Some(grpc::JobKind { kind: Some(kind.clone()) }), metadata: Default::default() };
             attempts += 1;
             let send_t = std::time::Instant::now();
             match self.client.job_request(req).await {
@@ -268,6 +268,8 @@ impl CoordinatorProver {
             // Let the coordinator draw its own proving seed (client seeds are
             // rejected unless it is configured to allow them). New in 1.4.0.
             random_seed: None,
+            // Only for a SNARK proof_dest; this asks for a STARK.
+            snark_protocol: None,
         });
         let Some((job_id, submit)) = this.submit_when_free(prove, cancel).await? else {
             return Ok(Outcome::Cancelled);
