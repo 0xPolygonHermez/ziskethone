@@ -1,0 +1,27 @@
+diff --git a/lib/evmone/instructions_calls.cpp b/lib/evmone/instructions_calls.cpp
+--- a/lib/evmone/instructions_calls.cpp
++++ b/lib/evmone/instructions_calls.cpp
+@@ -218,7 +218,10 @@ Result call_impl(StackTop stack, int64_t gas_left, ExecutionState& state) noexce
+         }
+     }
+ 
+-    if (state.rev < EVMC_OSAKA && state.msg->depth >= 1024)
++    // ziskethone: enforced on every fork. Upstream skips it from Osaka on (unreachable
++    // under EIP-7825's per-tx gas cap), but the spec keeps STACK_DEPTH_LIMIT and
++    // the VM holds only 1025 ExecutionStates (an NDEBUG build drops the assert).
++    if (state.msg->depth >= 1024)
+         return {EVMC_SUCCESS, gas_left};  // "Light" failure.
+ 
+     const auto result = state.host.call(msg);
+@@ -287,7 +290,10 @@ Result create_impl(StackTop stack, int64_t gas_left, ExecutionState& state) noex
+     if ((gas_left -= init_code_cost) < 0)
+         return {EVMC_OUT_OF_GAS, gas_left};
+ 
+-    if (state.rev < EVMC_OSAKA && state.msg->depth >= 1024)
++    // ziskethone: enforced on every fork. Upstream skips it from Osaka on (unreachable
++    // under EIP-7825's per-tx gas cap), but the spec keeps STACK_DEPTH_LIMIT and
++    // the VM holds only 1025 ExecutionStates (an NDEBUG build drops the assert).
++    if (state.msg->depth >= 1024)
+         return {EVMC_SUCCESS, gas_left};  // "Light" failure.
+ 
+     if (endowment != 0 &&

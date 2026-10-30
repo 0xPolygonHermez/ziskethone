@@ -457,6 +457,10 @@ void ZiskStateDB::clear_account_for_selfdestruct(size_t src_idx) noexcept {
 }
 
 evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
+    // The EVM stops CALL/CREATE at depth 1024 (patch 15 for evmone, zevm's own
+    // check), so a deeper message is a broken invariant. evmone keeps only 1025
+    // ExecutionStates; going deeper would reallocate them under live frames.
+    if (msg.depth > 1024) fatal("call: depth > 1024");
     bal_commit_pending();
     // Precompile dispatch. Mirror the test/state host check: only a
     // straight CALL (not a DELEGATECALL into the precompile address)
