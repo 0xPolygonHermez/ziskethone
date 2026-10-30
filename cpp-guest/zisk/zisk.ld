@@ -1,5 +1,5 @@
 /* Copy of zisk's own ziskbuild/zisk_linker_script.ld, taken verbatim from the
- * pre-develop-1.4.0-alpha pin (commit aaa8c4982, "feature/input-2gb"). Sourced
+ * ZisK v1.4.0-alpha tag (unchanged since aaa8c4982, "feature/input-2gb"). Sourced
  * directly from upstream so it can be re-diffed against the pinned zisk repo on
  * any future toolchain bump.
  *

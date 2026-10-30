@@ -14,10 +14,10 @@ path = "src/main.rs"
 # The verifier of the ZisK release the prover runs (coordinator protos in
 # reth-zisk-exex/proto are vendored from the same rev). It is no_std and only
 # pulls proofman-verifier/fields, not the prover.
-# ZisK 1.4.0-alpha: pre-develop-1.4.0-alpha 85f85b99 (no v1.4.0 tag yet). That
-# rev takes proofman from crates.io; proofman-verifier matches it so the proof
+# ZisK v1.4.0-alpha (tag, 64a1f1664). That release takes proofman from
+# crates.io; proofman-verifier matches it so the proof
 # types are the ones zisk-verifier uses.
-zisk-verifier = { git = "https://github.com/0xPolygonHermez/zisk", rev = "85f85b99e88e0da0ff5503a4d8db12574fd30d63", features = ["std"] }
+zisk-verifier = { git = "https://github.com/0xPolygonHermez/zisk", tag = "v1.4.0-alpha", features = ["std"] }
 proofman-verifier = { version = "1.4.0-alpha", default-features = false, features = ["std"] }
 
 # The proof_data wire format: bincode (standard config) of zisk_common::Proof.

@@ -702,8 +702,8 @@ after the per-tx arena (a710606). Status and changes:
 - **H1 pairing with more than 32 pairs (ZisK).** The zkvm pairing routines of
   ZisK ≤ `32a20dc9e` stage pairs in 32-pair buffers and fail above that, so a
   valid ECPAIRING / BLS12_PAIRING call with ≥ 33 pairs failed in the ELF only.
-  Fixed upstream by ZisK `9263069de` (any number of pairs), which the latest
-  `pre-develop-1.4.0-alpha` contains; no guest change. The 200M benchmark
+  Fixed upstream by ZisK `9263069de` (any number of pairs), which the
+  `v1.4.0-alpha` release contains; no guest change. The 200M benchmark
   blocks do not catch it (each benchmark tx burns all its gas either way);
   EEST `bls12_pairing/valid_multi_inf` (454 pairs per call) and
   `valid[large_input_with_cancellation]` (129 pairs) check the result in

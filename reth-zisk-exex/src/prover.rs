@@ -37,7 +37,7 @@ const CHUNK_BYTES: usize = 3 * 1024 * 1024;
 /// Largest framed input still sent as a single inline `InputChunk`. Above this
 /// the input is streamed in `CHUNK_BYTES` pieces via `PushJobInput`, which
 /// lifts the 128 MiB inline cap up to the zkVM input-region limit
-/// (`MAX_INPUT_SIZE` = 2 GiB on the pre-develop-1.4.0-alpha coordinator).
+/// (`MAX_INPUT_SIZE` = 2 GiB on the v1.4.0-alpha coordinator).
 /// A margin under the 128 MiB message cap leaves room for the 16-byte frame
 /// header and the `ProveRequest` protobuf overhead.
 const INLINE_MAX: usize = 100 * 1024 * 1024;
@@ -365,7 +365,7 @@ impl CoordinatorProver {
 }
 
 /// The coordinator's zkVM input-region cap (`MAX_INPUT_SIZE`): 2 GiB on
-/// pre-develop-1.4.0-alpha (`core/src/mem.rs` `MAX_INPUT_SIZE = 0x8000_0000`).
+/// v1.4.0-alpha (`core/src/mem.rs` `MAX_INPUT_SIZE = 0x8000_0000`).
 /// A soft client-side check only — the coordinator is the authority.
 fn grpc_zisk_max_input() -> u64 {
     0x8000_0000

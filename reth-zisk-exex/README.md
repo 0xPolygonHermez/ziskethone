@@ -93,7 +93,7 @@ Each block leaves `--zisk.out-dir/<number>-<hash prefix>/`, containing:
 
 ### Prover: ZisK coordinator
 
-Run `zisk-coordinator` with one or more GPU `zisk-worker`s (ZisK `distributed/`, v1.3.2-alpha), with the proving keys installed (`ziskup --provingkey`). At startup the ExEx registers the ELF and runs its setup, then logs the program VK and writes it to `--zisk.out-dir/program_vk.hex`. The beacon node's proof engine, [`proof-engine/`](../proof-engine/README.md), pins it. Proofs are `PROOF_KIND_STARK`: the bincode `zisk_common::Proof` that the coordinator returns, at most `MAX_PROOF_SIZE` = 4 MiB. That byte string is the signed `proof_data`.
+Run `zisk-coordinator` with one or more GPU `zisk-worker`s (ZisK `distributed/`, v1.4.0-alpha), with the proving keys installed (`ziskup --provingkey`). At startup the ExEx registers the ELF and runs its setup, then logs the program VK and writes it to `--zisk.out-dir/program_vk.hex`. The beacon node's proof engine, [`proof-engine/`](../proof-engine/README.md), pins it. Proofs are `PROOF_KIND_STARK`: the bincode `zisk_common::Proof` that the coordinator returns, at most `MAX_PROOF_SIZE` = 4 MiB. That byte string is the signed `proof_data`.
 
 ### Beacon node
 
