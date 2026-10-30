@@ -140,8 +140,9 @@ zkvm_status zkvm_bn254_g1_add(const zkvm_bn254_g1_point* p1, const zkvm_bn254_g1
                               zkvm_bn254_g1_point* result);
 zkvm_status zkvm_bn254_g1_mul(const zkvm_bn254_g1_point* point, const zkvm_bn254_scalar* scalar,
                               zkvm_bn254_g1_point* result);
-/* BN254 pairing check. num_pairs must be <= 32: the .zisk implementation stages the
- * points in fixed-size buffers and returns ZKVM_EFAIL for a larger count. */
+/* BN254 pairing check, any num_pairs. ZisK before 9263069de staged the points in
+ * 32-pair buffers and returned ZKVM_EFAIL above that; the guest needs a ZisK with
+ * that commit (a valid 33+-pair ECPAIRING otherwise fails in the ELF only). */
 zkvm_status zkvm_bn254_pairing(const zkvm_bn254_pairing_pair* pairs, size_t num_pairs, bool* verified);
 
 zkvm_status zkvm_blake2f(uint32_t rounds, zkvm_blake2f_state* h,
@@ -159,9 +160,8 @@ zkvm_status zkvm_bls12_g2_add(const zkvm_bls12_381_g2_point* p1, const zkvm_bls1
                               zkvm_bls12_381_g2_point* result);
 zkvm_status zkvm_bls12_g2_msm(const zkvm_bls12_381_g2_msm_pair* pairs, size_t num_pairs,
                               zkvm_bls12_381_g2_point* result);
-/* BLS12-381 pairing check. num_pairs must be in 1..=32: the .zisk
- * implementation stages the points in fixed-size buffers and returns ZKVM_EFAIL
- * for 0 or a larger count. */
+/* BLS12-381 pairing check, num_pairs >= 1 (evmone rejects empty input first).
+ * ZisK before 9263069de returned ZKVM_EFAIL above 32 pairs, as for BN254. */
 zkvm_status zkvm_bls12_pairing(const zkvm_bls12_381_pairing_pair* pairs, size_t num_pairs, bool* verified);
 zkvm_status zkvm_bls12_map_fp_to_g1(const zkvm_bls12_381_fp* field_element,
                                     zkvm_bls12_381_g1_point* result);
