@@ -693,3 +693,62 @@ enforcement is the default (safe). The EEST conformance build must add
 times. All guest changes above are root-preserving for valid live blocks, so the
 new ELF yields the same NewPayloadRequest roots as the current one (the
 re-mint/redeploy and PE re-pin are still required because the ELF bytes change).
+
+## Second external audit (review of `fdb6cbb`, 2026-10-29)
+
+A second static review (11 findings, H1–H11) was re-checked against the code
+after the per-tx arena (a710606). Status and changes:
+
+- **H1 pairing with more than 32 pairs (ZisK).** The zkvm pairing routines of
+  ZisK ≤ `32a20dc9e` stage pairs in 32-pair buffers and fail above that, so a
+  valid ECPAIRING / BLS12_PAIRING call with ≥ 33 pairs failed in the ELF only.
+  Fixed upstream by ZisK `9263069de` (any number of pairs), which the latest
+  `pre-develop-1.4.0-alpha` contains; no guest change. The 200M benchmark
+  blocks do not catch it (each benchmark tx burns all its gas either way);
+  EEST `bls12_pairing/valid_multi_inf` (454 pairs per call) and
+  `valid[large_input_with_cancellation]` (129 pairs) check the result in
+  storage and PASS on the ELF in ziskemu built from the latest ZisK. The
+  deployed prover still needs the ZisK version bump.
+- **H2 per-frame copies on the never-freed heap / H4 EVM memory per depth.**
+  evmone patch 16: a frame's output is a view of its memory (no copy, no
+  release) and `return_data` a view of the callee's output, valid because a
+  depth's memory only changes when its parent makes a new call, which clears
+  the view first. In the guest, evmone's EVM memory lives in the per-tx arena
+  and `VM::release_tx_buffers()` drops it before every arena reset, so it no
+  longer accumulates across the block. CREATE init-code analyses (both
+  backends) and ECRECOVER outputs no longer use the main heap. Running out
+  of memory now prints which side (heap or tx arena) ran out. Measured on
+  identical 200M inputs (old → new main-heap growth during the txs):
+  nested_frame_memory depth 256 18.1 → 5.8 MB, returndatacopy 1 MiB
+  5.9 → 0.08 MB, return 1 MiB 2.2 → 0.08 MB; the tx-arena peak of
+  return 1 KiB went from 65 to 12.6 MB. Same outputs; steps within ±0.6%
+  (return 1 KiB −2.4%).
+- **H3 journal never cleared.** Already fixed by the per-tx arena. A system
+  call now resets the arena like a transaction (`ZiskStateDB::reset_tx_arena`).
+- **H5 slot_number bound to the raw fork_id.** Reproduced on a mainnet block:
+  raw `fork_id=8` plus any `slot_number` kept the block hash and changed the
+  NPR root. The guard now uses the derived fork, `slot_number()` is 0 before
+  Amsterdam, and a deploy build (fork from the schedule) rejects an input whose
+  `fork_id` differs from the schedule's, which also catches schedule drift
+  between input-gen and the ELF (and pre-Cancun timestamps).
+- **H6 mainnet NPR shape.** Not a bug: the guest follows the Gloas shape that
+  Lighthouse, the only consumer, uses. A mainnet ELF's root has no consumer
+  until mainnet schedules Amsterdam (the exex already refuses a block without a
+  Gloas bid). No change.
+- **H7 32-byte output, invalid blocks halt.** Still follow-up #7 above. A
+  `successful_validation=false` proof needs the claimed payload in the input
+  (today the header is rebuilt from execution), ~100 of the ~200 `fatal` sites
+  turned into an invalid-block exit, a 43-byte output, and matching changes in
+  the proof engine and the exex. Lighthouse itself fixes `valid=true`. No
+  change.
+- **H8 build flags not recorded.** `make elf` passes every option explicitly
+  and configures the ELF `--fresh`. The ELF carries `ZEG_BUILD_FLAGS:` (chain,
+  backend, fork source, output, heap stats, …) in `.rodata`, and the exex's
+  prove mode refuses an ELF whose stamp is missing or isn't a deploy build for
+  the node's chain.
+- **H9/H10 DepositEvent parser.** Fixed layout, as in execution-specs
+  `extract_deposit_data`: 576 bytes, canonical offsets and sizes; no offset is
+  followed, so the H10 overflow can't occur. Unreachable on real chains.
+- **H11 call depth.** evmone skips the 1024 check from Osaka on; patch 15
+  restores it on every fork (zevm already had it), and `ZiskStateDB::call`
+  fatals on a deeper message. Unreachable under EIP-7825.

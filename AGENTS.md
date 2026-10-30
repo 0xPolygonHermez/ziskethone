@@ -26,7 +26,9 @@
   contract and the fork schedule.
 - **Fork source:** `ZEG_FORK_FROM_INPUT=ON` takes the fork from the input. It is **for test
   builds only**, because EEST replays every fork at synthetic times. A deployed ELF must keep
-  it OFF; with OFF, EEST inputs fail.
+  it OFF; with OFF, EEST inputs fail. With OFF the input's `fork_id` must also equal the
+  schedule's fork for the block's timestamp (input-gen and the exex write it from the same
+  schedule), or the guest halts.
 - **One build dir per combination** (the options are cached):
   - `cmake -S cpp-guest -B cpp-guest/build      -DEVM_BACKEND=evmone` → `build/zisk_eth_guest`
   - `cmake -S cpp-guest -B cpp-guest/build-zevm -DEVM_BACKEND=zevm`   → `build-zevm/zisk_eth_guest`
@@ -70,7 +72,13 @@
 
 - **Layout:** 512 MiB of RAM minus a 4 MiB stack. The heap is whatever the static data leaves.
 - **Allocator:** a bump allocator that never frees (`zisk/runtime.cpp`), plus a
-  per-transaction arena (`zeg/tx_arena.hpp`) that is reset at each transaction start.
+  per-transaction arena (`zeg/tx_arena.hpp`) that is reset at each transaction and system-call
+  start (`ZiskStateDB::reset_tx_arena`).
+  - **In the arena:** the journal, transient storage, evmone's EVM memory (patch 16; the VM
+    drops it through `release_tx_buffers` before the reset), and CREATE init-code analyses.
+  - **Views, no copies:** call outputs and `return_data` point into the callee's memory, so
+    anything kept past the next call at that depth must be copied (deployed code, requests).
+  - **Arena memory is not zero** once reused: initialise what you allocate.
 - **Heap per backend:** evmone has about 407 MiB of heap. zevm has about 259 MiB, because its
   EVMMem zones and frame stacks are static.
 - **Measuring:** configure the ELF with `-DZEG_HEAP_STATS=ON` to print per-phase heap use.
@@ -168,6 +176,8 @@ The procedure is in the README ("Upgrading the guest ELF"). The rules:
   3. Set `PE_PROGRAM_VK` on **every** proof engine, local and remote, and restart them.
 - **Before deploying:** `make killer` and `make eest` must pass. The host guest and the ELF
   must agree on recent Sepolia blocks.
+- **Build stamp:** build the deployed ELF with `make elf`. It carries `ZEG_BUILD_FLAGS:`, and
+  the exex refuses an ELF without a deploy stamp for its chain.
 - **The coordinator runs one program at a time.** Stop `reth-zisk-sepolia` before using the
   coordinator for anything else (`kprove`, tests), and restart it afterwards.
 - **Ask first.** Deploying, restarting services, or touching the live nodes always needs the

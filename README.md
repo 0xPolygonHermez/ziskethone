@@ -222,6 +222,18 @@ CREATE2.
 - **Why it isn't fixed:** a fix would mean rebuilding storage subtrees in the state-root pass,
   which isn't worth it for a case that can't happen on the target forks.
 
+**zevm**, Cancun and later forks plus the transitions (10,673 fixture files): 80,507 PASS,
+9,820 PASS_NEG, 0 FAIL_NEG, and 2 FAILs, both `ported_static/stStaticCall/static_call1_mb1024_calldepth`
+(Cancun and Prague).
+- **What the test does:** one ~882-billion-gas transaction, which is possible only before
+  Osaka's EIP-7825 cap, nests 1024 STATICCALLs that each expand memory to 1 MB. That makes
+  about 1 GB of EVM memory live at once.
+- **Why zevm fails:** its memory zones are fixed at 64 MiB per call-depth parity, and running
+  out counts as out of gas.
+- **Why it can't happen for real:** under the 2^24 gas cap per transaction a zone needs at most
+  ~14 MiB, and on a real Cancun or Prague block 1 GB at that depth would cost ~2 billion gas.
+  The evmone ELF couldn't hold it either; it passes only in the host build.
+
 Run `make eest` before a release, and check that Osaka and Amsterdam still have zero failures.
 
 ## Prover-killer blocks: `make killer`
@@ -361,6 +373,10 @@ receive the proofs over gossip. The exex mints the VK, so the steps go in this o
    - Run the host guest and the ELF on a few recent Sepolia blocks (`input-gen` on blocks
      near the head). Both must give the chain's hash and the same root.
 2. **Install.**
+   - Build the ELF with `make elf CHAIN=sepolia`. It records its build options in a
+     `ZEG_BUILD_FLAGS:` string (`strings zisk_eth_guest.elf | grep ZEG_BUILD_FLAGS`). The exex
+     refuses to prove with an ELF that has no stamp, or whose stamp isn't a deploy build for
+     the node's chain (fork from input, heap stats, another chain or output).
    - Copy the ELF to a new `$Z/guest/<date>-<commit>-<tag>/` directory.
    - Point `$Z/guest/current` at it.
    - Install the new binaries if they changed, keeping the `.bak` copies.
@@ -375,7 +391,8 @@ receive the proofs over gossip. The exex mints the VK, so the steps go in this o
    it cancels each job.
 
 To roll back, point `current` at the previous directory, restore the binaries, restart the
-exex, and re-pin the old VK.
+exex, and re-pin the old VK. An ELF from before the build stamp also needs the exex binary from
+before it.
 
 Things to keep in mind:
 - **One program at a time.** The coordinator keeps one active program. Any other client
