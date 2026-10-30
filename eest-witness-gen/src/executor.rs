@@ -27,15 +27,16 @@ use reth_evm::{execute::Executor, ConfigureEvm};
 use reth_evm_ethereum::EthEvmConfig;
 use reth_primitives_traits::{RecoveredBlock, SealedBlock};
 use reth_provider::{
-    test_utils::create_test_provider_factory_with_chain_spec, BlockWriter,
+    test_utils::create_test_provider_factory_with_chain_spec_and_db_args, BlockWriter,
     DatabaseProviderFactory, ExecutionOutcome, HistoryWriter, OriginalValuesKnown,
-    StateProofProvider, StateProviderFactory, StateWriteConfig, StateWriter,
+    StateProviderFactory, StateWriteConfig, StateWriter,
     BytecodeReader, StaticFileProviderFactory, StaticFileSegment, StaticFileWriter, StorageSettingsCache,
     TrieWriter,
 };
 use reth_trie::{HashedPostState, KeccakKeyHasher, StateRoot};
 use reth_trie_db::{DatabaseProof, DatabaseStateRoot};
 use reth_revm::{database::StateProviderDatabase, witness::ExecutionWitnessRecord};
+use reth_storage_api::EvmStateProviderAdapter;
 use reth_trie::ExecutionWitnessMode;
 use revm::bytecode::Bytecode;
 use revm::database::BundleState;
@@ -76,9 +77,31 @@ pub struct ExecutedBlock {
 /// and the witness recorder, it keeps the slots of an account that
 /// SELFDESTRUCTs (pre-Cancun destroy), which both drop.
 #[derive(Debug)]
+/// `OnStateHook` that records every account and slot in each state change.
+#[derive(Clone, Default)]
+struct KeyRecorder(Arc<std::sync::Mutex<BTreeMap<Address, BTreeSet<B256>>>>);
+
+impl reth_evm::OnStateHook for KeyRecorder {
+    fn on_state(&mut self, state: revm::state::EvmState) {
+        let mut keys = self.0.lock().unwrap();
+        for (addr, account) in &state {
+            keys.entry(*addr)
+                .or_default()
+                .extend(account.storage.keys().map(|k| B256::from(k.to_be_bytes::<32>())));
+        }
+    }
+}
+
 struct RecordingDb<DB> {
     inner: DB,
     reads: Rc<RefCell<BTreeSet<(Address, B256)>>>,
+}
+
+// The executor's `Database` bound wants Debug; the inner provider has none.
+impl<DB> std::fmt::Debug for RecordingDb<DB> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RecordingDb")
+    }
 }
 
 impl<DB: Database> Database for RecordingDb<DB> {
@@ -110,7 +133,12 @@ pub fn run_fixture(
     test: &BlockchainTest,
 ) -> Result<Vec<Option<ExecutedBlock>>> {
     // ---- (1) Fresh in-memory provider seeded with genesis ----
-    let factory = create_test_provider_factory_with_chain_spec(chain_spec.clone());
+    // reth's test default caps the MDBX map at 64 MiB; benchmark fixtures
+    // deploy thousands of 24 KiB contracts in a setup block (EEST
+    // test_unchunkified_bytecode), so allow the map to grow to 16 GiB.
+    let db_args = reth_db::mdbx::DatabaseArguments::test().with_geometry_max_size(Some(16 << 30));
+    let factory =
+        create_test_provider_factory_with_chain_spec_and_db_args(chain_spec.clone(), db_args);
     let provider = factory
         .database_provider_rw()
         .context("creating provider_rw")?;
@@ -360,7 +388,7 @@ pub fn run_fixture(
         let state_provider = provider.latest();
         let storage_reads: Rc<RefCell<BTreeSet<(Address, B256)>>> = Rc::default();
         let state_db = RecordingDb {
-            inner: StateProviderDatabase(&state_provider),
+            inner: StateProviderDatabase(EvmStateProviderAdapter(&*state_provider)),
             reads: storage_reads.clone(),
         };
         let mut state = reth_revm::db::State::builder()
@@ -368,8 +396,7 @@ pub fn run_fixture(
             .with_bundle_update()
             .build();
 
-        let block_executor = executor_provider.executor(&mut state);
-        let mut witness_record = ExecutionWitnessRecord::default();
+        let mut block_executor = executor_provider.executor(&mut state);
         // Also capture every address the EVM TOUCHED (loaded into
         // state.cache.accounts), even ones with `account.account ==
         // None` (= account doesn't exist in trie). reth's witness
@@ -379,69 +406,74 @@ pub fn run_fixture(
         // missing.
         let mut all_cached_addrs: std::collections::BTreeSet<Address> =
             std::collections::BTreeSet::new();
+        // The addr→slot read-set of the executed state. The bridge
+        // uses this to populate prestate storage with EVERY slot the
+        // EVM read (not just writes from BundleState), so cpp-guest's
+        // SLOAD path always finds a registered entry. These are the
+        // slots reth's witness recorder hashes into its post-state:
+        // the cached storage of every account that still exists.
+        let mut touched_slot_pairs: std::collections::BTreeSet<(Address, B256)> =
+            std::collections::BTreeSet::new();
+        // `ExecutionWitnessRecord` borrows the post-execution `State`,
+        // which only lives inside the closure, so the witness is
+        // materialized there (step 4).
+        let mut exec_witness = None;
         let mode = ExecutionWitnessMode::Canonical;
-        let output = block_executor
-            .execute_with_state_closure(&recovered, |statedb: &reth_revm::db::State<_>| {
-                witness_record.record_executed_state(statedb, mode);
-                for addr in statedb.cache.accounts.keys() {
-                    all_cached_addrs.insert(*addr);
-                }
-            })
+        // Every key each tx (and system call) touched, from its EvmState
+        // before commit: that still has the slots of an account created and
+        // self-destructed in the same tx, which the State cache and the
+        // BundleState drop and a fresh account's storage never reaches the
+        // DB for. The guest loads them, so they must be leaves.
+        let hooked = KeyRecorder::default();
+        let result = block_executor
+            .execute_one_with_state_hook(&recovered, hooked.clone())
             .with_context(|| format!("execute block {idx}"))?;
-
-        // Capture the addr→slot read-set BEFORE the witness record
-        // is consumed by into_execution_witness. The bridge will use
-        // this to populate prestate storage with EVERY slot the EVM
-        // read (not just writes from BundleState), so cpp-guest's
-        // SLOAD path always finds a registered entry.
-        let touched_slot_pairs: std::collections::BTreeSet<(Address, B256)> = {
-            // Build a reverse map: hash(20B addr) → addr,
-            //                     hash(32B slot) → slot.
-            let mut addr_by_hash: std::collections::HashMap<B256, Address> =
-                std::collections::HashMap::new();
-            let mut slot_by_hash: std::collections::HashMap<B256, B256> =
-                std::collections::HashMap::new();
-            for k in &witness_record.keys {
-                if k.len() == 20 {
-                    let a = Address::from_slice(k);
-                    addr_by_hash.insert(keccak256::<&[u8]>(k.as_ref()), a);
-                } else if k.len() == 32 {
-                    let s = B256::from_slice(k);
-                    slot_by_hash.insert(keccak256::<&[u8]>(k.as_ref()), s);
-                }
-            }
-            let mut s = std::collections::BTreeSet::new();
-            for (hashed_addr, hashed_storage) in &witness_record.hashed_state.storages {
-                if let Some(addr) = addr_by_hash.get(hashed_addr) {
-                    for hashed_slot in hashed_storage.storage.keys() {
-                        if let Some(slot) = slot_by_hash.get(hashed_slot) {
-                            s.insert((*addr, *slot));
+        let mut statedb_owned = block_executor.into_state();
+        {
+            let statedb = &statedb_owned;
+                for (addr, cached) in &statedb.cache.accounts {
+                    all_cached_addrs.insert(*addr);
+                    if let Some(acc) = &cached.account {
+                        for slot in acc.storage.keys() {
+                            touched_slot_pairs.insert((*addr, B256::from(*slot)));
                         }
                     }
                 }
-            }
-            // ALSO add (addr, slot) pairs straight from BundleState.
-            // For accounts that end the block as None, the recorder's
-            // hashed_state.storages drops their slots (`account.account`
-            // is None → outer iteration skips the inner storage loop).
-            // BundleAccount.storage keeps the slots of e.g. an EIP-7702
-            // EOA that SSTOREs then RESETs its delegation, but NOT of a
-            // SELFDESTRUCTed account (revm's `apply_account_state`
-            // returns before collecting its storage) — hence also the
-            // parent-state reads `RecordingDb` saw.
-            for (addr, bundle_acc) in &output.state.state {
-                for slot_u256 in bundle_acc.storage.keys() {
-                    let slot = B256::from(slot_u256.to_be_bytes::<32>());
-                    s.insert((*addr, slot));
-                }
-            }
-            s.extend(storage_reads.borrow().iter().copied());
-            s
+                // ---- (4) Materialize the witness in RPC shape ----
+                exec_witness = Some(ExecutionWitnessRecord::new(statedb).into_execution_witness(
+                    &*state_provider,
+                    &provider,
+                    block_number,
+                    mode,
+                ));
+        }
+        let output = reth_evm::execute::BlockExecutionOutput {
+            state: statedb_owned.take_bundle(),
+            result,
         };
+        for (addr, slots) in hooked.0.lock().unwrap().iter() {
+            all_cached_addrs.insert(*addr);
+            touched_slot_pairs.extend(slots.iter().map(|s| (*addr, *s)));
+        }
 
-        // ---- (4) Materialize the witness in RPC shape ----
-        let mut exec_witness = witness_record
-            .into_execution_witness(&state.database.inner.0, &provider, block_number, mode)
+        // ALSO add (addr, slot) pairs straight from BundleState.
+        // For accounts that end the block as None, the cache has no
+        // storage for them (`account.account` is None).
+        // BundleAccount.storage keeps the slots of e.g. an EIP-7702
+        // EOA that SSTOREs then RESETs its delegation, but NOT of a
+        // SELFDESTRUCTed account (revm's `apply_account_state`
+        // returns before collecting its storage) — hence also the
+        // parent-state reads `RecordingDb` saw.
+        for (addr, bundle_acc) in &output.state.state {
+            for slot_u256 in bundle_acc.storage.keys() {
+                let slot = B256::from(slot_u256.to_be_bytes::<32>());
+                touched_slot_pairs.insert((*addr, slot));
+            }
+        }
+        touched_slot_pairs.extend(storage_reads.borrow().iter().copied());
+
+        let mut exec_witness = exec_witness
+            .expect("execute_with_state_closure runs the closure")
             .with_context(|| format!("into_execution_witness {idx}"))?;
 
         // ---- (4') Inject the INPUT (parent) state-root node ----

@@ -1,0 +1,38 @@
+[package]
+name = "zisk-proof-engine"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+description = "EIP-8025 proof engine for the beacon node: verifies the ZisK execution proofs of the zisk_eth_guest."
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "zisk-proof-engine"
+path = "src/main.rs"
+
+[dependencies]
+# The verifier of the ZisK release the prover runs (coordinator protos in
+# reth-zisk-exex/proto are vendored from the same rev). It is no_std and only
+# pulls proofman-verifier/fields, not the prover.
+# ZisK v1.4.0-alpha (tag, 64a1f1664). That release takes proofman from
+# crates.io; proofman-verifier matches it so the proof
+# types are the ones zisk-verifier uses.
+zisk-verifier = { git = "https://github.com/0xPolygonHermez/zisk", tag = "v1.4.0-alpha", features = ["std"] }
+proofman-verifier = { version = "1.4.0-alpha", default-features = false, features = ["std"] }
+
+# The proof_data wire format: bincode (standard config) of zisk_common::Proof.
+bincode = { version = "2.0", default-features = false, features = ["serde", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+clap = { version = "4", features = ["derive"] }
+hex = "0.4"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

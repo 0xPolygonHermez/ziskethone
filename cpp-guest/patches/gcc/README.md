@@ -1,7 +1,7 @@
 # ZisK DMA lowering for GCC
 
-`0001-riscv-zisk-dma-lowering.patch` teaches the GCC 14.3.0 RISC-V backend to
-lower block memory operations to the ZisK DMA precompile markers, instead of
+`gcc-<version>/0001-riscv-zisk-dma-lowering.patch` teaches the GCC RISC-V backend
+(one port per release: 14.3.0 and 15.2.0) to lower block memory operations to the ZisK DMA precompile markers, instead of
 calling the `ziskos` mem\* thunks. It is the GCC counterpart of the LLVM patch in
 the Rust fork (`src/llvm-patches/0001-riscv-zisk-dma-lowering.patch`), which
 rustc gets through the `+zisk-dma` target feature.
@@ -74,12 +74,13 @@ No fork of GCC is involved: the patch above is the whole delta, applied to a
 pristine upstream tarball. Build the compiler once —
 
 ```bash
-cpp-guest/patches/gcc/build-toolchain.sh
+cpp-guest/patches/gcc/build-toolchain.sh              # GCC 14.3.0
+cpp-guest/patches/gcc/build-toolchain.sh --gcc 15.2.0
 ```
 
-It downloads GCC 14.3.0, patches it, builds and installs into
-`~/.local/xPacks/zisk-dma-gcc-14.3.0` (override with `ZISK_DMA_GCC_PREFIX`), then
-verifies that the flag both parses and emits a marker. ~10 minutes. Run it again
+It downloads that GCC release, applies `gcc-<version>/0001-*.patch`, builds and
+installs into `~/.local/xPacks/zisk-dma-gcc-<version>` (override with
+`ZISK_DMA_GCC_PREFIX`), then verifies that the flag both parses and emits a marker. ~10 minutes. Run it again
 any time: it detects the installed compiler and returns immediately, so it is
 safe to call from a build script or CI step.
 
@@ -104,12 +105,19 @@ Only the compiler proper (`make all-gcc`) — no libgcc, no newlib, no libstdc++
 That is what turns an hour into ten minutes, and it works because the guest links
 `-nostdlib -nostartfiles` with no libraries at all: the only things still needed
 from a full toolchain are the C++ *headers* and the assembler and linker, which
-the script symlinks from the xPack toolchain. Its version must match GCC 14.3.0
-exactly, which is why the script checks for it and refuses to guess.
+the script symlinks from the xPack toolchain. Its version must match the GCC
+release being built exactly (`xpack-riscv-none-elf-gcc-<version>-1`), which is
+why the script checks for it and refuses to guess.
 
 The host compiler matters too: GCC 14's bundled `libcody` does not build with a
 host g++ newer than ~14 (`u8""` literals became `char8_t`). The script picks
-g++-13/12/11 if one is installed; otherwise set `CXX`/`CC` yourself.
+g++-13/12/11 if one is installed; otherwise set `CXX`/`CC` yourself. The same
+host compiler builds the 15.2.0 sources.
+
+The two patches are the same lowering: the 15.2.0 one is the 14.3.0 patch rebased
+over the vector `cpymem`/`setmem`/`cmpmem` expanders that GCC 15 added to
+`riscv.md`, so each expander tries the DMA form first and falls through to the
+vector and scalar paths unchanged.
 
 ## Three traps worth remembering
 

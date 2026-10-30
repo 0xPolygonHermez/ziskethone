@@ -1,0 +1,82 @@
+Cache the executing account's balance per frame for SELFBALANCE.
+
+SELFBALANCE repeatedly reads the current account's balance; routing every one
+through the host (get_balance -> account lookup + warm/BAL bookkeeping) dominates
+SELFBALANCE-heavy blocks. Cache the value in ExecutionState and refetch lazily
+only when it can have changed: at frame entry and after any CALL/CREATE-family
+op (the only mid-frame balance mutations; incoming value is credited before
+entry). Output roots are unchanged.
+diff --git a/lib/evmone/execution_state.hpp b/lib/evmone/execution_state.hpp
+index d9c35eb1..29ae316f 100644
+--- a/lib/evmone/execution_state.hpp
++++ b/lib/evmone/execution_state.hpp
+@@ -136,6 +136,15 @@ public:
+     evmc_revision rev = {};
+     bytes return_data;
+ 
++    /// SELFBALANCE fast path: a per-frame cache of the executing account's
++    /// balance. `self_balance_valid` is false at entry and is cleared by every
++    /// CALL/CREATE-family op (the only things that can change the frame's own
++    /// balance mid-execution; incoming value is credited before entry). The
++    /// first SELFBALANCE after entry or such a call refetches once; subsequent
++    /// reads are local, avoiding a host call + account lookup per opcode.
++    evmc::uint256be self_balance = {};
++    bool self_balance_valid = false;
++
+     /// Reference to original EVM code.
+     bytes_view original_code;
+ 
+@@ -186,6 +195,7 @@ public:
+         msg = &message;
+         host = {host_interface, host_ctx};
+         rev = revision;
++        self_balance_valid = false;  // SELFBALANCE cache: refetched lazily
+         return_data.clear();
+         original_code = _code;
+         status = EVMC_SUCCESS;
+diff --git a/lib/evmone/instructions_calls.cpp b/lib/evmone/instructions_calls.cpp
+index 946f4c24..dfc41d82 100644
+--- a/lib/evmone/instructions_calls.cpp
++++ b/lib/evmone/instructions_calls.cpp
+@@ -94,6 +94,10 @@ Result call_impl(StackTop stack, int64_t gas_left, ExecutionState& state) noexce
+     static_assert(
+         Op == OP_CALL || Op == OP_CALLCODE || Op == OP_DELEGATECALL || Op == OP_STATICCALL);
+ 
++    // A sub-call can change this frame's own balance (value sent out, or a
++    // nested call back into us), so stale the SELFBALANCE cache.
++    state.self_balance_valid = false;
++
+     static constexpr bool HAS_VALUE_ARG = Op == OP_CALL || Op == OP_CALLCODE;
+ 
+     const auto gas = stack.pop();
+@@ -252,6 +256,10 @@ Result create_impl(StackTop stack, int64_t gas_left, ExecutionState& state) noex
+ {
+     static_assert(Op == OP_CREATE || Op == OP_CREATE2);
+ 
++    // CREATE debits this frame's balance by `value` (and the init code may call
++    // back into us), so stale the SELFBALANCE cache.
++    state.self_balance_valid = false;
++
+     if (state.in_static_mode())
+         return {EVMC_STATIC_MODE_VIOLATION, gas_left};
+ 
+diff --git a/lib/evmone/instructions.hpp b/lib/evmone/instructions.hpp
+--- a/lib/evmone/instructions.hpp
++++ b/lib/evmone/instructions.hpp
+@@ -776,8 +776,14 @@
+ 
+ inline void selfbalance(StackTop stack, ExecutionState& state) noexcept
+ {
+-    // TODO: introduce selfbalance in EVMC?
+-    stack.push(intx::be::load<uint256>(state.host.get_balance(state.msg->recipient)));
++    // SELFBALANCE fast path: refetch from the host only when the per-frame cache
++    // is stale (entry, or after a CALL/CREATE that may have changed it).
++    if (!state.self_balance_valid)
++    {
++        state.self_balance = state.host.get_balance(state.msg->recipient);
++        state.self_balance_valid = true;
++    }
++    stack.push(intx::be::load<uint256>(state.self_balance));
+ }
+ 
+ inline Result mload(StackTop stack, int64_t gas_left, ExecutionState& state) noexcept

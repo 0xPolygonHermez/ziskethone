@@ -1,0 +1,76 @@
+[package]
+name = "reth-zisk-exex"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+description = "reth node with an ExEx that proves every new payload with ZisK and submits the EIP-8025 execution proof to the beacon node."
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "reth-zisk"
+path = "src/main.rs"
+
+# Batch coordinator-prove driver for the killer-block sweep (reuses the exex's
+# streaming CoordinatorProver via a #[path] include of prover.rs). Not shipped.
+[[bin]]
+name = "kprove"
+path = "src/bin/kprove.rs"
+
+[dependencies]
+# reth v2.7.0, the release the local nodes run (same pin as eest-witness-gen).
+reth-ethereum         = { git = "https://github.com/paradigmxyz/reth", tag = "v2.7.0", features = ["full", "cli"] }
+reth-revm             = { git = "https://github.com/paradigmxyz/reth", tag = "v2.7.0", features = ["witness"] }
+reth-chain-state      = { git = "https://github.com/paradigmxyz/reth", tag = "v2.7.0" }
+reth-engine-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v2.7.0" }
+reth-trie-common      = { git = "https://github.com/paradigmxyz/reth", tag = "v2.7.0" }
+reth-payload-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v2.7.0" }
+
+# Split alloy crates pinned to reth v2.7.0's workspace versions.
+alloy-primitives      = "=1.6.1"
+alloy-consensus       = "=2.5.0"
+alloy-eips            = "=2.5.0"
+alloy-rlp             = "=0.3.16"
+alloy-rpc-types-debug = "=2.5.0"
+alloy-rpc-types-engine = "=2.5.0"
+alloy-rpc-types-eth   = "=2.5.0"
+alloy-evm             = "=0.39.0"
+alloy-eip7928         = { version = "=0.4.11", features = ["rlp"] }
+
+# ZEG0 input encoder (in-process `assemble::sources_from_parts`).
+rust-input-gen = { path = "../rust-input-gen" }
+
+# ZisK coordinator gRPC client, generated from proto/ (ZisK v1.4.0-alpha).
+tonic       = "0.14"
+tonic-prost = "0.14"
+prost       = "0.14"
+prost-types = "0.14"
+
+# Signing and beacon-node submission.
+blst    = "0.3"
+sha2    = "0.10"
+scrypt  = { version = "0.11", default-features = false }
+pbkdf2  = { version = "0.12", default-features = false, features = ["hmac"] }
+hmac    = "0.12"
+aes     = "0.8"
+ctr     = "0.9"
+unicode-normalization = "0.1"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream"] }
+
+anyhow     = "1"
+eyre       = "0.6"
+clap       = { version = "4", features = ["derive"] }
+futures    = "0.3"
+hex        = "0.4"
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio      = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+tracing    = "0.1"
+revm       = { version = "=43.0.3", default-features = false, features = ["std"] }
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+
+[profile.release]
+lto = "thin"
+codegen-units = 16

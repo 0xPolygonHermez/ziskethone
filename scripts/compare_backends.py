@@ -7,7 +7,10 @@ For each block this:
   2. frames it for ziskemu (an 8-byte LE length prefix),
   3. runs the witness through BOTH ZisK ELFs (the evmone-backend and the
      zevm-backend `zisk_eth_guest.elf`) under `ziskemu -X`,
-  4. checks BOTH reproduce the canonical block hash from the RPC, and
+  4. checks BOTH emit the expected public output — the EIP-8025
+     new_payload_request_root — taken from the host guest
+     (`cpp-guest/build/zisk_eth_guest`), whose block-hash line must match
+     the canonical block hash from the RPC, and
   5. tabulates STEPS + total proving cost and the zevm/evmone ratio.
 
 Unlike the single-guest host run in `verify_blocks.py`, this runs the RISC-V
@@ -40,6 +43,8 @@ from typing import Optional
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INPUT_GEN = REPO_ROOT / "target" / "release" / "input-gen"
 ZISKEMU = Path.home() / "git" / "zisk" / "zisk" / "target" / "release" / "ziskemu"
+# Host guest: prints the block hash, then the new_payload_request_root.
+HOST_GUEST = REPO_ROOT / "cpp-guest" / "build" / "zisk_eth_guest"
 # The two ZisK ELFs to compare. Build them with:
 #   cmake -S cpp-guest/zisk -B cpp-guest/zisk/build-evmone \
 #     -DCMAKE_TOOLCHAIN_FILE=$(pwd)/cpp-guest/zisk/toolchain.cmake \
@@ -86,6 +91,19 @@ def run_input_gen(url: str, block: int, out_path: Path, log_path: Path,
         except subprocess.TimeoutExpired:
             f.write(b"\n[compare_backends.py] input-gen timed out\n")
             return 124
+
+
+def run_host_guest(raw: Path, timeout: float) -> Optional[tuple]:
+    """(block_hash, new_payload_request_root) from the host guest, or None."""
+    try:
+        p = subprocess.run([str(HOST_GUEST), str(raw)], capture_output=True,
+                           text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
+    lines = p.stdout.split()
+    if p.returncode != 0 or len(lines) != 2:
+        return None
+    return lines[0].lower(), lines[1].lower()
 
 
 def frame_for_ziskemu(raw: Path, framed: Path) -> None:
@@ -152,6 +170,15 @@ def process_block(url: str, block: int, art_dir: Path, args) -> Optional[dict]:
         return None
     frame_for_ziskemu(raw, framed)
 
+    host = run_host_guest(raw, args.ziskemu_timeout)
+    if host is None:
+        print(f"[FAIL] block {block}: host guest run failed", file=sys.stderr)
+        return None
+    host_hash, expected_root = host
+    if host_hash != chain_hash:
+        print(f"[FAIL] block {block}: host guest block hash {host_hash} "
+              f"!= chain {chain_hash}", file=sys.stderr)
+
     res = {"block": block, "gas": gas, "ntx": ntx, "chain_hash": chain_hash,
            "backends": {}}
     for be, elf in ELFS.items():
@@ -161,7 +188,7 @@ def process_block(url: str, block: int, art_dir: Path, args) -> Optional[dict]:
         if r is None:
             print(f"[FAIL] block {block}: ziskemu/{be} run failed", file=sys.stderr)
             return None
-        r["ok"] = (r["hash"] == chain_hash)
+        r["ok"] = (host_hash == chain_hash and r["hash"] == expected_root)
         res["backends"][be] = r
 
     if args.keep_artifacts is False:

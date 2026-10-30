@@ -52,6 +52,9 @@ const evmc::bytes32& PreviousBlocks::View::parent_beacon_block_root() const noex
 const evmc::bytes32& PreviousBlocks::View::requests_hash() const noexcept {
     return *reinterpret_cast<const evmc::bytes32*>(data + kRequestsHashOffset);
 }
+const evmc::bytes32& PreviousBlocks::View::block_access_list_hash() const noexcept {
+    return *reinterpret_cast<const evmc::bytes32*>(data + kBlockAccessListHashOffset);
+}
 
 const evmc::address& PreviousBlocks::View::coinbase() const noexcept {
     return *reinterpret_cast<const evmc::address*>(data + kCoinbaseOffset);
@@ -78,6 +81,7 @@ uint64_t PreviousBlocks::View::gas_used       () const noexcept { return u64_at(
 uint64_t PreviousBlocks::View::timestamp      () const noexcept { return u64_at(data + kTimestampOffset);      }
 uint64_t PreviousBlocks::View::blob_gas_used  () const noexcept { return u64_at(data + kBlobGasUsedOffset);    }
 uint64_t PreviousBlocks::View::excess_blob_gas() const noexcept { return u64_at(data + kExcessBlobGasOffset);  }
+uint64_t PreviousBlocks::View::slot_number    () const noexcept { return u64_at(data + kSlotNumberOffset);     }
 
 uint32_t PreviousBlocks::View::field_count() const noexcept {
     uint32_t v;
@@ -126,6 +130,8 @@ evmc::bytes32 compute_header_hash(const PreviousBlocks::View& v) {
         .excess_blob_gas          = v.excess_blob_gas(),
         .parent_beacon_block_root = v.parent_beacon_block_root(),
         .requests_hash            = v.requests_hash(),
+        .block_access_list_hash   = v.block_access_list_hash(),
+        .slot_number              = v.slot_number(),
         .fork_id                  = fork,
     });
 }
@@ -138,6 +144,19 @@ evmc::bytes32 compute_header_hash(const PreviousBlocks::View& v) {
 
 PreviousBlocks::PreviousBlocks(const uint8_t*& cursor) {
     const uint64_t count   = read_u64_le(cursor);
+    // Each ancestor record is kRecordSize bytes; a count beyond what remains is
+    // malformed — reject before the reserves and the record-reading loop so a
+    // forged count can't drive an out-of-bounds read (see zeg/stream.hpp). The
+    // bound also makes `count * kRecordSize` below overflow-free.
+    if (count > stream_remaining(cursor) / kRecordSize) {
+        fatal("PreviousBlocks: count exceeds input size");
+    }
+    // BLOCKHASH addresses at most the 256 most recent ancestors (and the depth
+    // guard bounds callers to [1,256]); records beyond 256 are hashed but never
+    // served, so reject them rather than process dead input.
+    if (count > 256) {
+        fatal("PreviousBlocks: more than 256 ancestor records");
+    }
     const uint8_t* records = cursor;
 
     views_.reserve(count);
@@ -145,42 +164,59 @@ PreviousBlocks::PreviousBlocks(const uint8_t*& cursor) {
 
     for (uint64_t i = 0; i < count; ++i) {
         views_.push_back(View{records + i * kRecordSize});
+        // Yellow-paper rule: extra_data is at most 32 bytes. Cap the ancestor's
+        // length before re-hashing so a forged length can't read past the field.
+        if (views_.back().extra_data().size() > 32) {
+            fatal("PreviousBlocks: ancestor extra_data_len > 32");
+        }
         hashes_.push_back(compute_header_hash(views_.back()));
     }
-    cursor += count * kRecordSize;
+    advance_checked(cursor, count * kRecordSize);
 
-    // Linkage check — SPARSE-tolerant. The ancestor set carries only the
-    // blocks the witness referenced for BLOCKHASH, so it may have gaps
-    // (e.g. {parent, N-100}). We therefore verify parent_hash linkage ONLY
-    // between records that are consecutive BY NUMBER (child.number ==
-    // next.number + 1); a gap is legitimate and is not an error. Records
-    // are ordered descending by number (index 0 = parent), so a genuine
-    // adjacency shows up as a 1-step decrement between neighbours.
-    //
-    // The link from hash(block[0]) to the current block's parent_hash is
-    // checked outside this class, against `ConsensusInfo::parent_hash()`.
+    // Full-chain verification. The records are ordered descending by number,
+    // index 0 = parent. Require the WHOLE list to be a contiguous
+    // parent_hash-linked chain: every adjacent pair decrements the number by
+    // exactly 1 AND links by parent_hash. Index 0's hash is pinned to the
+    // committed block's parent_hash (checked in run.cpp), so a chain that
+    // verifies is provably the real sequence of ancestors — a prover can
+    // neither forge an ancestor (the link would break) nor omit one (the number
+    // would jump by more than 1). BLOCKHASH then serves from it directly
+    // (ZiskStateDB::get_block_hash). The input builders (exex, input-gen, EEST
+    // bridge) ship every block from the parent down to the deepest BLOCKHASH
+    // target, so the chain is never sparse.
     for (size_t i = 0; i + 1 < views_.size(); ++i) {
-        const uint64_t child_num = views_[i].number();
-        const uint64_t next_num  = views_[i + 1].number();
-        if (child_num == next_num + 1 &&
-            views_[i].parent_hash() != hashes_[i + 1]) {
-            fatal("PreviousBlocks: parent_hash chain mismatch");
+        if (views_[i].number() != views_[i + 1].number() + 1) {
+            fatal("PreviousBlocks: ancestor chain is not contiguous");
+        }
+        if (views_[i].parent_hash() != hashes_[i + 1]) {
+            fatal("PreviousBlocks: ancestor chain parent_hash link broken");
         }
     }
 }
 
 const evmc::bytes32* PreviousBlocks::hash_of_number(uint64_t number) const noexcept {
-    // Linear scan by block number. The ancestor set is tiny (≤256, and in
-    // practice 1 — just the parent), and the BLOCKHASH depth guard already
-    // bounds callers to [1,256], so a scan is cheaper than an unordered_map
-    // (which on the bare-metal ZisK target drags in the soft-float load-factor
-    // runtime — no FP support here). First match wins; index 0 = parent.
-    for (size_t i = 0; i < views_.size(); ++i) {
-        if (views_[i].number() == number) {
-            return &hashes_[i];
-        }
+    // Direct index, not a linear scan: the constructor verified the records are a
+    // contiguous chain ordered descending by number (index 0 = parent, the
+    // highest number), so the record for `number` is at `newest - number`. This
+    // keeps BLOCKHASH O(1) — an author cannot inflate proving cost by running it
+    // in a loop over the whole 256-deep window.
+    if (views_.empty()) {
+        return nullptr;
     }
-    return nullptr;
+    const uint64_t newest = views_[0].number();  // parent = highest number
+    if (number > newest) {
+        return nullptr;
+    }
+    const uint64_t idx = newest - number;
+    if (idx >= views_.size()) {
+        return nullptr;
+    }
+    // Contiguity is guaranteed by the constructor; the equality is a cheap
+    // defensive assert that the computed slot really holds `number`.
+    if (views_[idx].number() != number) {
+        return nullptr;
+    }
+    return &hashes_[static_cast<size_t>(idx)];
 }
 
 } // namespace zeg

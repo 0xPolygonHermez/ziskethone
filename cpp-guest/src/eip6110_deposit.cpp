@@ -13,42 +13,29 @@ namespace zeg {
 
 namespace {
 
-// Read a 32-byte big-endian uint at `p` as a size_t. Aborts via fatal
-// if the value doesn't fit (upper 24 bytes non-zero). Used for ABI
-// offsets/lengths.
-std::size_t read_abi_uint32be_as_size(const uint8_t* p) {
-    for (std::size_t i = 0; i < 24; ++i) {
-        if (p[i] != 0) {
-            fatal("DepositEvent ABI: integer field overflows size_t");
-        }
-    }
-    std::size_t v = 0;
-    for (std::size_t i = 24; i < 32; ++i) {
-        v = (v << 8) | p[i];
-    }
-    return v;
-}
+// The deposit contract emits DepositEvent(bytes,bytes,bytes,bytes,bytes) with
+// one fixed ABI layout. Like execution-specs `extract_deposit_data`, accept
+// only that layout: 576 bytes, the five head offsets and the five length
+// words at their canonical values. Any other encoding makes the block
+// invalid. No offset is followed, so no offset arithmetic can overflow.
+constexpr std::size_t kDepositEventSize = 576;
 
-// Read the i-th dynamic-`bytes` field from a Solidity-encoded event
-// payload that consists entirely of `bytes` parameters. Returns
-// (data_ptr, length). Aborts via fatal on truncation / corruption.
-struct AbiBytesField { const uint8_t* data; std::size_t length; };
+struct DepositField { std::size_t offset; std::size_t length; };
+constexpr DepositField kDepositFields[5] = {
+    {160, 48},  // pubkey
+    {256, 32},  // withdrawal_credentials
+    {320,  8},  // amount
+    {384, 96},  // signature
+    {512,  8},  // index
+};
 
-AbiBytesField abi_read_bytes_field(const uint8_t* data, std::size_t data_size,
-                                   std::size_t field_index) {
-    const std::size_t off_pos = field_index * 32;
-    if (off_pos + 32 > data_size) {
-        fatal("DepositEvent ABI: offset slot out of bounds");
+// True when the 32-byte big-endian word at `p` equals `v`.
+bool abi_word_equals(const uint8_t* p, std::size_t v) {
+    for (std::size_t i = 0; i < 32; ++i) {
+        const auto want = i < 24 ? 0 : static_cast<uint8_t>(v >> (8 * (31 - i)));
+        if (p[i] != want) return false;
     }
-    const std::size_t offset = read_abi_uint32be_as_size(data + off_pos);
-    if (offset + 32 > data_size) {
-        fatal("DepositEvent ABI: length slot out of bounds");
-    }
-    const std::size_t length = read_abi_uint32be_as_size(data + offset);
-    if (offset + 32 + length > data_size) {
-        fatal("DepositEvent ABI: bytes payload out of bounds");
-    }
-    return AbiBytesField{data + offset + 32, length};
+    return true;
 }
 
 } // namespace
@@ -70,23 +57,22 @@ void extract_deposit_requests(std::span<const TxReceipt> receipts,
             if (log.topics.empty())                       continue;
             if (log.topics[0] != deposit_event_topic)     continue;
 
-            const uint8_t*    d   = log.data.data();
-            const std::size_t dsz = log.data.size();
-            const auto pubkey_f = abi_read_bytes_field(d, dsz, 0);
-            const auto wc_f     = abi_read_bytes_field(d, dsz, 1);
-            const auto amount_f = abi_read_bytes_field(d, dsz, 2);
-            const auto sig_f    = abi_read_bytes_field(d, dsz, 3);
-            const auto index_f  = abi_read_bytes_field(d, dsz, 4);
-            if (pubkey_f.length != 48 || wc_f.length != 32 ||
-                amount_f.length != 8  || sig_f.length != 96 ||
-                index_f.length  != 8) {
-                fatal("EIP-6110: DepositEvent field has wrong size");
+            const uint8_t* d = log.data.data();
+            if (log.data.size() != kDepositEventSize) {
+                fatal("EIP-6110: DepositEvent has wrong size");
             }
-            out.insert(out.end(), pubkey_f.data, pubkey_f.data + 48);
-            out.insert(out.end(), wc_f.data,     wc_f.data     + 32);
-            out.insert(out.end(), amount_f.data, amount_f.data + 8);
-            out.insert(out.end(), sig_f.data,    sig_f.data    + 96);
-            out.insert(out.end(), index_f.data,  index_f.data  + 8);
+            for (std::size_t i = 0; i < 5; ++i) {
+                const auto& f = kDepositFields[i];
+                if (!abi_word_equals(d + 32 * i, f.offset)) {
+                    fatal("EIP-6110: DepositEvent field has wrong offset");
+                }
+                if (!abi_word_equals(d + f.offset, f.length)) {
+                    fatal("EIP-6110: DepositEvent field has wrong size");
+                }
+            }
+            for (const auto& f : kDepositFields) {
+                out.insert(out.end(), d + f.offset + 32, d + f.offset + 32 + f.length);
+            }
         }
     }
 }

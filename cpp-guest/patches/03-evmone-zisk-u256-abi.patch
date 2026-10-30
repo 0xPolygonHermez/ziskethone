@@ -1,0 +1,135 @@
+diff --git a/lib/evmone/instructions.hpp b/lib/evmone/instructions.hpp
+index ceff693b..6fa70ed6 100644
+--- a/lib/evmone/instructions.hpp
++++ b/lib/evmone/instructions.hpp
+@@ -9,6 +9,10 @@
+ #include "instructions_xmacro.hpp"
+ #include <evmone_precompiles/keccak.hpp>
+ 
++#if defined(ZEG_ZISK)
++#include <zkvm_u256_le.h>  // ZisK's little-endian U256 ABI
++#endif
++
+ namespace evmone
+ {
+ using code_iterator = const uint8_t*;
+@@ -136,6 +140,27 @@ inline bool check_memory(
+     return check_memory(gas_left, memory, offset, static_cast<uint64_t>(size));
+ }
+ 
++#if defined(ZEG_ZISK)
++/// ZisK: the 256-bit multiply, modular and division opcodes go through the
++/// little-endian U256 ABI (zkvm_u256_le.h) instead of intx's software bigint. intx's
++/// uint<256> is `uint64_t words_[4]`, least significant first, which is exactly
++/// zkvm_u256_le, so the stack slots are passed as they are. The ABI follows EVM
++/// semantics (a zero divisor or modulus gives 0) and lets the result alias an input,
++/// so each opcode is one call that writes its stack slot in place.
++/// Mirrors src/zevm/instructions/arith.inl.hpp.
++namespace zeg_u256
++{
++inline const zkvm_u256_le* le(const uint256& x) noexcept
++{
++    return reinterpret_cast<const zkvm_u256_le*>(&x);
++}
++inline zkvm_u256_le* le(uint256& x) noexcept
++{
++    return reinterpret_cast<zkvm_u256_le*>(&x);
++}
++}  // namespace zeg_u256
++#endif
++
+ namespace instr::core
+ {
+ 
+@@ -167,7 +192,13 @@ inline void add(StackTop stack) noexcept
+ 
+ inline void mul(StackTop stack) noexcept
+ {
++#if defined(ZEG_ZISK)
++    const auto& x = stack.pop();
++    auto& y = stack.top();
++    zkvm_u256_le_mul(zeg_u256::le(x), zeg_u256::le(y), zeg_u256::le(y));
++#else
+     stack.top() *= stack.pop();
++#endif
+ }
+ 
+ inline void sub(StackTop stack) noexcept
+@@ -178,25 +209,41 @@ inline void sub(StackTop stack) noexcept
+ inline void div(StackTop stack) noexcept
+ {
+     auto& v = stack[1];
++#if defined(ZEG_ZISK)
++    zkvm_u256_le_div(zeg_u256::le(stack[0]), zeg_u256::le(v), zeg_u256::le(v));
++#else
+     v = v != 0 ? stack[0] / v : 0;
++#endif
+ }
+ 
+ inline void sdiv(StackTop stack) noexcept
+ {
+     auto& v = stack[1];
++#if defined(ZEG_ZISK)
++    zkvm_u256_le_sdiv(zeg_u256::le(stack[0]), zeg_u256::le(v), zeg_u256::le(v));
++#else
+     v = v != 0 ? intx::sdivrem(stack[0], v).quot : 0;
++#endif
+ }
+ 
+ inline void mod(StackTop stack) noexcept
+ {
+     auto& v = stack[1];
++#if defined(ZEG_ZISK)
++    zkvm_u256_le_mod(zeg_u256::le(stack[0]), zeg_u256::le(v), zeg_u256::le(v));
++#else
+     v = v != 0 ? stack[0] % v : 0;
++#endif
+ }
+ 
+ inline void smod(StackTop stack) noexcept
+ {
+     auto& v = stack[1];
++#if defined(ZEG_ZISK)
++    zkvm_u256_le_smod(zeg_u256::le(stack[0]), zeg_u256::le(v), zeg_u256::le(v));
++#else
+     v = v != 0 ? intx::sdivrem(stack[0], v).rem : 0;
++#endif
+ }
+ 
+ inline void addmod(StackTop stack) noexcept
+@@ -204,7 +251,11 @@ inline void addmod(StackTop stack) noexcept
+     const auto& x = stack.pop();
+     const auto& y = stack.pop();
+     auto& m = stack.top();
++#if defined(ZEG_ZISK)
++    zkvm_u256_le_addmod(zeg_u256::le(x), zeg_u256::le(y), zeg_u256::le(m), zeg_u256::le(m));
++#else
+     m = m != 0 ? intx::addmod(x, y, m) : 0;
++#endif
+ }
+ 
+ inline void mulmod(StackTop stack) noexcept
+@@ -212,7 +263,11 @@ inline void mulmod(StackTop stack) noexcept
+     const auto& x = stack[0];
+     const auto& y = stack[1];
+     auto& m = stack[2];
++#if defined(ZEG_ZISK)
++    zkvm_u256_le_mulmod(zeg_u256::le(x), zeg_u256::le(y), zeg_u256::le(m), zeg_u256::le(m));
++#else
+     m = m != 0 ? intx::mulmod(x, y, m) : 0;
++#endif
+ }
+ 
+ inline Result exp(StackTop stack, int64_t gas_left, ExecutionState& state) noexcept
+@@ -227,7 +282,11 @@ inline Result exp(StackTop stack, int64_t gas_left, ExecutionState& state) noexc
+     if ((gas_left -= additional_cost) < 0)
+         return {EVMC_OUT_OF_GAS, gas_left};
+ 
++#if defined(ZEG_ZISK)
++    zkvm_u256_le_exp(zeg_u256::le(base), zeg_u256::le(exponent), zeg_u256::le(exponent));
++#else
+     exponent = intx::exp(base, exponent);
++#endif
+     return {EVMC_SUCCESS, gas_left};
+ }
+ 

@@ -1,14 +1,10 @@
 // Shared core for the ZisK guest's stateless block validation.
 //
-// Extracted verbatim from `main()` so both the standalone executable / ZisK
-// ELF and the host-side C FFI wrapper (`zeg_run`) run the exact same
-// pipeline. The only difference from the old `main()` is the input source:
-// instead of `read_input_stream` (file / MMIO) the bytes are supplied as an
-// in-memory buffer, and instead of `emit_public_output` the resulting 32-byte
-// execution block hash is copied into the caller's `out` buffer.
-//
-// No validation / encoding / hashing logic is changed — this is a pure
-// extraction.
+// Used by both the standalone executable / ZisK ELF (`main()`) and the
+// host-side C FFI wrapper (`zeg_run`), so both run the exact same pipeline
+// over an in-memory ZEG0 buffer. The result is the EIP-8025
+// `new_payload_request_root` (the public output), plus optionally the
+// execution block hash for host-side checks.
 
 #include "zeg/run.hpp"
 
@@ -22,14 +18,18 @@
 
 #include "zeg/accounts.hpp"
 #include "zeg/binary_format.hpp"     // kMagic, kVersion
+#include "zeg/block_access_list.hpp"
 #include "zeg/block_header.hpp"
 #include "zeg/keccak.hpp"
+#include "zeg/new_payload_request.hpp"
 #include "zeg/consensus_info.hpp"
 #include "zeg/contracts.hpp"
 #include "zeg/fake_exponential.hpp"
 #include "zeg/fatal.hpp"
+#include "zeg/heap_stats.hpp"
 #include "zeg/previous_blocks.hpp"
 #include "zeg/rlp.hpp"
+#include "zeg/stream.hpp"
 #include "zeg/state_root.hpp"
 #include "zeg/storages.hpp"
 #include "zeg/system_addresses.hpp"
@@ -38,7 +38,7 @@
 
 namespace zeg {
 
-int run(const uint8_t* input, size_t len, uint8_t out[32]) {
+int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_out[32]) {
     // 1. Validate the ZEG0 magic + version directly on the in-memory buffer
     //    (mirrors read_input_stream) and position the cursor past the 8-byte
     //    magic+version prefix so it stays 8-byte aligned for the typed reads
@@ -56,8 +56,20 @@ int run(const uint8_t* input, size_t len, uint8_t out[32]) {
     if (version != zeg::kVersion) {
         zeg::fatal("run: unsupported format version");
     }
-    const uint8_t* cursor = input + 8;
+    // 16-byte hash seed at offset [8,24): per-run random advice that seeds the
+    // state-table hash maps (defeats forced O(n^2) account/storage lookups).
+    // It only picks hash buckets and never affects the public output.
+    if (len < 24) {
+        zeg::fatal("run: input too small for hash seed");
+    }
+    const zeg::HashSeed table_seed = zeg::HashSeed::derive(input + 8);
+    const uint8_t* cursor = input + 24;
     const uint8_t* file_base = input;  // base for the SROOT_OFFSET debug dump
+
+    // Bound every subsequent stream read to the input buffer (see zeg/stream.hpp):
+    // a truncated or oversized-`count` input now halts cleanly instead of reading
+    // out of bounds. Set once, before any section constructor runs.
+    zeg::set_stream_end(input + len);
 
     // 2. Parse the input-stream collections. Stream order must match the
     //    prover's write order: consensus_info → transactions → contracts →
@@ -68,8 +80,9 @@ int run(const uint8_t* input, size_t len, uint8_t out[32]) {
     zeg::Transactions   transactions    (cursor);
     zeg::Contracts      contracts       (cursor);
     zeg::PreviousBlocks previous_blocks (cursor);
-    zeg::Accounts       accounts;
-    zeg::Storages       storages;
+    zeg::Accounts       accounts        (table_seed);
+    zeg::Storages       storages        (table_seed);
+    zeg::heap_mark("parse");
 
     // 3. Anchor the ancestor chain to the block being computed.
     //    PreviousBlocks[0] must be the parent — every BLOCKHASH
@@ -242,16 +255,25 @@ int run(const uint8_t* input, size_t len, uint8_t out[32]) {
     if (std::getenv("ZEG_DUMP_SROOT_OFFSET") != nullptr) {
         std::fprintf(stderr, "SROOT_OFFSET=%zu\n", (size_t)(cursor - file_base));
     }
-    zeg::StateRoot state_root(cursor, accounts, storages, consensus.gas_limit());
+    zeg::StateRoot state_root(cursor, accounts, storages);
+    // StateRoot is the final input section: the cursor must now sit exactly at
+    // the input end. Trailing bytes mean a malformed / over-long input — reject
+    // rather than silently ignore them (the per-section readers only guard their
+    // own fields, not consumption of the whole stream).
+    if (cursor != input + len) {
+        zeg::fatal("run: input has trailing bytes after the final section");
+    }
     if (state_root.old_state_root() != consensus.parent_hash()) {
         zeg::fatal("pre-execution state root mismatch");
     }
+    zeg::heap_mark("state_root");
 
     // 5. Construct the state DB. ZiskStateDB borrows the five
     //    collections by reference for the rest of the run; Host
     //    callbacks pass data through them (or fatal-stub for overrides
     //    that need infrastructure not yet built).
-    zeg::ZiskStateDB state(accounts, consensus, contracts, previous_blocks, storages);
+    zeg::ZiskStateDB state(accounts, consensus, contracts, previous_blocks, storages, table_seed);
+    zeg::heap_mark("state_db");
 
     // 6. Run the whole block: pre-block system calls, every tx, then
     //    post-block side-effects. `state` owns the evmone VM and
@@ -316,6 +338,7 @@ int run(const uint8_t* input, size_t len, uint8_t out[32]) {
     //    prover-supplied root; instead it feeds step 7' as the
     //    `state_root` field of the reconstructed header.
     const evmc::bytes32 new_state_root = state_root.calculate_new_state_root();
+    zeg::heap_mark("new_root");
 
     // DEBUG: in `none` mode no mutations were applied — the new walk
     // must reproduce the pre-execution root byte-for-byte.
@@ -373,6 +396,9 @@ int run(const uint8_t* input, size_t len, uint8_t out[32]) {
         .excess_blob_gas          = consensus.excess_blob_gas(),
         .parent_beacon_block_root = consensus.parent_beacon_block_root(),
         .requests_hash            = state.requests_hash(),
+        // EIP-7928: the hash of the BAL built during execution.
+        .block_access_list_hash   = state.block_access_list_hash(),
+        .slot_number              = consensus.slot_number(),
         // Fork the block runs under. ForkId::Unknown (0 = inputs that
         // pre-date the field) resolves to Prague, the mainnet default.
         // The encoder derives the header field count from this.
@@ -420,6 +446,8 @@ int run(const uint8_t* input, size_t len, uint8_t out[32]) {
         std::fprintf(stderr, "HDR %-25s %llu\n", "excess_blob_gas", (unsigned long long)header.excess_blob_gas);
         dump32("parent_beacon_block_root", header.parent_beacon_block_root);
         dump32("requests_hash", header.requests_hash);
+        dump32("block_access_list_hash", header.block_access_list_hash);
+        std::fprintf(stderr, "HDR %-25s %llu\n", "slot_number", (unsigned long long)header.slot_number);
     }
     std::size_t header_rlp_size = 0;
     const evmc::bytes32 execution_block_hash =
@@ -439,8 +467,30 @@ int run(const uint8_t* input, size_t len, uint8_t out[32]) {
         }
     }
 
-    // 8. Hand the execution-layer block hash back to the caller.
+#if defined(ZEG_PUBLIC_OUTPUT_BLOCK_HASH)
+    // 8. ZEG_PUBLIC_OUTPUT=block_hash: no EIP-8025; the block hash is the output.
     std::memcpy(out, execution_block_hash.bytes, 32);
+#else
+    // 8. EIP-8025: the SSZ root of the NewPayloadRequest this block is the
+    //    payload of — what the proof attests.
+    const evmc::bytes32 npr_root = zeg::new_payload_request_root(
+        header, execution_block_hash, transactions, consensus, state);
+    if (std::getenv("ZEG_DUMP_NPR") != nullptr) {  // DEBUG: inputs for scripts/npr_root_ref.py
+        auto dump = [](const char* name, std::span<const uint8_t> b) {
+            std::fprintf(stderr, "NPR %s 0x", name);
+            for (auto c : b) std::fprintf(stderr, "%02x", c);
+            std::fprintf(stderr, "\n");
+        };
+        for (const auto& r : state.requests()) dump("request", r);
+        dump("bal", state.block_access_list_rlp());
+    }
+
+    std::memcpy(out, npr_root.bytes, 32);
+#endif
+    if (block_hash_out != nullptr) {
+        std::memcpy(block_hash_out, execution_block_hash.bytes, 32);
+    }
+    zeg::heap_mark("end");
 
     return 0;
 }

@@ -112,6 +112,12 @@ pub struct Header {
     pub parent_beacon_block_root: Option<B256>,
     #[serde(default)]
     pub requests_hash: Option<B256>,
+    /// EIP-7928 (Amsterdam).
+    #[serde(default)]
+    pub block_access_list_hash: Option<B256>,
+    /// EIP-7843 (Amsterdam).
+    #[serde(default)]
+    pub slot_number: Option<U256>,
 }
 
 #[derive(Debug, Deserialize)]

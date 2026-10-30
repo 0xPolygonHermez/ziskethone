@@ -2,23 +2,47 @@
 // arith.cpp — arithmetic opcodes (0x01..0x0b: ADD, MUL, SUB, DIV, SDIV, MOD,
 // SMOD, ADDMOD, MULMOD, EXP, SIGNEXTEND).
 //
-// The 256-bit heavy lifting routes through the ZisK-accelerated zeg::bi backend:
-// add256 (ADD/SUB), arith256 (MUL and EXP's square-and-multiply), arith256_mod
-// (ADDMOD/MULMOD), and fcall_bigint_div (DIV/MOD, and the magnitude step of the
-// signed variants). All of it works on little-endian limbs — and the stack now
-// stores little-endian integers, so ld_le/st_le are identity and the operands
-// feed straight in with no byteswap. Sign handling, the divide-by-zero guards,
-// and SIGNEXTEND are plain limb work. Binary ops take a = top, b = second, push
-// a OP b into b's slot.
+// On ZisK the 256-bit heavy lifting goes through the little-endian U256 ABI
+// (zkvm_u256_le.h): add/sub (the full-width ADD/SUB paths), mul, the division
+// family (DIV/SDIV/MOD/SMOD, with a checked division), addmod/mulmod and exp. On
+// the host the same opcodes run on the portable software in bigint/backend.hpp.
+// All of it works on little-endian limbs — and the stack stores little-endian
+// integers, so ld_le/st_le are identity and the operands feed straight in with no
+// byteswap. Binary ops take a = top, b = second, push a OP b into b's slot.
 
 #include "detail.hpp"
 
+#if defined(ZEG_ZISK)
+#include "zkvm_u256_le.h"  // ZisK's little-endian U256 ABI
+#else
 #include "bigint/backend.hpp"  // zeg::bi::{add256,arith256,arith256_mod,fcall_bigint_div}
+#endif
 
 namespace zevm {
 
 namespace arith_ops {
 
+#if defined(ZEG_ZISK)
+// U256 is `uint64_t limbs[4]`, least significant first: exactly zkvm_u256_le.
+inline const zkvm_u256_le* le(const U256& x) { return reinterpret_cast<const zkvm_u256_le*>(&x); }
+inline zkvm_u256_le* le(U256& x) { return reinterpret_cast<zkvm_u256_le*>(&x); }
+
+// The inline zkvmcalls (add, sub, mul, addmod, mulmod) are asm statements with a
+// register per argument. Expanded inside zevm's dispatch loop they make GCC spill
+// registers across the whole loop (+4% cost on a mainnet block, all stack loads and
+// stores), so each runs out of line: the loop keeps only a call, and the cheap
+// small-operand paths of ADD and SUB stay inline. (div, mod, exp and the signed
+// division are calls anyway.) Each writes its result into the last stack slot named.
+[[gnu::noinline]] inline void abi_add(U256* top) { zkvm_u256_le_add(le(top[0]), le(top[1]), le(top[1])); }
+[[gnu::noinline]] inline void abi_sub(U256* top) { zkvm_u256_le_sub(le(top[0]), le(top[1]), le(top[1])); }
+[[gnu::noinline]] inline void abi_mul(U256* top) { zkvm_u256_le_mul(le(top[0]), le(top[1]), le(top[1])); }
+[[gnu::noinline]] inline void abi_addmod(U256* top) {
+    zkvm_u256_le_addmod(le(top[0]), le(top[1]), le(top[2]), le(top[2]));
+}
+[[gnu::noinline]] inline void abi_mulmod(U256* top) {
+    zkvm_u256_le_mulmod(le(top[0]), le(top[1]), le(top[2]), le(top[2]));
+}
+#else
 constexpr uint64_t ZERO4[4] = {0, 0, 0, 0};
 constexpr uint64_t ONE4[4]  = {1, 0, 0, 0};
 
@@ -45,6 +69,7 @@ inline void udivmod(const U256& a, const U256& b, U256& q, U256& r) {
                               quo, &lq, rem, &lr);
     for (int i = 0; i < 4; ++i) { q.limbs[i] = quo[i]; r.limbs[i] = rem[i]; }
 }
+#endif
 
 // 0x01 ADD — pop a and b, push (a + b) mod 2^256.
 //
@@ -89,10 +114,14 @@ bool op_add(EvmState& s, Regs& R) {
             }
         }
     } else {                                               // both >= 2^64: full path
+#if defined(ZEG_ZISK)
+        abi_add(R.top);  // b = a + b (mod 2^256)
+#else
         const U256 a = ld_le(R.top);
         U256       b = ld_le(R.top + 1);
         zeg::bi::add256(a.limbs, b.limbs, /*cin=*/0, b.limbs);  // b = a + b (mod 2^256)
         st_le(R.top + 1, b);
+#endif
     }
     return true;
 }
@@ -102,10 +131,14 @@ bool op_mul(EvmState& s, Regs& R) {
     if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_LOW;
     if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+#if defined(ZEG_ZISK)
+    abi_mul(R.top);
+#else
     const U256 a = ld_le(R.top);
     U256       b = ld_le(R.top + 1);
     b = mul_low(a, b);
     st_le(R.top + 1, b);
+#endif
     return true;
 }
 
@@ -142,12 +175,16 @@ bool op_sub(EvmState& s, Regs& R) {
             }
         }
     } else {                                               // b >= 2^64: full LE path
+#if defined(ZEG_ZISK)
+        abi_sub(R.top);  // b = a - b (mod 2^256)
+#else
         const U256 a = ld_le(R.top);
         U256       b = ld_le(R.top + 1);
-        // a - b == a + ~b + 1 (two's complement), via the accelerated adder.
+        // a - b == a + ~b + 1 (two's complement).
         const uint64_t nb[4] = {~b.limbs[0], ~b.limbs[1], ~b.limbs[2], ~b.limbs[3]};
         zeg::bi::add256(a.limbs, nb, /*cin=*/1, b.limbs);
         st_le(R.top + 1, b);
+#endif
     }
     return true;
 }
@@ -157,6 +194,9 @@ bool op_div(EvmState& s, Regs& R) {
     if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_LOW;
     if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+#if defined(ZEG_ZISK)
+    zkvm_u256_le_div(le(R.top[0]), le(R.top[1]), le(R.top[1]));  // 0 when b == 0
+#else
     const U256 a = ld_le(R.top);
     U256       b = ld_le(R.top + 1);
     if (u256_is_zero(b)) {
@@ -165,6 +205,7 @@ bool op_div(EvmState& s, Regs& R) {
         U256 q, r; udivmod(a, b, q, r); b = q;
     }
     st_le(R.top + 1, b);
+#endif
     return true;
 }
 
@@ -173,6 +214,9 @@ bool op_sdiv(EvmState& s, Regs& R) {
     if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_LOW;
     if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+#if defined(ZEG_ZISK)
+    zkvm_u256_le_sdiv(le(R.top[0]), le(R.top[1]), le(R.top[1]));  // 0 when b == 0
+#else
     const U256 a = ld_le(R.top);
     U256       b = ld_le(R.top + 1);
     if (u256_is_zero(b)) {
@@ -194,6 +238,7 @@ bool op_sdiv(EvmState& s, Regs& R) {
         }
     }
     st_le(R.top + 1, b);
+#endif
     return true;
 }
 
@@ -202,6 +247,9 @@ bool op_mod(EvmState& s, Regs& R) {
     if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_LOW;
     if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+#if defined(ZEG_ZISK)
+    zkvm_u256_le_mod(le(R.top[0]), le(R.top[1]), le(R.top[1]));  // 0 when b == 0
+#else
     const U256 a = ld_le(R.top);
     U256       b = ld_le(R.top + 1);
     if (u256_is_zero(b)) {
@@ -210,6 +258,7 @@ bool op_mod(EvmState& s, Regs& R) {
         U256 q, r; udivmod(a, b, q, r); b = r;
     }
     st_le(R.top + 1, b);
+#endif
     return true;
 }
 
@@ -218,6 +267,9 @@ bool op_smod(EvmState& s, Regs& R) {
     if (R.gas < GAS_LOW) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_LOW;
     if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+#if defined(ZEG_ZISK)
+    zkvm_u256_le_smod(le(R.top[0]), le(R.top[1]), le(R.top[1]));  // 0 when b == 0
+#else
     const U256 a = ld_le(R.top);
     U256       b = ld_le(R.top + 1);
     if (u256_is_zero(b)) {
@@ -230,6 +282,7 @@ bool op_smod(EvmState& s, Regs& R) {
         b = na ? u256_neg(r) : r;
     }
     st_le(R.top + 1, b);
+#endif
     return true;
 }
 
@@ -238,6 +291,9 @@ bool op_addmod(EvmState& s, Regs& R) {
     if (R.gas < GAS_MID) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_MID;
     if (depth_lt(R, 3)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+#if defined(ZEG_ZISK)
+    abi_addmod(R.top);  // 0 when m == 0
+#else
     const U256 a = ld_le(R.top);
     const U256 b = ld_le(R.top + 1);
     U256       m = ld_le(R.top + 2);
@@ -250,6 +306,7 @@ bool op_addmod(EvmState& s, Regs& R) {
         m = U256{{d[0], d[1], d[2], d[3]}};
     }
     st_le(R.top + 2, m);
+#endif
     return true;
 }
 
@@ -258,6 +315,9 @@ bool op_mulmod(EvmState& s, Regs& R) {
     if (R.gas < GAS_MID) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= GAS_MID;
     if (depth_lt(R, 3)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
+#if defined(ZEG_ZISK)
+    abi_mulmod(R.top);  // 0 when m == 0
+#else
     const U256 a = ld_le(R.top);
     const U256 b = ld_le(R.top + 1);
     U256       m = ld_le(R.top + 2);
@@ -269,6 +329,7 @@ bool op_mulmod(EvmState& s, Regs& R) {
         m = U256{{d[0], d[1], d[2], d[3]}};
     }
     st_le(R.top + 2, m);
+#endif
     return true;
 }
 
@@ -281,7 +342,7 @@ bool op_mulmod(EvmState& s, Regs& R) {
 // then walks the bits top..0 lane by lane, skipping the leading all-zero lanes.
 bool op_exp(EvmState& s, Regs& R) {
     if (depth_lt(R, 2)) { s.status = EVMC_STACK_UNDERFLOW; return false; }
-    const U256  base = ld_le(R.top);
+    [[maybe_unused]] const U256 base = ld_le(R.top);  // the host's square-and-multiply
     const U256& e    = R.top[1];  // exponent, little-endian slot
 
     // Highest set bit: first non-zero lane (MS first) + clz on it.
@@ -296,6 +357,9 @@ bool op_exp(EvmState& s, Regs& R) {
     if (R.gas < cost) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= cost;
 
+#if defined(ZEG_ZISK)
+    zkvm_u256_le_exp(le(R.top[0]), le(R.top[1]), le(R.top[1]));
+#else
     // Square-and-multiply, MSB -> LSB, lane by lane (lane vl == e.limbs[vl]).
     // top < 0 (exponent 0) runs zero iterations -> 1.
     U256 result{{1, 0, 0, 0}};
@@ -308,6 +372,7 @@ bool op_exp(EvmState& s, Regs& R) {
         }
     }
     st_le(R.top + 1, result);
+#endif
     return true;
 }
 

@@ -49,6 +49,7 @@ use reth_provider::{
     StateWriter, StaticFileProviderFactory, StaticFileSegment, StaticFileWriter,
 };
 use reth_revm::database::StateProviderDatabase;
+use reth_storage_api::EvmStateProviderAdapter;
 use revm::inspector::inspectors::TracerEip3155;
 
 use fixture::load_fixture;
@@ -170,7 +171,7 @@ fn main() -> Result<()> {
             .with_context(|| format!("static_file commit {idx}"))?;
 
         let state_provider = provider.latest();
-        let state_db = StateProviderDatabase(&state_provider);
+        let state_db = StateProviderDatabase(EvmStateProviderAdapter(&*state_provider));
         let mut state = reth_revm::db::State::builder()
             .with_database(state_db)
             .with_bundle_update()

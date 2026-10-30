@@ -1,0 +1,21 @@
+[Unit]
+Description=ZisK proof-lifecycle timing stats collector (journald -> SQLite)
+After=reth-zisk-sepolia.service zisk-proof-engine.service systemd-journald.service
+Wants=reth-zisk-sepolia.service zisk-proof-engine.service
+
+[Service]
+Type=simple
+User=jbaylina
+Group=jbaylina
+# Guarantee read access to the system journal regardless of ACLs.
+SupplementaryGroups=systemd-journal
+ExecStart=/usr/bin/python3 /home/jbaylina/git/ziskethone/proof-stats/collector.py \
+    --db /home/jbaylina/data/zisk/stats/stats.db
+Restart=always
+RestartSec=5
+# Read-only w.r.t. the system except its own data dir.
+ReadWritePaths=/home/jbaylina/data/zisk/stats
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

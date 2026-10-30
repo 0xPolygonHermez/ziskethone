@@ -82,6 +82,10 @@ struct EvmState {
     // Accumulated gas refund (SSTORE clears, etc.; may go negative). Reported in
     // the frame's evmc_result on success; the host applies the EIP-3529 cap.
     int64_t        gas_refund;
+    // EIP-8037 state gas (Amsterdam), as evmone's StateGas: the reservoir left,
+    // and how much of the frame's state charges came out of `gas` instead.
+    int64_t        state_gas_left;
+    int64_t        state_gas_spilled;
 
     // ----- evmc plumbing -----
     const evmc_message*           evmcMsg;     // borrowed (this frame's message)
@@ -90,6 +94,16 @@ struct EvmState {
     const evmc_host_interface*    host;        // borrowed
     evmc_host_context*            context;     // borrowed
     evmc_revision                 rev;
+
+    // SELFBALANCE fast path: a per-frame cache of the executing account's
+    // balance (BE), so a SELFBALANCE-heavy frame avoids a host call + account
+    // lookup on every opcode. `self_balance_valid` is false at frame entry and
+    // is cleared by every CALL/CREATE-family op (the only things that can change
+    // the frame's own balance mid-execution; incoming value is credited before
+    // entry). The first SELFBALANCE after entry or after such a call refetches
+    // from the host once and re-validates; subsequent reads are a local push.
+    evmc_uint256be                self_balance_be;
+    bool                          self_balance_valid;
 
     // ----- output & return data -----
     // RETURN/REVERT set the frame's output region (a window into memory); run()

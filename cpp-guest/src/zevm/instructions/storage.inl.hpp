@@ -35,14 +35,23 @@ struct SStoreCost { int64_t cost; int64_t refund; };
 //   warm     — warm-access base (200/800 pre-Berlin, 100 = warm_storage_read on Berlin+)
 //   set/reset— 0->nonzero / nonzero->nonzero base (cold surcharge added separately on Berlin+)
 //   clear    — storage-deletion refund R_sclear (15000 pre-London, 4800 EIP-3529)
-struct StorageCostSpec { bool net_cost; int64_t warm; int64_t set; int64_t reset; int64_t clear; };
+//   cold     — cold-slot surcharge (EIP-2929; 0 before Berlin)
+// Amsterdam (EIP-8038) prices the write separately: set = reset = warm +
+// STORAGE_WRITE, the clear refund scales with it, and the cold surcharge is
+// only the access part (2000), as the reset no longer nets out 2100.
+struct StorageCostSpec { bool net_cost; int64_t warm; int64_t set; int64_t reset; int64_t clear; int64_t cold; };
 
 constexpr StorageCostSpec storage_spec(evmc_revision rev) {
-    if (rev >= EVMC_LONDON)         return {true, WARM_STORAGE_READ_COST, 20000, 5000 - COLD_SLOAD_COST, 4800};
-    if (rev == EVMC_BERLIN)         return {true, WARM_STORAGE_READ_COST, 20000, 5000 - COLD_SLOAD_COST, 15000};
-    if (rev == EVMC_ISTANBUL)       return {true, 800, 20000, 5000, 15000};
-    if (rev == EVMC_CONSTANTINOPLE) return {true, 200, 20000, 5000, 15000};
-    return {false, 200, 20000, 5000, 15000};  // legacy: Frontier..Byzantium, Petersburg
+    if (rev >= EVMC_AMSTERDAM) {
+        constexpr int64_t write = WARM_STORAGE_READ_COST + STORAGE_WRITE;
+        return {true, WARM_STORAGE_READ_COST, write, write,
+                (STORAGE_WRITE + COLD_SLOAD_COST) * 4800 / 5000,
+                COLD_SLOAD_COST - WARM_STORAGE_READ_COST};
+    }
+    if (rev >= EVMC_LONDON)         return {true, WARM_STORAGE_READ_COST, 20000, 5000 - COLD_SLOAD_COST, 4800, COLD_SLOAD_COST};
+    if (rev == EVMC_BERLIN)         return {true, WARM_STORAGE_READ_COST, 20000, 5000 - COLD_SLOAD_COST, 15000, COLD_SLOAD_COST};
+    if (rev == EVMC_ISTANBUL)       return {true, 800, 20000, 5000, 15000, 0};
+    return {false, 200, 20000, 5000, 15000, 0};  // legacy: Frontier..Petersburg
 }
 
 // SSTORE {cost, refund} for a storage-update status under the active revision's
@@ -118,7 +127,7 @@ bool op_sstore(EvmState& s, Regs& R) {
     int64_t cold = 0;
     if (s.rev >= EVMC_BERLIN &&
         s.host->access_storage(s.context, &s.evmcMsg->recipient, &key) == EVMC_ACCESS_COLD) {
-        cold = COLD_SLOAD_COST;
+        cold = storage_spec(s.rev).cold;
     }
     const evmc_storage_status st =
         s.host->set_storage(s.context, &s.evmcMsg->recipient, &key, &value);
@@ -126,6 +135,21 @@ bool op_sstore(EvmState& s, Regs& R) {
     const int64_t cost = sc.cost + cold;
     if (R.gas < cost) { s.status = EVMC_OUT_OF_GAS; return false; }
     R.gas -= cost;
+    // EIP-8037 (Amsterdam): allocating a slot (0 -> x) costs state gas; setting
+    // it back to 0 in the same tx gives it back.
+    if (s.rev >= EVMC_AMSTERDAM) {
+        if (st == EVMC_STORAGE_ADDED) {
+            int64_t g = R.gas;
+            if (!state_gas_charge(s, g, STORAGE_SET_STATE_GAS)) {
+                s.status = EVMC_OUT_OF_GAS; return false;
+            }
+            R.gas = g;
+        } else if (st == EVMC_STORAGE_ADDED_DELETED) {
+            int64_t g = R.gas;
+            state_gas_refill(s, g, STORAGE_SET_STATE_GAS);
+            R.gas = g;
+        }
+    }
     s.gas_refund += sc.refund;
 
     return true;

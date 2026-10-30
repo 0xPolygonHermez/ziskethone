@@ -26,6 +26,13 @@ constexpr evmc::address kSystemAddress{{
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xfe,
 }};
+// EIP-7708 (Amsterdam): ETH transfers emit a LOG3 from kSystemAddress with
+// this topic, keccak256("Transfer(address,address,uint256)").
+constexpr evmc::bytes32 kTransferEventTopic{{
+    0xdd, 0xf2, 0x52, 0xad, 0x1b, 0xe2, 0xc8, 0x9b, 0x69, 0xc2, 0xb0, 0x68,
+    0xfc, 0x37, 0x8d, 0xaa, 0x95, 0x2b, 0xa7, 0xf1, 0x63, 0xc4, 0xa1, 0x16,
+    0x28, 0xf5, 0x5a, 0x4d, 0xf5, 0x23, 0xb3, 0xef,
+}};
 constexpr evmc::address kBeaconRootsAddress{{
     0x00, 0x0F, 0x3d, 0xf6, 0xD7, 0x32, 0x80, 0x7E,
     0xf1, 0x31, 0x9f, 0xB7, 0xB8, 0xbB, 0x85, 0x22,
@@ -52,23 +59,45 @@ constexpr evmc::address kConsolidationRequestsAddress{{
     0x42, 0xfb, 0x57, 0x9F, 0x8B, 0x00, 0xf3, 0xa5,
     0x90, 0x00, 0x72, 0x51,
 }};
+// EIP-8282 (Amsterdam): builder deposit- and exit-request predeploys.
+// Same queue design as 7002/7251; drained with empty calldata at
+// end-of-block, output opaque.
+constexpr evmc::address kBuilderDepositRequestsAddress{{
+    0x00, 0x00, 0xBF, 0xF4, 0x69, 0x84, 0xE3, 0x72,
+    0x56, 0x91, 0xFA, 0x54, 0x0A, 0x8C, 0x75, 0x89,
+    0x30, 0x0D, 0x82, 0x82,
+}};
+constexpr evmc::address kBuilderExitRequestsAddress{{
+    0x00, 0x00, 0x64, 0xD6, 0x78, 0x50, 0x5A, 0xD4,
+    0x8F, 0x8C, 0xCB, 0x09, 0x3B, 0xC6, 0x56, 0x13,
+    0x80, 0x0E, 0x82, 0x82,
+}};
 constexpr int64_t kSystemCallGas = 30'000'000;
 
 // EIP-6110: deposits are extracted from event logs emitted by the
 // beacon-deposit contract during regular tx execution (no system
-// call). Address is the canonical mainnet value; testnets that use a
-// different deposit contract will need this configurable.
+// call). The chain's deposit contract (see ZEG_CHAIN in zeg/config.hpp).
+#ifdef ZEG_CHAIN_SEPOLIA
+constexpr evmc::address kDepositContractAddress{{  // 0x7f02...295d
+    0x7f, 0x02, 0xC3, 0xE3, 0xc9, 0x8b, 0x13, 0x30,
+    0x55, 0xB8, 0xB3, 0x48, 0xB2, 0xAc, 0x62, 0x56,
+    0x69, 0xEd, 0x29, 0x5D,
+}};
+#else
 constexpr evmc::address kDepositContractAddress{{
     0x00, 0x00, 0x00, 0x00, 0x21, 0x9a, 0xb5, 0x40,
     0x35, 0x6c, 0xBB, 0x83, 0x9C, 0xbe, 0x05, 0x30,
     0x3d, 0x77, 0x05, 0xFa,
 }};
+#endif
 
 // ===== EIP-7685 request type bytes =====
 
 constexpr uint8_t kRequestTypeDeposit       = 0x00;
 constexpr uint8_t kRequestTypeWithdrawal    = 0x01;
 constexpr uint8_t kRequestTypeConsolidation = 0x02;
+constexpr uint8_t kRequestTypeBuilderDeposit = 0x03;  // EIP-8282
+constexpr uint8_t kRequestTypeBuilderExit    = 0x04;  // EIP-8282
 
 // ===== EIP-4844 blob-gas constants =====
 
@@ -84,8 +113,15 @@ constexpr uint64_t kGasPerBlob                = 131072;
 constexpr uint8_t  kVersionedHashVersionKzg   = 0x01;     // EIP-4844
 
 // Tx validity limits.
-constexpr size_t   kMaxInitCodeSize           = 2 * 24576; // EIP-3860
+constexpr size_t   kMaxCodeSize               = 0x6000;    // EIP-170
+constexpr size_t   kMaxInitCodeSize           = 2 * kMaxCodeSize; // EIP-3860
+constexpr size_t   kMaxCodeSizeAmsterdam      = 0x10000;   // EIP-7954
+constexpr size_t   kMaxInitCodeSizeAmsterdam  = 2 * kMaxCodeSizeAmsterdam; // EIP-7954
 constexpr uint64_t kMaxTxGasLimit             = 1u << 24;  // EIP-7825 (Osaka)
+// EIP-7928 (Amsterdam): a block's access list may hold at most
+// gas_limit / ITEM_COST items (one per account, one per storage slot).
+constexpr uint64_t kBalItemCost               = 2000;
+constexpr uint64_t kMaxTxTotalGasLimit        = 0xffffffff; // EIP-8037 (Amsterdam)
 constexpr size_t   kMaxBlobsPerTx             = 6;         // EIP-7594 (Osaka)
 
 // keccak256(rlp([])): the ommers hash of every post-Merge block (EIP-3675).

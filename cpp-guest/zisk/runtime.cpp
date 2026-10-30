@@ -7,8 +7,8 @@
 // libstdc++ would normally provide and that the guest actually references:
 //
 //   * the bump allocator backing malloc/realloc/free and operator new,
-//   * strlen/strcmp (the mem* family — memcpy/memmove/memset/memcmp — lives in
-//     dma/*.s, which routes each through the ZisK DMA precompiles),
+//   * strlen/strcmp (the mem* family — memcpy/memmove/memset/memcmp — is the ZisK
+//     memory ABI's DMA ops in zkvm_mem.s),
 //   * the libgcc integer builtins the compiler emits calls to
 //     (__bswap{di,si}2, __clzdi2),
 //   * loud `halt()` + abort() that stop the emulator,
@@ -31,6 +31,7 @@
 #include <utility>
 
 #include <zeg/bswap.hpp>   // zeg::bswap64 — the shared byte-swap implementation
+#include <zeg/zisk_io.hpp> // uart_puts: say why the guest stopped
 
 extern "C" {
 
@@ -61,24 +62,68 @@ extern "C" [[noreturn]] void zeg_zisk_halt() {
 
 // ===========================================================================
 // Bump allocator. Single-shot execution: free() is a no-op. ~0.5 GB heap.
-// (No calloc: nothing links it — the guest uses malloc and relies on ZisK's
-// fresh-RAM-is-zero guarantee where zeroed memory is needed.)
+// (No calloc: nothing links it.) malloc'd memory is NOT guaranteed zero: the
+// main heap grows into space the per-tx arena already used and reset, so
+// callers must initialise what they read. Only memory taken before the first
+// transaction (nothing has been reset yet) is still ZisK's fresh zero RAM.
 // ===========================================================================
 static char *g_next = nullptr;
 
-// memcpy lives in dma/memcpy.s (routed through the ZisK DMA precompile); declare
-// it so realloc can use it. -fno-builtin (see zisk/CMakeLists.txt) keeps this an
-// out-of-line call to that symbol rather than an inlined byte loop.
+// Per-transaction arena (zeg/tx_arena.hpp): [g_tx_low, _heap_top), growing
+// down toward g_next. Also the main heap's limit, so malloc's check stays a
+// single compare.
+static char *g_tx_low = &_heap_top;
+#if defined(ZEG_HEAP_STATS)
+static char *g_tx_min = &_heap_top;   // lowest g_tx_low seen (heap_stats.hpp)
+#endif
+
+// memcpy is the ZisK memory ABI's (zkvm_mem.s, one DMA op);
+// declare it so realloc can use it. -fno-builtin (see zisk/CMakeLists.txt) keeps
+// this an out-of-line call to that symbol rather than an inlined byte loop.
 void *memcpy(void *dst, const void *src, size_t n);
+
+// Out of memory: the main heap (growing up) met the per-tx arena (growing
+// down). Say which side asked, so a block that fails this way is told apart
+// from a guest bug, then stop.
+[[noreturn]] static void out_of_memory(const char *who) {
+    zeg::zisk::uart_puts("guest: out of memory (");
+    zeg::zisk::uart_puts(who);
+    zeg::zisk::uart_puts(")\n");
+    halt();
+}
 
 static inline char *heap_alloc(size_t size) {
     if (!g_next) g_next = &_heap_bottom;
     size = (size + 15) & ~size_t(15);            // 16-byte align (max_align_t)
     char *p = g_next;
-    if (p + size > &_heap_top) halt();    // OOM -> stop loudly
+    if (p + size > g_tx_low) out_of_memory("heap");
     g_next += size;
     return p;
 }
+
+extern "C" void *zeg_tx_arena_alloc(size_t size) noexcept {
+    if (!g_next) g_next = &_heap_bottom;
+    size = (size + 15) & ~size_t(15);
+    if (size > static_cast<size_t>(g_tx_low - g_next)) out_of_memory("tx arena");
+    g_tx_low -= size;
+#if defined(ZEG_HEAP_STATS)
+    if (g_tx_low < g_tx_min) g_tx_min = g_tx_low;
+#endif
+    return g_tx_low;
+}
+
+extern "C" void zeg_tx_arena_reset() noexcept { g_tx_low = &_heap_top; }
+
+#if defined(ZEG_HEAP_STATS)
+// zeg/heap_stats.hpp: main heap in use, deepest tx arena so far, and the gap
+// left between them now.
+extern "C" void zeg_heap_stats(size_t *used, size_t *tx_peak, size_t *free_bytes) noexcept {
+    char *next = g_next ? g_next : &_heap_bottom;
+    *used = static_cast<size_t>(next - &_heap_bottom);
+    *tx_peak = static_cast<size_t>(&_heap_top - g_tx_min);
+    *free_bytes = static_cast<size_t>(g_tx_low - next);
+}
+#endif
 
 void *malloc(size_t size) { return heap_alloc(size); }
 void  free(void *) {}
@@ -89,8 +134,11 @@ void *realloc(void *ptr, size_t size) {
     if (!ptr) return heap_alloc(size);
     char *p = heap_alloc(size);
     // Copy the old block up to the new size via the DMA-accelerated memcpy. Safe
-    // because the heap is one contiguous region and old blocks stay mapped; any
-    // bytes past the old allocation are fresh zero (the bump arena is untouched).
+    // because the heap is one contiguous region and old blocks stay mapped (the
+    // source range ends below p + size <= g_tx_low, and the DMA memcpy handles
+    // the overlap when ptr was the last block). Bytes past the old allocation
+    // are unspecified (possibly reused arena memory): callers only read what
+    // they wrote, and evmone's Memory::grow zeroes its new part itself.
     memcpy(p, ptr, size);
     return p;
 }
@@ -105,9 +153,8 @@ void *aligned_alloc(size_t alignment, size_t size) {
 
 // ===========================================================================
 // Freestanding str* (no libc). The mem* family (memcpy/memmove/memset/memcmp)
-// is provided by dma/*.s, which routes each call through the ZisK DMA precompiles
-// (CSR 0x813/0x814/0x816) instead of a byte loop. Only strlen/strcmp stay here —
-// there are no DMA str* precompiles.
+// is the ZisK memory ABI (zkvm_mem.h), one DMA op per call instead of a byte loop.
+// Only strlen/strcmp stay here — there are no DMA str* operations.
 // ===========================================================================
 size_t strlen(const char *s) { size_t n = 0; while (s[n]) ++n; return n; }
 

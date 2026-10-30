@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.22)
+cmake_minimum_required(VERSION 3.25)  # evmone v0.24 requires 3.25
 
 # Emit compile_commands.json so the VS Code C/C++ extension picks up the
 # real compile flags (notably -std=c++20 and the FetchContent include
@@ -17,7 +17,7 @@ include(FetchContent)
 FetchContent_Declare(
     evmone
     GIT_REPOSITORY https://github.com/ethereum/evmone.git
-    GIT_TAG        v0.21.0
+    GIT_TAG        v0.24.0
 )
 
 # FetchContent_Populate (without add_subdirectory) is deprecated since
@@ -31,61 +31,139 @@ if(NOT evmone_POPULATED)
     FetchContent_Populate(evmone)
 endif()
 
-# Apply our local evmone patches. 01 and 02 align evmone's CALL gas accounting
-# with revm's behavior so a stateless witness recorded by reth/revm is
-# sufficient for evmone — no extra host calls outside the witness:
-#   01: Reorder CALL gas checks to charge CALL_VALUE_COST first, then cold
-#       access, then ACCOUNT_CREATION_COST, then the EIP-7702 delegation
-#       probe — mirrors revm's `load_acc_and_calc_gas`. A value-bearing
-#       CALL destined to OOG no longer invokes any host state query.
+# Apply our local evmone patches. 02 keeps evmone within the stateless
+# witness reth/revm records — no host calls outside the witness:
 #   02: In get_delegate_address, fast-bail via host.get_code_hash before
 #       calling host.copy_code — an EOA (or any account with empty code)
 #       can never carry an EIP-7702 designator. Mirrors revm's
 #       `Bytecode::eip7702_address(account.code)` short-circuit.
-#   03: Route MUL/EXP/ADDMOD/MULMOD through the ZisK arith256/arith256_mod
-#       precompiles instead of intx's software bigint (the analogue of reth's
-#       ruint patch). Gated on ZEG_ZISK, so the host build keeps intx and
-#       stays the independent reference for the host-vs-guest comparison.
+#   (01, a revm-ordered CALL gas check, was dropped at v0.24: upstream #1668
+#   charges every state-independent CALL cost — memory, value, cold access —
+#   before the delegation probe. Only the new-account cost now comes after
+#   the probe, and that target has no code, so 02 bails on it.)
+#   03: Route MUL, DIV/SDIV/MOD/SMOD, ADDMOD, MULMOD and EXP through ZisK's
+#       little-endian U256 ABI (zkvm_u256_le.h) instead of intx's software
+#       bigint (the analogue of reth's ruint patch). Gated on ZEG_ZISK, so the
+#       host build keeps intx and stays the independent reference for the
+#       host-vs-guest comparison.
 #   04: Walk a pointer, not an index, in analyze_jumpdests — the software
 #       JUMPDEST analysis both builds still use (host always; ZisK when 05 is
 #       compiled out via -DZEG_JUMPDEST_SW=ON).
-#   05: Replace that walk with the ZisK jump_dest_bitmap precompile (CSR 0x81C),
-#       one op per contract instead of a byte walk. Applies on top of 04 and is
-#       likewise gated on ZEG_ZISK, so the host keeps the software reference.
-#   06: Hook for fused jump sequences in the cgoto dispatch, gated on ZEG_ZISK.
-#       The fusions live in zisk/evm/fused_dispatch.inl.
-# Each patch is checked with `git apply --reverse --check` first; if it
-# is already applied we skip — that keeps the configure step idempotent
-# across rebuilds.
+#   05: Replace that walk with the ZisK EVM ABI's zkvm_evm_jumpdest_bitmap
+#       (zisk/evm/jump_dest_bitmap.hpp), one op per contract instead of a byte
+#       walk. Applies on top of 04 and is likewise gated on ZEG_ZISK, so the
+#       host keeps the software reference.
+#   06: Fused superinstructions in evmone's cgoto dispatch, gated on
+#       ZEG_ZISK. The patch is only a hook (a guarded #include plus one line
+#       in the dispatch macro); the fusions themselves live in the guest tree
+#       at zisk/evm/fused_dispatch.inl. Hot dynamic opcode sequences execute
+#       as one fused step; every edge case falls back to the generic handlers
+#       so semantics stay bit-identical. Each fusion is individually measured
+#       on mainnet blocks — the .inl documents the method, the numbers and
+#       the rejected candidates.
+#   07: Reuse one growing output buffer in call_precompile instead of new[] per
+#       call. The ZisK bump allocator never frees, so the per-call allocation
+#       leaked max_output_size every precompile call — a block spamming identity
+#       (output == input) exhausted the heap and became unprovable. Not gated:
+#       a reused buffer is correct on the host too (one block per process).
+#   09: Add evmone::baseline::analyze_into(code, buf, cap) — analyze_legacy that
+#       lays the padded code + jumpdest bitset into a caller buffer instead of
+#       make_unique. Lets the AnalysisCache (zeg/analysis_cache.hpp) keep every
+#       per-contract analysis in a fixed, reusable arena so a block executing
+#       thousands of distinct contracts no longer OOMs the heap. Ungated.
+#       (ZisK 256-bit div/mod/sdiv/smod are handled in-circuit by patch 03's
+#       u256 ABI under 1.4.0, so the former patch 08 is dropped.)
+#   11: COINBASE without misaligned accesses, gated on ZEG_ZISK. block_coinbase
+#       is 4 mod 8 in the tx context and be::load copied it through 8-byte
+#       loads/stores that cross a ZisK memory word (7 costly unaligned accesses
+#       per opcode under -mtune=size); read it as one 32-bit + two aligned
+#       64-bit words instead.
+#   12: ADDRESS, CALLER and ORIGIN the same way, gated on ZEG_ZISK: one helper
+#       reads an evmc address as the three aligned 8-byte words of its 8-aligned
+#       owner (evmc_message / evmc_tx_context) that cover it, whether it is 0 or
+#       4 mod 8.
+#   13: GASPRICE, CALLVALUE, BASEFEE, BLOBBASEFEE, PREVRANDAO and CHAINID the
+#       same way, gated on ZEG_ZISK: a 32-byte sibling helper (zisk_load_bytes32)
+#       reads the evmc_uint256be field as four aligned 8-byte bswap loads instead
+#       of a byte-wise intx::be::load. Every target field is 8-aligned in its
+#       8-aligned owner (evmc_tx_context / evmc_message), so no 4-mod-8 case.
+#   14: Allocate each frame's call output in the guest's per-transaction arena
+#       (include/zeg/tx_arena.hpp) instead of evmc_make_result's malloc, gated
+#       on ZEG_ZISK. The bump allocator never frees, so the per-call malloc
+#       leaked every output: a 200M-gas block RETURNing 1 KiB per CALL
+#       exhausted the heap. The arena is reset at every transaction start.
+# The check covers the whole stack, not each patch alone: patches may overlap
+# (13 edits lines in 12's context), so a per-patch `git apply --reverse
+# --check` misreads an applied stack as missing 12. Instead we build
+# "HEAD + every patch" in a scratch index and compare the source tree to it.
+# Equal → already applied, nothing to do. Anything else (pristine, partially
+# patched, or patched with an older version of a patch) → reset the checkout
+# and apply the stack again. That keeps reconfigure idempotent and makes an
+# added or edited patch take effect in an existing build dir. evmone-src is
+# owned by the build: hand edits inside it are discarded.
 set(_evmone_patches
-    "${CMAKE_CURRENT_SOURCE_DIR}/patches/01-evmone-revm-aligned-call-gas-order.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/02-evmone-delegation-eoa-fastpath.patch"
-    "${CMAKE_CURRENT_SOURCE_DIR}/patches/03-evmone-zisk-arith256-mulmod.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/03-evmone-zisk-u256-abi.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/04-evmone-zisk-jumpdest-pointer-walk.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/05-evmone-zisk-jumpdest-precompile.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/06-evmone-zisk-fused-dispatch.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/07-evmone-precompile-reused-output.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/09-evmone-zisk-analyze-into-buffer.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/10-evmone-selfbalance-cache.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/11-evmone-zisk-coinbase-aligned-load.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/12-evmone-zisk-address-aligned-load.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/13-evmone-zisk-txctx-bytes32-aligned-load.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/14-evmone-zisk-tx-arena-call-output.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/15-evmone-depth-limit-all-forks.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/16-evmone-zisk-memory-views.patch"
 )
 find_program(GIT_EXECUTABLE git REQUIRED)
+set(_patched_index "${CMAKE_CURRENT_BINARY_DIR}/evmone-patched.index")
+set(_git_tmp_index ${CMAKE_COMMAND} -E env GIT_INDEX_FILE=${_patched_index} ${GIT_EXECUTABLE})
+execute_process(
+    COMMAND ${_git_tmp_index} read-tree HEAD
+    WORKING_DIRECTORY "${evmone_SOURCE_DIR}"
+    RESULT_VARIABLE _rc)
+if(NOT _rc EQUAL 0)
+    message(FATAL_ERROR "git read-tree HEAD failed in ${evmone_SOURCE_DIR} (rc=${_rc})")
+endif()
 foreach(_patch IN LISTS _evmone_patches)
     execute_process(
-        COMMAND ${GIT_EXECUTABLE} apply --reverse --check "${_patch}"
+        COMMAND ${_git_tmp_index} apply --cached "${_patch}"
         WORKING_DIRECTORY "${evmone_SOURCE_DIR}"
-        RESULT_VARIABLE _already_applied
-        OUTPUT_QUIET ERROR_QUIET)
-    if(NOT _already_applied EQUAL 0)
+        RESULT_VARIABLE _rc)
+    if(NOT _rc EQUAL 0)
+        message(FATAL_ERROR
+            "evmone patch ${_patch} does not apply on top of the previous ones (rc=${_rc})")
+    endif()
+endforeach()
+execute_process(
+    COMMAND ${_git_tmp_index} diff --quiet
+    WORKING_DIRECTORY "${evmone_SOURCE_DIR}"
+    RESULT_VARIABLE _differs)
+file(REMOVE "${_patched_index}")
+if(_differs EQUAL 0)
+    message(STATUS "evmone patches already applied")
+else()
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} checkout -- .
+        WORKING_DIRECTORY "${evmone_SOURCE_DIR}"
+        RESULT_VARIABLE _rc)
+    if(NOT _rc EQUAL 0)
+        message(FATAL_ERROR "Failed to reset ${evmone_SOURCE_DIR} (rc=${_rc})")
+    endif()
+    foreach(_patch IN LISTS _evmone_patches)
         execute_process(
             COMMAND ${GIT_EXECUTABLE} apply "${_patch}"
             WORKING_DIRECTORY "${evmone_SOURCE_DIR}"
-            RESULT_VARIABLE _apply_rc)
-        if(NOT _apply_rc EQUAL 0)
+            RESULT_VARIABLE _rc)
+        if(NOT _rc EQUAL 0)
             message(FATAL_ERROR
-                "Failed to apply evmone patch ${_patch} (rc=${_apply_rc})")
+                "Failed to apply evmone patch ${_patch} (rc=${_rc})")
         endif()
-        message(STATUS "Applied evmone patch: ${_patch}")
-    else()
-        message(STATUS "evmone patch already applied: ${_patch}")
-    endif()
-endforeach()
+    endforeach()
+    message(STATUS "evmone source reset and all patches applied")
+endif()
 
 # Pull evmone's Cable/Hunter setup into *this* CMakeLists scope before we
 # call project(), so Hunter is happy and Cable's toolchain configuration
@@ -132,7 +210,7 @@ target_include_directories(evmone-state PUBLIC ${evmone_SOURCE_DIR})
 # zkVM (riscv64ima-zisk-zkvm-elf). C++ guest support in ZisK is still
 # experimental and lives outside this CMakeLists for now.
 #
-# evmone v0.21.0 absorbed evmc into the same library, so a single `evmone`
+# Since v0.21.0 evmone bundles evmc into the same library, so a single `evmone`
 # link target gives us both the EVM and the `evmc::Host` interface that
 # ZiskStateDB implements.
 
@@ -141,21 +219,23 @@ set(GUEST_SOURCES
     src/run.cpp
     src/fatal.cpp
     src/accounts.cpp
+    src/block_access_list.cpp
     src/block_header.cpp
     src/bloom.cpp
     src/consensus_info.cpp
     src/contracts.cpp
     src/create_address.cpp
-    src/dynamic_storage.cpp
     src/eip6110_deposit.cpp
     src/fake_exponential.cpp
     src/hex_prefix.cpp
     src/intrinsic_gas.cpp
     src/journal.cpp
     src/mpt.cpp
+    src/new_payload_request.cpp
     src/previous_blocks.cpp
     src/receipt.cpp
     src/rlp.cpp
+    src/ssz.cpp
     src/state_root.cpp
     src/storages.cpp
     src/transactions.cpp
@@ -189,17 +269,54 @@ list(APPEND GUEST_SOURCES zisk/secp256k1.cpp)
 set(EVM_BACKEND "evmone" CACHE STRING "EVM implementation: evmone | zevm")
 set_property(CACHE EVM_BACKEND PROPERTY STRINGS evmone zevm)
 
+# The chain the guest validates, pinned at build time (chain id and the
+# EIP-6110 deposit contract; see zeg/config.hpp). One build dir per chain.
+set(ZEG_CHAIN "mainnet" CACHE STRING "Chain: mainnet | sepolia")
+set_property(CACHE ZEG_CHAIN PROPERTY STRINGS mainnet sepolia)
+if(ZEG_CHAIN STREQUAL "sepolia")
+    set(ZEG_CHAIN_DEFS ZEG_CHAIN_SEPOLIA)
+elseif(ZEG_CHAIN STREQUAL "mainnet")
+    set(ZEG_CHAIN_DEFS "")
+else()
+    message(FATAL_ERROR "ZEG_CHAIN must be mainnet | sepolia (got ${ZEG_CHAIN})")
+endif()
+
+# Audit #1/#2/#8: by default the guest derives the fork + blob parameters from
+# the committed block timestamp via the compile-time per-chain schedule
+# (zeg/fork_schedule.hpp), ignoring the prover-supplied input fields — the safe
+# behavior every DEPLOYED ELF wants, with no extra flag. Turn this ON ONLY for
+# EEST conformance builds, which replay historical forks at synthetic activation
+# times and so must take the fork/blob from the input instead.
+option(ZEG_FORK_FROM_INPUT
+       "Take fork+blob params from the input, not the compile-time schedule (EEST only)" OFF)
+if(ZEG_FORK_FROM_INPUT)
+    list(APPEND ZEG_CHAIN_DEFS ZEG_FORK_FROM_INPUT)
+endif()
+
+# The public output: `npr` (default) is the EIP-8025 new_payload_request_root
+# the exex / proof-engine / Lighthouse pipeline verifies. `block_hash` publishes
+# the execution block hash instead and skips the NewPayloadRequest SSZ root (all
+# its SHA-256) — a different ELF, only for consumers outside that pipeline
+# (ethproofs, benchmarks, zisk-eth-client). Never use it for the exex.
+set(ZEG_PUBLIC_OUTPUT "npr" CACHE STRING "Public output: npr | block_hash")
+set_property(CACHE ZEG_PUBLIC_OUTPUT PROPERTY STRINGS npr block_hash)
+if(ZEG_PUBLIC_OUTPUT STREQUAL "block_hash")
+    list(APPEND ZEG_CHAIN_DEFS ZEG_PUBLIC_OUTPUT_BLOCK_HASH)
+elseif(NOT ZEG_PUBLIC_OUTPUT STREQUAL "npr")
+    message(FATAL_ERROR "ZEG_PUBLIC_OUTPUT must be npr | block_hash (got ${ZEG_PUBLIC_OUTPUT})")
+endif()
+
 add_executable(zisk_eth_guest ${GUEST_SOURCES})
 
 target_include_directories(zisk_eth_guest PUBLIC include)
 # evmone's baseline.hpp / vm.hpp (CodeAnalysis + the pre-analyzed execute()
 # overload used by the analysis cache) live under lib/, not the public include/.
-# include/ holds evmmax/evmmax.hpp, pulled in by evmone_precompiles/secp256k1.hpp
-# (the host secp256k1 recover path).
+# include/ holds evmone's public headers (evmone/evmone.h).
 target_include_directories(zisk_eth_guest PRIVATE
     ${evmone_SOURCE_DIR}/lib
     ${evmone_SOURCE_DIR}/include)
 target_compile_options(zisk_eth_guest PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_definitions(zisk_eth_guest PRIVATE ${ZEG_CHAIN_DEFS})
 # intx::intx is used directly by the guest sources (e.g. fake_exponential,
 # zisk_state_db), independent of which EVM backend is linked. It used to come
 # in transitively via the `evmone` target's PUBLIC deps; the precompiles/state
@@ -246,6 +363,7 @@ target_include_directories(zeg_ffi PRIVATE
     ${evmone_SOURCE_DIR}/lib
     ${evmone_SOURCE_DIR}/include)
 target_compile_options(zeg_ffi PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_definitions(zeg_ffi PRIVATE ${ZEG_CHAIN_DEFS})
 # Re-import intx in case the executable block above (which also calls this)
 # was removed or reordered — the zevm backend drops the transitive evmone
 # link, so zeg_ffi must not rely on a sibling target having imported it.
@@ -269,3 +387,12 @@ else()
     message(FATAL_ERROR "EVM_BACKEND must be evmone | zevm (got ${EVM_BACKEND})")
 endif()
 
+
+# ----- host unit tests -------------------------------------------------------
+#
+# Known-answer tests for the SSZ merkleization behind the EIP-8025
+# new_payload_request_root (test/ssz_test.cpp).
+add_executable(ssz_test test/ssz_test.cpp src/ssz.cpp src/fatal.cpp)
+target_include_directories(ssz_test PRIVATE include)
+target_compile_options(ssz_test PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(ssz_test PRIVATE evmone::precompiles)

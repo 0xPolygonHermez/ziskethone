@@ -2,8 +2,9 @@
 //
 // `run` runs the same pipeline as the guest's `main()` (parse
 // the input collections, verify the pre-execution state root, execute the
-// block, recompute the post-execution state root, build the header, and
-// compute the execution-layer block hash) but operates on an in-memory ZEG0
+// block, recompute the post-execution state root, build the header, compute
+// the execution-layer block hash and the EIP-8025 new_payload_request_root)
+// but operates on an in-memory ZEG0
 // container instead of reading from a file or the ZisK MMIO input region.
 //
 // It is the shared core used both by `main()` and by the C FFI wrapper
@@ -25,10 +26,14 @@ constexpr int kRunNoHashPartialStage = 2;
 
 // Runs the full stateless block validation on an in-memory ZEG0 container.
 // `input`/`len` is the container bytes (starting with the ZEG0 magic).
-// On success writes the 32-byte execution block hash to out[32] and returns 0.
-// Returns `kRunNoHashPartialStage` (nonzero, `out` untouched) only when the
-// ZEG_STAGE debug selector requested a partial run. Bad witnesses fatal via
-// zeg::fatal rather than returning.
-int run(const uint8_t* input, size_t len, uint8_t out[32]);
+// On success writes the 32-byte EIP-8025 new_payload_request_root (the SSZ
+// hash_tree_root of the block's Engine API NewPayloadRequest) to out[32]
+// (the execution block hash instead when built with ZEG_PUBLIC_OUTPUT=block_hash),
+// the execution block hash to block_hash_out[32] when non-null, and returns
+// 0. Returns `kRunNoHashPartialStage` (nonzero, outputs untouched) only when
+// the ZEG_STAGE debug selector requested a partial run. Bad witnesses fatal
+// via zeg::fatal rather than returning.
+int run(const uint8_t* input, size_t len, uint8_t out[32],
+        uint8_t block_hash_out[32] = nullptr);
 
 } // namespace zeg

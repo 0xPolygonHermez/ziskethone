@@ -2,10 +2,11 @@
 #
 # Build the patched cross-compiler that gives the guest -mzisk-dma.
 #
-# Run once. It downloads GCC's own sources, applies
-# 0001-riscv-zisk-dma-lowering.patch, builds the compiler and installs it into a
-# fixed prefix. Every later run sees the compiler already there and exits in a
-# second, so it is safe to call from a build script or CI step.
+# Run once per GCC version. It downloads GCC's own sources, applies
+# gcc-<version>/0001-riscv-zisk-dma-lowering.patch, builds the compiler and
+# installs it into a fixed prefix. Every later run sees the compiler already
+# there and exits in a second, so it is safe to call from a build script or CI
+# step.
 #
 # There is no fork of GCC anywhere: the patch in this directory is the whole
 # delta, applied to a pristine upstream tarball.
@@ -18,31 +19,57 @@
 # version has to match exactly.
 #
 # Usage:
-#     cpp-guest/patches/gcc/build-toolchain.sh [--force]
+#     cpp-guest/patches/gcc/build-toolchain.sh [--gcc VERSION] [--force]
+#
+# VERSION selects the GCC release and with it the patch directory,
+# gcc-<VERSION>/, the xPack toolchain borrowed from and the install prefix.
+# It defaults to 14.3.0; 15.2.0 is the other one with a patch. ZISK_GCC_VERSION
+# in the environment does the same thing.
 #
 # Then put the printed directory first on PATH and configure the guest with
 # -DZEG_ZISK_DMA=ON.
 
 set -euo pipefail
 
-GCC_VERSION=14.3.0
+GCC_VERSION="${ZISK_GCC_VERSION:-14.3.0}"
+FORCE=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --gcc) [ $# -ge 2 ] || { echo "error: --gcc needs a version" >&2; exit 1; }
+               GCC_VERSION="$2"; shift 2 ;;
+        --gcc=*) GCC_VERSION="${1#--gcc=}"; shift ;;
+        --force) FORCE=1; shift ;;
+        *) echo "usage: $0 [--gcc VERSION] [--force]" >&2; exit 1 ;;
+    esac
+done
+
 PATCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# One directory per GCC release, because the same lowering lands on different
+# lines of riscv.md / riscv.cc in each (the 15.2.0 port is the 14.3.0 patch
+# rebased over the vector cpymem/setmem/cmpmem expanders that 15 added).
 # Only the DMA lowering is part of the toolchain the guest needs: it is the one
-# thing a build turns on (-DZEG_ZISK_DMA=ON -> -mzisk-dma). 0002 (-mmemory-cost=)
-# and 0003 (-mzisk-memops=) are measurement harnesses for experiments already
-# concluded in docs/perf-notes.md, and both are inert without their own flag, so
-# carrying them in the installed compiler buys nothing. Add one here by hand to
-# re-run its measurements.
-PATCHES=("$PATCH_DIR"/0001-*.patch)   # applied in sorted order
+# thing a build turns on (-DZEG_ZISK_DMA=ON -> -mzisk-dma). The old 0002
+# (-mmemory-cost=) and 0003 (-mzisk-memops=) patches were measurement harnesses
+# for experiments already concluded in docs/perf-notes.md, and both were inert
+# without their own flag, so carrying them in the installed compiler buys
+# nothing. Add one to the version directory by hand to re-run its measurements.
+PATCHES=("$PATCH_DIR/gcc-$GCC_VERSION"/0001-*.patch)   # applied in sorted order
 
 # Installed next to the xPack toolchains, and named for what it is, so that
 # having it on PATH is an explicit choice rather than a surprise.
 PREFIX="${ZISK_DMA_GCC_PREFIX:-$HOME/.local/xPacks/zisk-dma-gcc-$GCC_VERSION}"
 XPACK="${ZISK_XPACK_DIR:-$HOME/.local/xPacks/xpack-riscv-none-elf-gcc-$GCC_VERSION-1}"
-BUILD_DIR="${ZISK_DMA_GCC_BUILD_DIR:-${TMPDIR:-/tmp}/zisk-dma-gcc-build}"
+BUILD_DIR="${ZISK_DMA_GCC_BUILD_DIR:-${TMPDIR:-/tmp}/zisk-dma-gcc-build-$GCC_VERSION}"
 
 say() { printf '==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+# `nproc` is GNU; macOS and the BSDs answer through sysctl instead.
+ncpu() {
+    if command -v nproc >/dev/null 2>&1; then nproc
+    elif command -v sysctl >/dev/null 2>&1; then sysctl -n hw.ncpu
+    else echo 1
+    fi
+}
 
 # ---------------------------------------------------------------- already? ---
 # The flag the patch is there to add, so that a stock compiler sitting in the
@@ -65,7 +92,7 @@ uses_comdat() {
     ! grep -q 'linkonce' <<<"$s" && grep -q '\.section.*,comdat' <<<"$s"
 }
 
-if [ "${1:-}" != "--force" ] && supports_flag "$PREFIX/bin/riscv-none-elf-g++" &&
+if [ -z "$FORCE" ] && supports_flag "$PREFIX/bin/riscv-none-elf-g++" &&
    uses_comdat "$PREFIX/bin/riscv-none-elf-g++"; then
     say "already installed: $PREFIX"
     "$PREFIX/bin/riscv-none-elf-g++" --version | head -1
@@ -75,14 +102,17 @@ if [ "${1:-}" != "--force" ] && supports_flag "$PREFIX/bin/riscv-none-elf-g++" &
 fi
 
 # ------------------------------------------------------------ requirements ---
-[ -f "${PATCHES[0]:-}" ] || die "no patches found in $PATCH_DIR"
+[ -f "${PATCHES[0]:-}" ] || die "no patches found in $PATCH_DIR/gcc-$GCC_VERSION (no port of the lowering to GCC $GCC_VERSION)"
 [ -x "$XPACK/bin/riscv-none-elf-as" ] ||
     die "xPack $GCC_VERSION not found at $XPACK (set ZISK_XPACK_DIR). Its C++ headers and
        binutils are reused, so the version must match GCC $GCC_VERSION exactly."
 
 # GCC 14's bundled libcody does not build with a host compiler newer than ~14
 # (u8"" literals became char8_t), which is a build-time failure with a very
-# unhelpful message. Pick an older host compiler when one is around.
+# unhelpful message. Pick an older host compiler when one is around; GCC 15's
+# sources build with the same one, so one rule serves both versions.
+# On macOS there is no g++-13/12/11 to find, and Apple clang builds libcody
+# fine. By absolute path: a Homebrew LLVM on PATH fails against the macOS SDK.
 HOST_CC=${CC:-}; HOST_CXX=${CXX:-}
 if [ -z "$HOST_CXX" ]; then
     for v in 13 12 11; do
@@ -90,6 +120,9 @@ if [ -z "$HOST_CXX" ]; then
             HOST_CXX="g++-$v"; HOST_CC="gcc-$v"; break
         fi
     done
+fi
+if [ -z "$HOST_CXX" ] && [ "$(uname -s)" = "Darwin" ] && [ -x /usr/bin/clang++ ]; then
+    HOST_CXX=/usr/bin/clang++; HOST_CC=/usr/bin/clang
 fi
 [ -n "$HOST_CXX" ] || die "no g++-13/12/11 found for the host build; install one or set CXX/CC"
 say "host compiler: $HOST_CXX"
@@ -139,6 +172,12 @@ cd "$BUILD_DIR/build"
 # 64 KB exp_bits_buf) became an orphan placed at _heap_bottom, and the first
 # heap allocation overlapped it. The build still worked wherever an assembler
 # happened to be on PATH, which is why it looked fine.
+#
+# GCC's in-tree zlib does not compile against the macOS SDK, and macOS ships a
+# zlib of its own. Darwin-only: on Linux this would add a zlib1g-dev
+# prerequisite that the in-tree copy exists to avoid.
+CONFIGURE_EXTRA=()
+[ "$(uname -s)" = "Darwin" ] && CONFIGURE_EXTRA+=(--with-system-zlib)
 CC="$HOST_CC" CXX="$HOST_CXX" "$SRC/configure" \
     --target=riscv-none-elf \
     --prefix="$PREFIX" \
@@ -147,11 +186,12 @@ CC="$HOST_CC" CXX="$HOST_CXX" "$SRC/configure" \
     --with-arch=rv64ima_zicsr --with-abi=lp64 \
     --disable-multilib --disable-nls --disable-shared --disable-threads \
     --disable-libssp --disable-libquadmath --disable-libgomp --disable-libatomic \
-    --enable-languages=c,c++ --without-headers --with-newlib >configure.log 2>&1 ||
+    --enable-languages=c,c++ --without-headers --with-newlib \
+    ${CONFIGURE_EXTRA[@]+"${CONFIGURE_EXTRA[@]}"} >configure.log 2>&1 ||
     { tail -20 configure.log; die "configure failed (see $BUILD_DIR/build/configure.log)"; }
 
-say "building (~10 min on $(nproc) cores)"
-make all-gcc -j"$(nproc)" >build.log 2>&1 ||
+say "building (~10 min on $(ncpu) cores)"
+make all-gcc -j"$(ncpu)" >build.log 2>&1 ||
     { grep -E "error" build.log | head -10; die "build failed (see $BUILD_DIR/build/build.log)"; }
 make install-gcc >install.log 2>&1 || die "install failed"
 

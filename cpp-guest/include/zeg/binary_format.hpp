@@ -12,6 +12,21 @@ namespace zeg {
 
 constexpr uint32_t kMagic   = 0x3047455Au; // "ZEG0" little-endian
 // Format version, stored in the 4 bytes immediately after the magic.
+// v12: every key the block loads is a StateRoot leaf — one that doesn't
+//      exist is an empty leaf where it would sit (its absence proven by the
+//      parent-root check), so the guest halts on any other load and appends
+//      no rows at run time. Sorted-order links replace the BalHint section:
+//      the header gains first_sorted_account (u64), a state Leaf gains
+//      next_sorted_account + first_sorted_storage (u64 each), a storage Leaf
+//      next_sorted_storage (u64).
+// v11: EIP-7928 — block_access_list_hash leaves ConsensusInfo (prefix
+//      408 → 376 B, slot_number moves to 368; the guest builds the BAL and
+//      computes the hash), and a trailing BalHint section after StateRoot
+//      lists the BAL's addresses and slots in order.
+// v10: Amsterdam header fields — ConsensusInfo prefix 368 → 408 B
+//      (block_access_list_hash at 368, slot_number at 400) and PreviousBlocks
+//      records 728 → 768 B (same two fields at 728 / 760), so the guest can
+//      hash 23-field Amsterdam headers.
 // v9: compact StateRoot — a branch tags its 16 children in one word (a tagged
 //     Empty child costs no bytes, a Hash child 32) and nibbles pack two per
 //     byte. ~22% smaller witness.
@@ -41,7 +56,14 @@ constexpr uint32_t kMagic   = 0x3047455Au; // "ZEG0" little-endian
 //     guest derives read-only-ness dynamically (original == current).
 // v1: StateRoot `Op::Leaf` carries no index; keccak-sorted tables.
 // The guest rejects any version != kVersion.
-constexpr uint32_t kVersion = 9;  // v8: ConsensusInfo prefix +8 B —
+constexpr uint32_t kVersion = 13; // v13: 16-byte hash seed at offset [8,24),
+                                  // right after the magic+version prefix, so the
+                                  // cursor to the first section starts at 24. The
+                                  // guest uses it only to seed its internal
+                                  // hash-map bucket selection (defeats forced
+                                  // O(n^2) account/storage lookups); it never
+                                  // affects the public output.
+                                  // v8: ConsensusInfo prefix +8 B —
                                   // adds target_blob_gas_per_block (u64-le
                                   // at offset 352) so the guest can
                                   // independently re-derive and validate

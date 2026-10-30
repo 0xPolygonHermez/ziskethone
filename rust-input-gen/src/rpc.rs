@@ -366,6 +366,23 @@ impl Client {
         Ok(witness)
     }
 
+    /// `debug_getRawHeader(hash)` — the exact RLP-encoded consensus header,
+    /// byte-for-byte as the node stores it (correct for every fork, unlike
+    /// re-encoding through a possibly-older local header type). Used to backfill
+    /// the CONTIGUOUS ancestor chain the guest's BLOCKHASH verification needs:
+    /// `debug_executionWitness` lists only the ancestors execution referenced,
+    /// so we walk the parent-hash chain and fetch the gaps with this.
+    pub async fn raw_header_by_hash(&self, hash: B256) -> Result<Bytes> {
+        use alloy::providers::Provider;
+        let hash_hex = format!("0x{:x}", hash);
+        let raw: Bytes = self
+            .provider
+            .raw_request("debug_getRawHeader".into(), (hash_hex,))
+            .await
+            .with_context(|| format!("debug_getRawHeader({hash})"))?;
+        Ok(raw)
+    }
+
     /// Fetch the node's chain id (`eth_chainId`).
     pub async fn chain_id(&self) -> anyhow::Result<u64> {
         use alloy::providers::Provider;

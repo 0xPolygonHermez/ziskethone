@@ -1,0 +1,17 @@
+--- a/crates/revm/src/witness.rs
++++ b/crates/revm/src/witness.rs
+@@ -134,9 +134,12 @@
+ 
+             let storage = hashed_state.storages.entry(hashed_address).or_default();
+ 
+-            if let Some(account) = &account.account {
+-                keys.push(address.to_vec().into());
++            // Every loaded address, including one that doesn't exist: its
++            // absence proof is in the witness (it is in `hashed_state` with
++            // `None`), and a stateless client needs the preimage to place it.
++            keys.push(address.to_vec().into());
+ 
++            if let Some(account) = &account.account {
+                 for (slot, value) in &account.storage {
+                     let slot = B256::from(*slot);
+                     let hashed_slot = keccak256(slot);

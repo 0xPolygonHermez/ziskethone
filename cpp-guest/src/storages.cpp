@@ -1,4 +1,5 @@
 #include "zeg/storages.hpp"
+#include "zeg/zisk_dma.hpp"
 
 #include <cstdio>
 
@@ -15,6 +16,7 @@ void Storages::reserve(uint64_t count) {
     mods_.reserve(count);
     leaf_.reserve(count);
     hash_reserve_empty(index_, count);  // not .reserve(): see zeg/hash_reserve.hpp
+    last_valid_ = 0;
 }
 
 size_t Storages::append(const evmc::address& address,
@@ -32,6 +34,7 @@ size_t Storages::append(const evmc::address& address,
     mods_.push_back(Mods{});
     leaf_.push_back(LeafCache{});
     index_.emplace(Key{address, position}, idx);
+    last_valid_ = 0;
     addr_slots_[address].push_back(idx);
     return idx;
 }
@@ -49,6 +52,7 @@ const NodeR* Storages::build_value(size_t idx,
     return &lc.cached;
 }
 
+// Must return cached_at(idx): eval_node relies on it.
 const NodeR* Storages::update_value(size_t idx, const PackedPath& nib) {
     LeafCache& lc = leaf_[idx];
     // Always rebuild at path `nib` (cheap — no keccak), so a leaf moved
@@ -62,10 +66,6 @@ const NodeR* Storages::update_value(size_t idx, const PackedPath& nib) {
     return &lc.cached;
 }
 
-void Storages::set_pos_hash(size_t idx, const evmc::bytes32& pos_hash) {
-    leaf_[idx].pos_hash = pos_hash;
-}
-
 const std::vector<size_t>& Storages::slots_of(
         const evmc::address& addr) const noexcept {
     static const std::vector<size_t> kEmpty;
@@ -75,8 +75,18 @@ const std::vector<size_t>& Storages::slots_of(
 
 size_t Storages::find(const evmc::address& addr,
                       const evmc::bytes32& position) const noexcept {
+    if (last_valid_ &&
+        zeg::zisk::zisk_xmemcmp<sizeof(position.bytes)>(last_pos_.bytes, position.bytes) == 0 &&
+        zeg::zisk::zisk_xmemcmp<sizeof(addr.bytes)>(last_addr_.bytes, addr.bytes) == 0) {
+        return last_idx_;
+    }
     const auto it = index_.find(Key{addr, position});
-    return it == index_.end() ? npos : it->second;
+    const size_t idx = it == index_.end() ? npos : it->second;
+    zeg::zisk::zisk_xmemcpy<sizeof(position.bytes)>(last_pos_.bytes, position.bytes);
+    zeg::zisk::zisk_xmemcpy<sizeof(addr.bytes)>(last_addr_.bytes, addr.bytes);
+    last_idx_ = idx;
+    last_valid_ = 1;
+    return idx;
 }
 
 size_t Storages::index_of(const evmc::address& addr,

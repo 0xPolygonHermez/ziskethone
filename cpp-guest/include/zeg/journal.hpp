@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <unordered_set>
 #include <utility>
@@ -25,7 +26,8 @@
 
 #include <evmc/evmc.hpp>
 
-#include "zeg/dynamic_storage.hpp"
+#include "zeg/tx_arena.hpp"
+#include "zeg/warm_keys.hpp"
 
 namespace zeg {
 
@@ -80,24 +82,11 @@ public:
                        bool                  was_present,
                        const evmc::bytes32&  old_value);
 
-    // Dynamic-storage analogues of `log_storage` / `log_storage_warm`.
-    // Used for freshly-created accounts whose slots aren't in the
-    // static `Storages` table (see `DynamicStorage` for rationale).
-    // `was_present == false` tells rollback to REMOVE the slot rather
-    // than restore a value, since the write created the entry.
-    void log_dyn_storage(const evmc::address&  address,
-                         const evmc::bytes32&  position,
-                         bool                  was_present,
-                         const evmc::bytes32&  old_value,
-                         uint64_t              old_last_tx_idx);
-    void log_dyn_storage_warm(const evmc::address&  address,
-                              const evmc::bytes32&  position,
-                              uint64_t              old_last_tx_idx);
-    // Whole-account erase used by SELFDESTRUCT (EIP-6780 same-tx
-    // destroy). The snapshot owns the dropped (pos, Slot) entries so
-    // rollback can put them back atomically.
-    void log_dyn_account_erase(const evmc::address&        address,
-                               DynamicStorage::Snapshot&&  snapshot);
+    // Warmth of a key with no table row (see `WarmKeys`): the pre-access
+    // `last_tx_idx` (0 = the key wasn't there, so rollback removes it).
+    void log_warm_key_account(const evmc::address& address, uint64_t old_last_tx_idx);
+    void log_warm_key_slot(const evmc::address& address, const evmc::bytes32& position,
+                           uint64_t old_last_tx_idx);
 
     // Per Yellow Paper, SELFDESTRUCT registers the account for
     // deletion-at-end-of-tx rather than wiping it immediately. cpp-
@@ -111,7 +100,7 @@ public:
 
     // Pop every entry above `cp` (and the checkpoint marker itself),
     // applying each write record's old_value to `accounts` /
-    // `storages` / `dynamic_storage` / `transient` in reverse order.
+    // `storages` / `warm_keys` / `transient` in reverse order.
     // `pending_destruct` is the SELFDESTRUCT-pending-at-end-of-tx set
     // owned by ZiskStateDB; PendingDestructEntry rollback removes
     // entries from it. Aborts via zeg::fatal if `cp` does not refer
@@ -119,12 +108,23 @@ public:
     void rollback(Checkpoint                  cp,
                   Accounts&                   accounts,
                   Storages&                   storages,
-                  DynamicStorage&             dynamic_storage,
+                  WarmKeys&                   warm_keys,
                   TransientStorage&           transient,
                   std::unordered_set<size_t>& pending_destruct);
 
     // Stack depth (checkpoints + write records).
     size_t size() const noexcept { return entries_.size(); }
+
+    // Drop every entry AND the storage (in the tx arena, see
+    // zeg/tx_arena.hpp). Called at each transaction start, when no
+    // checkpoint is outstanding: rollbacks never reach a previous tx.
+    // init() then reserves the previous tx's capacity (capped) once the
+    // arena is reset, so a run of similar txs doesn't regrow it each time.
+    void release() noexcept {
+        cap_hint_ = std::min(entries_.capacity(), kMaxCapHint);
+        decltype(entries_){}.swap(entries_);
+    }
+    void init() { entries_.reserve(cap_hint_); }
 
 private:
     struct CheckpointMarker {};
@@ -144,21 +144,14 @@ private:
         bool           was_present;
         evmc::bytes32  old_value;   // valid iff was_present
     };
-    struct DynStorageEntry {
-        evmc::address  address;
-        evmc::bytes32  position;
-        bool           was_present;
-        evmc::bytes32  old_value;       // valid iff was_present
-        uint64_t       old_last_tx_idx; // valid iff was_present
+    struct WarmKeyAccountEntry {
+        evmc::address address;
+        uint64_t      old_last_tx_idx;
     };
-    struct DynStorageWarmEntry {
+    struct WarmKeySlotEntry {
         evmc::address address;
         evmc::bytes32 position;
         uint64_t      old_last_tx_idx;
-    };
-    struct DynAccountEraseEntry {
-        evmc::address              address;
-        DynamicStorage::Snapshot   snapshot;
     };
     struct PendingDestructEntry {
         size_t idx;
@@ -174,12 +167,13 @@ private:
         AccountWarmEntry,
         StorageWarmEntry,
         TransientEntry,
-        DynStorageEntry,
-        DynStorageWarmEntry,
-        DynAccountEraseEntry,
+        WarmKeyAccountEntry,
+        WarmKeySlotEntry,
         PendingDestructEntry>;
 
-    std::vector<Entry> entries_;
+    std::vector<Entry, TxArenaAllocator<Entry>> entries_;
+    static constexpr size_t kMaxCapHint = size_t{1} << 15;
+    size_t cap_hint_ = 0;
 };
 
 } // namespace zeg

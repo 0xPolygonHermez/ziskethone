@@ -1,388 +1,432 @@
 # zisk_eth_guest
 
-A stateless Ethereum block verifier targeting the [ZisK](https://github.com/0xPolygonHermez/zisk) RISC-V zkVM.
+A stateless Ethereum block verifier for the [ZisK](https://github.com/0xPolygonHermez/zisk)
+RISC-V zkVM, and the stack that proves live blocks with it (EIP-8025 execution proofs).
 
-**Fork target:** the guest is built to verify blocks of the current mainnet
-forks (Prague, and Osaka in progress). Older forks are supported well enough to
-run the EEST corpus, but pre-Cancun edge cases that cannot occur on recent forks
-are not fixed when the fix would complicate the code. See
-[Current results](#current-results-full-corpus-all-forks-53k-blocks) for the
-known cases.
+**Fork targets:**
+- **Osaka** (Fusaka, with its BPO blob-parameter forks) is what mainnet runs today.
+- **Amsterdam**, the execution half of **Glamsterdam**, has been live on Sepolia since
+  2026-10-06. It brings block-level access lists (EIP-7928), the gas repricings, SLOTNUM,
+  DUPN / SWAPN / EXCHANGE and more. The guest implements every Amsterdam EIP; see
+  [GLAMSTERDAM.md](GLAMSTERDAM.md) for the per-EIP tracker.
 
-The repository is split into three components that communicate through a binary
-file on disk:
+Both have zero EEST failures, and so do Cancun and Prague. Older forks are supported well
+enough to run the whole EEST corpus. A pre-Cancun edge case that cannot happen on current forks is not fixed when the fix
+would complicate the code (see [Current results](#current-results)).
 
 ```
-┌──────────────────────┐    block_input.bin    ┌────────────────────────┐
-│  rust-input-gen      │ ────────────────────▶ │  cpp-guest (ZisK)      │
-│  (host, Rust)        │                       │  (zkVM, C++)           │
-│                      │                       │                        │
-│  • talks to an ETH   │                       │  • reads private input │
-│    JSON-RPC node     │                       │  • re-executes block   │
-│  • fetches header,   │                       │  • commits 2 public    │
-│    txs, witness…     │                       │    outputs:            │
-│  • writes binary     │                       │    – previousBlockHash │
-│    container         │                       │    – nextBlockHash     │
-└──────────────────────┘                       └────────────────────────┘
-
-┌──────────────────────┐
-│  eest-witness-gen    │  Bridges EEST (Ethereum Execution Spec Tests)
-│  (host, Rust)        │  fixtures into the same binary format via
-│                      │  reth's executor + ExecutionWitnessRecord.
-└──────────────────────┘  Used for the conformance sweeps.
+┌──────────────────────┐   ZEG0 input   ┌────────────────────────┐
+│  rust-input-gen      │ ─────────────▶ │  cpp-guest             │
+│  RPC → binary input  │                │  (host binary, or the  │
+└──────────────────────┘                │   ZisK ELF)            │
+┌──────────────────────┐                │  • re-executes block   │
+│  eest-witness-gen    │ ─────────────▶ │  • checks the state    │
+│  EEST fixtures →     │                │  • commits 1 public    │
+│  inputs (tests)      │                │    output: EIP-8025    │
+└──────────────────────┘                │    new_payload_        │
+┌──────────────────────┐                │    request_root        │
+│  reth-zisk-exex      │ ─────────────▶ └────────────────────────┘
+│  live node: input    │      proof (ZisK coordinator)
+│  from the BAL, proves├──────────────▶ Lighthouse ──▶ zisk-proof-engine
+│  signs, submits      │                (EIP-8025)      (verifies)
+└──────────────────────┘
 ```
 
-The wire format between halves is documented in
-[BINARY_FORMAT.md](BINARY_FORMAT.md). It is designed to be **zero-parse on the
-guest side**: the C++ program can `mmap` the file and access fields via direct
-pointer casts to packed structs.
+The binary input format is in [BINARY_FORMAT.md](BINARY_FORMAT.md). It is designed to be
+zero-parse on the guest side: the guest accesses fields through pointer casts to packed
+structs.
 
 ## Repository layout
 
-| Path                  | Purpose                                                                    |
-|-----------------------|----------------------------------------------------------------------------|
-| `rust-input-gen/`     | Two binaries: `input-gen` (RPC → binary) and `input-gen-from-manifest`.    |
-| `eest-witness-gen/`   | Bridges EEST blockchain-test fixtures to an `OfflineSources` JSON manifest.|
-| `cpp-guest/`          | C++ stateless verifier (evmone + custom state DB).                         |
-| `scripts/`            | `verify_blocks.py` — continuous mainnet verifier.                          |
-| `BINARY_FORMAT.md`    | On-disk format specification.                                              |
-| `Makefile`            | Convenience targets to build / run.                                        |
+| Path | Purpose |
+|---|---|
+| `cpp-guest/` | The C++ stateless verifier: state DB, MPT, evmone or zevm. `zisk/` builds the ZisK ELF. |
+| `rust-input-gen/` | `input-gen` (RPC → input) and `input-gen-from-manifest` (bridge manifest → input). |
+| `eest-witness-gen/` | Runs EEST fixtures through reth v2.7.0 and records each block's witness as a manifest. |
+| `reth-zisk-exex/` | `reth-zisk`: reth plus an ExEx that proves every new payload and submits the proof. Also `kprove`, a batch prover. |
+| `proof-engine/` | `zisk-proof-engine`: the EIP-8025 proof engine Lighthouse calls to verify ZisK proofs. |
+| `proof-stats/` | Optional: per-block proof timing, scraped from journald into SQLite. |
+| `scripts/` | `eest_sweep.sh`, `killer_sweep.sh` (the test suites), `verify_blocks.py` (follow mainnet), `npr_root_ref.py`. |
+| `eest-tests/` | Extra EEST benchmark scenarios written for this guest. |
+| `docs/` | Tutorials (live proving on Sepolia) and performance notes. |
+| `GLAMSTERDAM.md` | Amsterdam implementation tracker and per-EIP results. |
 
 ## Requirements
 
-- Rust 1.75+ with `cargo`
-- CMake 3.20+ and a C++20 compiler (clang or gcc)
-- An Ethereum JSON-RPC endpoint that exposes the `debug` namespace
-  (`debug_executionWitness`, `debug_traceBlockByHash` with `prestateTracer`,
-  …) for full stateless input. On macOS, the `eest-witness-gen` libmdbx build
-  needs `SDKROOT=$(xcrun --show-sdk-path)` exported so bindgen finds `assert.h`.
+- Linux x86-64 (the reference host is Ubuntu). macOS works for the host builds; the bridge
+  then needs `SDKROOT=$(xcrun --show-sdk-path)` so bindgen finds the system headers.
+- Rust (stable) and CMake 3.25+ with a C++20 compiler.
+- For the ZisK ELF: xpack `riscv-none-elf-gcc` **14 or 16** on `PATH`, or passed with
+  `RISCV_GCC_BIN=<dir>` (see [AGENTS.md](AGENTS.md) for why not 15).
+- For `make killer`: `ziskemu` from ZisK 1.4.0 (`ziskup`, or set `ZISKEMU=`).
+- For the test suites: `curl`, `jq`, `bc`, `python3`.
+- For live blocks: an Ethereum node with the `debug` namespace (`debug_executionWitness`,
+  `debug_traceBlockByHash` with `prestateTracer`). A full node keeps state only for recent
+  blocks (about the last 32), so verify blocks near the head.
 
 ## Building
 
 ```bash
-# Rust hosts (input-gen, input-gen-from-manifest)
-make rust
-
-# C++ guest binary
-make cpp
-
-# EEST bridge (only needed for conformance sweeps)
-SDKROOT=$(xcrun --show-sdk-path) \
-BINDGEN_EXTRA_CLANG_ARGS="-isysroot $(xcrun --show-sdk-path)" \
-cargo build --release --manifest-path eest-witness-gen/Cargo.toml
+make rust            # target/release/input-gen, input-gen-from-manifest
+make cpp             # cpp-guest/build/zisk_eth_guest  (host guest, mainnet, evmone)
+make elf CHAIN=sepolia EVM_BACKEND=evmone   # the ZisK ELF a prover runs
+make exex            # reth-zisk-exex/target/release/reth-zisk (and kprove)
+make proof-engine    # proof-engine/target/release/zisk-proof-engine
+make help            # every target and variable
 ```
 
-Outputs:
-- `target/release/input-gen`, `target/release/input-gen-from-manifest`
-- `cpp-guest/build/zisk_eth_guest`
-- `eest-witness-gen/target/release/eest-witness-gen`
+Build options, all CMake cache variables, one build directory per combination:
 
-### EVM backend — `evmone` (default) or `zevm`
-
-The guest drives the EVM through the swappable evmc2 interface, so the
-interpreter is a build-time choice via the `EVM_BACKEND` CMake option:
-
-- **`evmone`** — the upstream evmone baseline interpreter. **This is the current
-  standard: it is the default everywhere and the backend used by all the
-  verification and conformance flows below.**
-- **`zevm`** — the in-tree hand-written interpreter (`cpp-guest/src/zevm/`),
-  selected only when explicitly requested with `-DEVM_BACKEND=zevm`.
-
-`make cpp` builds the host guest with the default (`evmone`) into
-`cpp-guest/build`. To choose a backend explicitly, configure with
-`-DEVM_BACKEND=…`; use a separate build directory per backend so both stay
-configured (the option is cached — switching it in an existing directory
-requires reconfiguring that directory):
-
-```bash
-# Host guest (native)
-cmake -S cpp-guest -B cpp-guest/build      -DEVM_BACKEND=evmone   # == make cpp
-cmake --build cpp-guest/build
-cmake -S cpp-guest -B cpp-guest/build-zevm -DEVM_BACKEND=zevm
-cmake --build cpp-guest/build-zevm
-```
-
-For the ZisK zkVM ELF (RISC-V cross-build) pass the toolchain file and the same
-option, one build directory per backend:
-
-```bash
-cmake -S cpp-guest/zisk -B cpp-guest/zisk/build-evmone \
-  -DCMAKE_TOOLCHAIN_FILE=$(pwd)/cpp-guest/zisk/toolchain.cmake \
-  -DCMAKE_BUILD_TYPE=Release -DEVM_BACKEND=evmone        # or -DEVM_BACKEND=zevm
-cmake --build cpp-guest/zisk/build-evmone --target zisk_eth_guest.elf
-```
-
-## Verifying a single mainnet block
-
-End-to-end, fetch a block and reproduce its hash inside cpp-guest:
-
-```bash
-export ETH_RPC_URL="https://your-debug-enabled-eth-rpc"
-
-# Latest Pectra-era block
-LATEST=$(cast block-number --rpc-url "$ETH_RPC_URL")
-
-# 1. Fetch the witness + write the binary input
-./target/release/input-gen \
-    --rpc-url "$ETH_RPC_URL" \
-    --block "$LATEST" \
-    --output build/block_input.bin
-
-# 2. Re-execute the block inside the guest
-./cpp-guest/build/zisk_eth_guest build/block_input.bin
-```
-
-The guest prints `0x<block_hash>` on its last stdout line. Compare against the
-canonical hash:
-
-```bash
-cast block "$LATEST" --rpc-url "$ETH_RPC_URL" --json | jq -r .hash
-```
-
-For a fixed reference, any Pectra mainnet block works (Pectra activated on
-2025-05-07, block 22,431,084). Example using block `25000000`:
-
-```bash
-./target/release/input-gen --rpc-url "$ETH_RPC_URL" --block 25000000 \
-    --output build/block_input.bin
-./cpp-guest/build/zisk_eth_guest build/block_input.bin
-# → expect the same hash that `cast block 25000000` reports
-```
-
-## Continuous mainnet verification — `scripts/verify_blocks.py`
-
-For long-running validation, [`scripts/verify_blocks.py`](scripts/verify_blocks.py)
-polls a node for new heads and verifies each one as it arrives. On any failure
-(input-gen error, guest crash, hash mismatch) it dumps per-block artifacts
-under `build/verify/<N>/` and (optionally) spawns an interactive `claude`
-session at the repo root with a ready-to-paste debug prompt.
-
-```bash
-# Tail the chain head — verify every new block
-python3 scripts/verify_blocks.py \
-    --rpc-url "$ETH_RPC_URL" \
-    --poll-sec 5
-
-# Replay historical blocks from a specific number
-python3 scripts/verify_blocks.py \
-    --rpc-url "$ETH_RPC_URL" \
-    --start-from 25000000
-
-# CI mode — never spawn claude on failure (just record artifacts)
-python3 scripts/verify_blocks.py \
-    --rpc-url "$ETH_RPC_URL" \
-    --start-from 25000000 \
-    --no-claude
-```
-
-Key behaviour:
-- **Reorg-aware**: re-queues a block up to 5 times if input-gen reports a
-  mid-run reorg, and refreshes the cached chain hash before declaring a
-  HASH-MISMATCH.
-- **Failure artifacts** (`build/verify/<block>/`):
-  - `input.bin` — the binary witness fed to the guest
-  - `input-gen.log` — input-gen's combined stdout/stderr
-  - `cpp-stdout.txt`, `cpp-stderr.txt` — guest output
-  - `chain.json` — the canonical block as the RPC reported it
-  - `failure.md` — human-readable summary + suggested first-prompt for a
-    debug session
-- **Exit codes**: 75 from input-gen means "chain reorged mid-fetch" and is
-  retried automatically. Any other non-zero is recorded as a failure.
-
-## EEST conformance sweeps
-
-The `eest-witness-gen` bridge replays
-[Ethereum Execution Spec Tests](https://github.com/ethereum/execution-spec-tests)
-fixtures through reth's executor, captures the resulting witness, and writes an
-`OfflineSources` JSON manifest that `input-gen-from-manifest` turns into the
-same binary format as the live RPC path.
-
-The currently-supported forks (per
-[`eest-witness-gen/src/chain_spec.rs`](eest-witness-gen/src/chain_spec.rs)) are
-Berlin / London / Paris / Shanghai / Cancun / Prague / Osaka, plus the
-`CancunToPragueAtTime…` and `PragueToOsakaAtTime…` transition specs.
-
-### Running one fixture
-
-```bash
-# Extract / download EEST fixtures to /tmp/eest/fixtures/blockchain_tests/...
-FIXTURE=/tmp/eest/fixtures/blockchain_tests/prague/eip7702_set_code_tx/test_account_warming.json
-OUT=$(mktemp -d)
-eest-witness-gen/target/release/eest-witness-gen --fixture "$FIXTURE" --output-dir "$OUT"
-
-# Run every per-block manifest the fixture produced
-for m in $(find "$OUT" -name "block-*.json" | sort); do
-    ./target/release/input-gen-from-manifest --manifest "$m" --output /tmp/x.bin
-    actual=$(./cpp-guest/build/zisk_eth_guest /tmp/x.bin | tail -1)
-    expected=$(python3 -c "import json; print(json.load(open('$m'))['current']['hash'])")
-    [ "$actual" = "$expected" ] && echo "OK   $(basename "$m")" \
-                               || echo "FAIL $(basename "$m") $actual vs $expected"
-done
-```
-
-### Sweeping a full corpus
-
-The whole `blockchain_tests` corpus (all forks, ~2790 fixture files) is
-validated by a small shell harness that runs the bridge per fixture, feeds
-every resulting block manifest through the guest, and categorizes each block:
-
-```bash
-mkdir -p /tmp/sweep/{work,results}
-cat > /tmp/sweep/run.sh <<'SCRIPT'
-#!/bin/bash
-# Args: fixture_path
-set -uo pipefail
-REPO=/home/jbaylina/git/ziskethone   # adjust to your checkout
-FIX="$1"
-ID=$(echo "$FIX" | md5sum | cut -d' ' -f1)
-OUT="/tmp/sweep/work/fix.$ID"
-LOG="/tmp/sweep/results/$ID.log"
-rm -rf "$OUT"; mkdir -p "$OUT"
-
-"$REPO/eest-witness-gen/target/release/eest-witness-gen" \
-    --fixture "$FIX" --output-dir "$OUT" >/dev/null 2>&1
-[ $? -ne 0 ] && echo "BRIDGE_FAIL $FIX" >> "$LOG"   # other tests' manifests still run
-
-for m in $(find "$OUT" -name "block-*.json" | sort); do
-    base="${m%.json}"
-    bin="/tmp/sweep/work/bin.$ID.bin"
-    "$REPO/target/release/input-gen-from-manifest" --manifest "$m" --output "$bin" \
-        >/dev/null 2>&1
-    ig_rc=$?
-    expected=$(jq -r '.current.hash // empty' "$m" 2>/dev/null)
-    is_neg=0; [ -s "${base}.expect" ] && is_neg=1   # EEST negative test (expect_exception)
-
-    if [ $ig_rc -ne 0 ]; then   # the guest never ran: not a rejection either
-        echo "FAIL(inputgen) $FIX $m" >> "$LOG"
-        rm -f "$bin"; continue
-    fi
-
-    actual=$(timeout 60 "$REPO/cpp-guest/build/zisk_eth_guest" "$bin" 2>"$bin.err" | tail -1)
-    guest_rc=${PIPESTATUS[0]}
-    fatal=$(grep -m1 '^guest: ' "$bin.err")   # the guest's own rejection
-    rm -f "$bin" "$bin.err"
-
-    if [ $is_neg -eq 1 ]; then
-        # a fatal rejects it; a wrong hash only counts for block-level exceptions
-        # (on a tx-level one the hash commits to the bad tx, the prover picks the header)
-        tx_level=0
-        tr '|' '\n' < "${base}.expect" | grep -qv '^TransactionException\.' || tx_level=1
-        if [ -n "$fatal" ] || { [ $guest_rc -eq 0 ] && [ $tx_level -eq 0 ] && [ "$actual" != "$expected" ]; }; then
-            echo "PASS_NEG(guest) $FIX $m" >> "$LOG"
-        elif [ $guest_rc -ne 0 ]; then   # crash / timeout, not a fatal
-            echo "FAIL(guest_crash) $FIX $m" >> "$LOG"
-        elif ! tr '|' '\n' < "${base}.expect" \
-                | grep -qvxE 'BlockException\.RLP_(STRUCTURES_ENCODING|WITHDRAWALS_NOT_READ)'; then
-            # invalid only in the block's RLP envelope, which the guest input doesn't have
-            echo "NA_NEG(rlp_envelope) $FIX $m" >> "$LOG"
-        else
-            echo "FAIL_NEG(guest_accepted_bad_block) $FIX $m" >> "$LOG"
-        fi
-        continue
-    fi
-
-    if [ "$actual" = "$expected" ] && [ -n "$expected" ]; then
-        echo "PASS $FIX $m" >> "$LOG"
-    else
-        echo "FAIL $FIX $m actual=$actual expected=$expected" >> "$LOG"
-    fi
-done
-rm -rf "$OUT"
-
-# Blocks that got no result (unsupported network, invalid block reth can't
-# decode, bridge failure) — counted, so nothing is dropped silently.
-touch "$LOG"
-want=$(jq '[.[].blocks | length] | add // 0' "$FIX")
-got=$(grep -vc '^BRIDGE_FAIL' "$LOG")
-if [ "$got" -lt "$want" ]; then
-    echo "MISSING $((want - got)) $FIX" >> "$LOG"
-fi
-SCRIPT
-chmod +x /tmp/sweep/run.sh
-
-# EEST blockchain_tests, plus the legacy ethereum/tests invalid-block suites
-# (header rules EEST doesn't cover: gas-limit bounds, block number, uncles, ...):
-# BlockchainTests/InvalidBlocks of https://github.com/ethereum/tests (v17.2+).
-find /tmp/eest/fixtures/blockchain_tests /tmp/ethereum-tests/BlockchainTests/InvalidBlocks \
-    -name "*.json" | xargs -P "$(nproc)" -I {} /tmp/sweep/run.sh {}
-
-# Tally (MISSING: number of fixtures; the second line sums their blocks)
-cat /tmp/sweep/results/*.log | awk '{print $1}' | sort | uniq -c
-cat /tmp/sweep/results/*.log | awk '$1=="MISSING"{s+=$2} END{print s+0, "blocks MISSING"}'
-```
-
-`PASS_NEG(...)` = an EEST negative test (`expect_exception`) that we correctly
-rejected (a guest `fatal`, or — for block-level exceptions only — a wrong
-hash; a crash or timeout is `FAIL(guest_crash)`, not a rejection). reth
-refuses to execute such a block, so the bridge doesn't: it gives the guest the
-block with a witness of the whole parent state.
-`FAIL_NEG` would mean the guest wrongly *accepted* an invalid block — a
-soundness bug, more serious than a plain `FAIL` (a completeness gap: a valid
-block computed with the wrong hash).
-`NA_NEG(rlp_envelope)` = a block that is invalid only in its RLP envelope
-(e.g. a body that omits the withdrawals list), with a valid header. The guest
-input is structured (header fields, tx list, withdrawals list), not block RLP,
-so there is nothing to reject: the same header with a correctly encoded body
-is a valid block with the same hash.
-
-Blocks that get no result are counted as `MISSING`: tests on networks
-`eest-witness-gen` doesn't support (pre-Berlin forks — see
-[`eest-witness-gen/src/chain_spec.rs`](eest-witness-gen/src/chain_spec.rs)),
-invalid blocks reth can't decode (so there is no guest input to build), and
-fixtures whose bridge run failed (`BRIDGE_FAIL`).
-
-#### Current results (full corpus, all forks, ~53k blocks)
-
-EEST `blockchain_tests` plus the legacy `InvalidBlocks` suites (2,920 fixtures):
-
-| | |
-|---|---|
-| PASS | 53,382 |
-| PASS_NEG (correctly-rejected invalid blocks) | 3,748 |
-| **FAIL** (completeness gap — wrong hash on a valid block) | **8** |
-| **FAIL_NEG** (soundness — guest accepts an invalid block) | **0** |
-| NA_NEG (invalid only in the RLP envelope, which the guest input doesn't have) | 2 |
-| MISSING (fixtures with unsupported networks / undecodable blocks) | 57 |
-
-**Zero failures on Prague or Osaka** — the current target forks. All 8
-remaining failures are on older forks (Berlin 2, London 2, Paris 2,
-Shanghai 2), and all are one known pre-Cancun limitation:
-
-| Test file | Blocks | Cause |
+| Option | Values | Meaning |
 |---|---|---|
-| `constantinople/eip1014_create2/test_recreate.json` | 8 | Pre-Cancun only — won't fix (see below) |
+| `EVM_BACKEND` | **`evmone`** (default), `zevm` | evmone's baseline interpreter, or the in-tree zevm (`cpp-guest/src/zevm/`), both behind the evmc2 interface. evmone is the deployed backend. |
+| `ZEG_CHAIN` | **`mainnet`**, `sepolia` | Chain id, deposit contract and fork schedule compiled into the guest. |
+| `ZEG_FORK_FROM_INPUT` | **`OFF`**, `ON` | `ON` takes the fork and blob parameters from the input instead of the chain's schedule. **Tests only**: EEST replays every fork at synthetic times. A deployed ELF must keep it `OFF`. |
+| `ZEG_PUBLIC_OUTPUT` | **`npr`**, `block_hash` | The committed output: the EIP-8025 `new_payload_request_root`, or the block hash for consumers outside EIP-8025. |
 
-`test_recreate`: a contract that existed before the block SELFDESTRUCTs, and
-then the same address comes back in the same block (it receives value, or is
-re-created with CREATE2). The destruction wipes its storage, but the guest only
-zeroes the slots the witness names. The new-root pass still hashes the account's
-block-start storage subtree, including the slots the block never read. So the
-revived account gets a stale storage root. Since Cancun (EIP-6780),
-SELFDESTRUCT only destroys an account created in the same transaction, and
-EIP-7610 forbids creating at an address that has storage. A pre-existing
-account's storage can therefore never be wiped on the target forks. Fixing this
-would mean resetting and rebuilding storage subtrees in the state-root pass.
-That complexity isn't worth it for a case that can't happen on the forks this
-client targets.
+`make elf` writes `cpp-guest/zisk/build-$(CHAIN)-$(EVM_BACKEND)/zisk_eth_guest.elf`. By hand,
+the ELF needs a configured host build for evmone's patched source:
 
-The 2 NA_NEG are both `InvalidBlocks/bc4895-withdrawals/shanghaiWithoutWithdrawalsRLP.json`
-(Cancun, Prague): a block whose body RLP omits the withdrawals list
-(`RLP_WITHDRAWALS_NOT_READ`). Its header is valid: `withdrawalsRoot` is the
-empty-trie root. The guest outputs exactly that header hash, which is correct:
-what it proves is that the header is a valid successor, and the same header
-with an empty withdrawals list is a valid block. A prover gains nothing from
-the bad encoding.
+```bash
+cmake -S cpp-guest -B cpp-guest/build-sepolia -DZEG_CHAIN=sepolia
+cmake -S cpp-guest/zisk -B cpp-guest/zisk/build-sepolia-evmone \
+  -DCMAKE_TOOLCHAIN_FILE=$PWD/cpp-guest/zisk/toolchain.cmake -DCMAKE_BUILD_TYPE=Release \
+  -DEVM_BACKEND=evmone -DZEG_CHAIN=sepolia \
+  -DEVMONE_SRC=$PWD/cpp-guest/build-sepolia/_deps/evmone-src
+cmake --build cpp-guest/zisk/build-sepolia-evmone --target zisk_eth_guest.elf -j
+```
 
-Re-run the sweep above before any release to confirm this list hasn't grown
-and that Prague/Osaka remain at zero failures.
+## Verifying a single block
+
+```bash
+RPC=http://localhost:8545
+HEAD=$(cast block-number --rpc-url $RPC)
+./target/release/input-gen --rpc-url $RPC --block $((HEAD - 3)) --output build/block_input.bin
+./cpp-guest/build/zisk_eth_guest build/block_input.bin
+```
+
+The host guest prints two lines:
+1. The recomputed block hash. It must equal the chain's (`cast block <N> --json | jq -r .hash`).
+2. The public output, the EIP-8025 `new_payload_request_root`. This is the SSZ
+   `hash_tree_root` of the block's Engine API `NewPayloadRequest`: the payload, blob versioned
+   hashes, parent beacon block root and execution requests. It uses the Amsterdam schema for
+   every fork, with empty or zero values for the fields a fork lacks.
+
+The ZisK ELF commits only the root. `scripts/npr_root_ref.py` recomputes it with
+execution-specs for an independent check.
+
+For a Sepolia block, use a `-DZEG_CHAIN=sepolia` build and the Sepolia node. `input-gen`
+picks the fork schedule from the node's chain id.
+
+### Following the chain: `scripts/verify_blocks.py`
+
+It polls a node for new heads and verifies each block as it arrives.
+
+```bash
+python3 scripts/verify_blocks.py --rpc-url $RPC --poll-sec 5          # follow the head
+python3 scripts/verify_blocks.py --rpc-url $RPC --start-from 25000000 --no-claude
+```
+
+- Mid-fetch reorgs: `input-gen` exits with 75 and the block is retried, up to 5 times.
+- Any other failure leaves `build/verify/<block>/`, containing `input.bin`, the logs, the
+  chain's block and `failure.md`.
+- Without `--no-claude`, a failure also opens a `claude` debug session.
+
+## Conformance: `make eest`
+
+```bash
+make eest                                   # every EEST blockchain test, evmone backend
+make eest EVM_BACKEND=zevm                  # the same with zevm
+make eest EEST_PATHS=build/fixtures/eest/fixtures/blockchain_tests/for_amsterdam
+make eest EEST_PATHS=build/fixtures/eest/fixtures/blockchain_tests/for_amsterdam/amsterdam/eip7928_block_level_access_lists
+```
+
+`make eest` does the following:
+1. Downloads the fixtures of the execution-specs release `EEST_RELEASE` (default
+   [`tests@v21.0.1`](https://github.com/ethereum/execution-specs/releases/tag/tests%40v21.0.1),
+   all forks Frontier to Amsterdam) into `build/fixtures/eest`, once.
+2. Builds the bridge and a test guest (`ZEG_FORK_FROM_INPUT=ON`) in
+   `cpp-guest/build-test-$(EVM_BACKEND)`.
+3. Runs [`scripts/eest_sweep.sh`](scripts/eest_sweep.sh).
+
+For each fixture, the sweep runs `eest-witness-gen`, which executes it on reth and records the
+witness. It then runs `input-gen-from-manifest` and the guest on every block, compares the
+guest's block hash with the fixture's, and classifies the block. Fixtures are grouped by the
+fork they are filled for, `for_<fork>/`. The `for_amsterdam/` tree also re-runs older forks'
+tests under Amsterdam rules.
+
+The script prints a tally, overall and per directory, and writes one line per block to
+`build/eest-$(EVM_BACKEND)/results.log`. It also runs on its own:
+`scripts/eest_sweep.sh [-g GUEST] [-o OUT] [-j JOBS] PATH...`.
+
+The legacy `ethereum/tests` invalid-block suites (`BlockchainTests/InvalidBlocks`, v17.2+) cover
+header rules that EEST doesn't: gas-limit bounds, block number, uncles. To run them, pass their
+directory in `EEST_PATHS`.
+
+| Category | Meaning |
+|---|---|
+| `PASS` | A valid block, with the correct hash. |
+| `PASS_NEG` | An invalid block (`expect_exception`) the guest rejected: a guest `fatal`, or, for block-level exceptions only, a wrong hash. A crash or timeout is not a rejection. reth refuses such a block, so the bridge gives the guest the block plus a witness of the whole parent state. |
+| `FAIL` | **Completeness gap**: a valid block with the wrong hash. |
+| `FAIL_NEG` | **Soundness bug**: the guest accepted an invalid block. |
+| `FAIL(unsupported_fork)` | A fork the guest doesn't implement. |
+| `NA_NEG(rlp_envelope)` | Invalid only in the block's RLP envelope, for example a body without the withdrawals list. The guest input is structured, not block RLP, so there is nothing to reject. The same header with a correctly encoded body is valid. |
+| `NA_POS(npr_partial_requests)` | A valid EL block whose modified request predeploy returned a partial request record. No typed EIP-8025 `ExecutionRequests` can hold it, so the block has no `new_payload_request_root`, and the CL could not have built it either. |
+| `MISSING` | No result: a network the bridge doesn't support (pre-Berlin), a block reth can't decode, or a bridge failure (`BRIDGE_FAIL`). |
+
+### Current results
+
+`make eest` on [`tests@v21.0.1`](https://github.com/ethereum/execution-specs/releases/tag/tests%40v21.0.1),
+the evmone backend, 2026-10-29: 12,272 fixture files and about 134,000 blocks, across all forks and
+transitions.
+
+| | Blocks |
+|---|---:|
+| PASS | 102,663 |
+| PASS_NEG (correctly rejected invalid blocks) | 10,819 |
+| NA_POS (partial request records, no EIP-8025 root) | 12 |
+| **FAIL** (completeness gap: wrong hash on a valid block) | **12** |
+| **FAIL_NEG** (soundness: guest accepts an invalid block) | **0** |
+| MISSING | 20,657 |
+
+Of the MISSING blocks:
+- 20,482 are pre-Berlin forks (Frontier to Istanbul), which the bridge doesn't support.
+- The other 175 are invalid blocks reth can't decode, so no guest input exists: bad or
+  unrecoverable signatures, full blobs inside the block RLP, a blob or set-code transaction
+  that creates a contract, and fork-transition headers missing a field.
+
+**Zero failures on Cancun, Prague, Osaka and Amsterdam**, and on the fork transitions. All 12
+failures are on pre-Cancun forks:
+
+| Fixture | Forks | Blocks | Status |
+|---|---|---:|---|
+| `constantinople/eip1014_create2/recreate/recreate.json` | Berlin, London, Paris, Shanghai | 12 | Pre-Cancun only, won't fix (see below) |
+
+Four Amsterdam `system_contract_errors` blocks (EIP-8282, and EIP-7002 / 7251 under
+Amsterdam) also failed. Each injects a system contract larger than the 64 KiB code-size limit
+into the pre-state, which the analysis cache couldn't hold. A Paris `opcodes_transaction_init`
+block also failed: input-gen labelled every Paris block as London (both have 16 header fields),
+so PREVRANDAO returned the difficulty. Input-gen now marks a 16-field header with difficulty 0
+as Paris. All five now pass; the numbers above include both fixes.
+
+`recreate`: a contract that existed before the block SELFDESTRUCTs, then the same
+address comes back in the same block, because it receives value or is re-created with
+CREATE2.
+- **What goes wrong:** the destruction wipes the contract's storage, but the guest only zeroes
+  the slots the witness names. The new-root pass still hashes the account's block-start storage
+  subtree, including slots the block never read, so the revived account gets a stale storage
+  root.
+- **Why it can't happen on current forks:** since Cancun (EIP-6780), SELFDESTRUCT only destroys
+  an account created in the same transaction. EIP-7610 forbids creating at an address that has
+  storage.
+- **Why it isn't fixed:** a fix would mean rebuilding storage subtrees in the state-root pass,
+  which isn't worth it for a case that can't happen on the target forks.
+
+**zevm**, Cancun and later forks plus the transitions (10,673 fixture files): 80,507 PASS,
+9,820 PASS_NEG, 0 FAIL_NEG, and 2 FAILs, both `ported_static/stStaticCall/static_call1_mb1024_calldepth`
+(Cancun and Prague).
+- **What the test does:** one ~882-billion-gas transaction, which is possible only before
+  Osaka's EIP-7825 cap, nests 1024 STATICCALLs that each expand memory to 1 MB. That makes
+  about 1 GB of EVM memory live at once.
+- **Why zevm fails:** its memory zones are fixed at 64 MiB per call-depth parity, and running
+  out counts as out of gas.
+- **Why it can't happen for real:** under the 2^24 gas cap per transaction a zone needs at most
+  ~14 MiB, and on a real Cancun or Prague block 1 GB at that depth would cost ~2 billion gas.
+  The evmone ELF couldn't hold it either; it passes only in the host build.
+
+Run `make eest` before a release, and check that Osaka and Amsterdam still have zero failures.
+
+## Prover-killer blocks: `make killer`
+
+```bash
+make killer                                 # 200M-gas worst-case blocks, evmone ELF
+make killer EVM_BACKEND=zevm
+make killer KILLER_GAS=0030M                # the 30M-gas set
+```
+
+A prover-killer is a valid block that costs far more to prove than a normal block, or can't be
+proven at all, for example because it exhausts the guest's 512 MiB of RAM. The zkevm-benchmark
+fixtures (execution-specs release `KILLER_RELEASE`, default
+[`tests-zkevm-benchmark@v21.0.5`](https://github.com/ethereum/execution-specs/releases/tag/tests-zkevm-benchmark%40v21.0.5))
+fill whole blocks with the worst case of one opcode or precompile: cold account access, SSTORE,
+KECCAK, MODEXP, pairing, large RETURNs, deep call chains and so on. They come in
+30/60/100/150/200M-gas sets. `make killer` uses the 200M set (`KILLER_GAS=0200M`).
+
+`make killer` does the following:
+1. Downloads the set into `build/fixtures/killer-$(KILLER_GAS)`.
+2. Builds the test host guest and the **ZisK ELF** (`ZEG_FORK_FROM_INPUT=ON`).
+3. Runs [`scripts/killer_sweep.sh`](scripts/killer_sweep.sh):
+   - **Phase 1:** each fixture goes through the bridge and the host guest.
+   - **Phase 2:** each block runs on the ELF in `ziskemu`, biggest input first,
+     `KILLER_JOBS` (4) at a time, because each emulator uses several GB of RAM.
+
+A block **PASSes** when the ELF's output equals the host's `new_payload_request_root` and the
+host's block hash equals the fixture's. The others are:
+- `EMU_DIFF`: the ELF disagrees with the host.
+- `EMU_ERR` / `EMU_TIMEOUT`: the ELF halted, for example out of memory, or ran too long.
+- `HASH_MISMATCH`: the ELF and host agree, but the hash is wrong.
+
+The sweep prints a tally and the 20 costliest blocks by steps, and writes
+`build/killer-$(KILLER_GAS)-$(EVM_BACKEND)/results.log`. A full 200M run takes several hours.
+
+**Current result (2026-10-29, 200M set):**
+- **200M set:** all 2,528 blocks pass on both the evmone and the zevm ELF.
+- **30M set:** all 2,514 blocks pass.
+
+The costliest are the cold-account blocks (BALANCE / EXTCODEHASH over ~77k accounts, about
+490M steps), which used to exhaust zevm's heap. To prove the inputs on a real ZisK
+coordinator rather than emulate them, use `kprove` (`reth-zisk-exex/src/bin/kprove.rs`). It
+takes a list of input files and writes a CSV of proving times; stop the live exex first,
+because the coordinator runs one program at a time.
+
+## Live proving and deployment (Sepolia)
+
+The live stack proves every Sepolia block with ZisK and publishes the proofs over the
+beacon network:
+
+```
+Lighthouse ──newPayload──▶ reth-zisk (reth v2.7.0 + ExEx) ──input──▶ ZisK coordinator + GPU workers
+    ▲                           │ sign (validator key), POST            │ proof
+    │                           ▼                                       │
+    └── /eth/v1/beacon/execution_proofs ◀──────────────────────────────┘
+Lighthouse ──verify──▶ zisk-proof-engine (pinned program VK) ──▶ gossip `execution_proof`
+```
+
+- **`reth-zisk`** ([reth-zisk-exex/](reth-zisk-exex/README.md)) runs in place of the Sepolia
+  reth, on the same datadir and ports. For each newPayload:
+  - It builds the guest input from the block access list before reth finishes executing,
+    and starts proving about 300 ms after the payload arrives.
+  - It proves the input on the coordinator. A newer block cancels the running job.
+  - It signs an `ExecutionProofEnvelope` with an active validator key and POSTs it to
+    Lighthouse.
+- **`zisk-proof-engine`** ([proof-engine/](proof-engine/README.md)) answers Lighthouse's
+  `--proof-engine-endpoint` calls. It verifies each proof against the pinned **program VK**
+  of the guest ELF and the coordinator's **setup VK**.
+- **Lighthouse** must be `unstable` at commit `16ce0a072` or later.
+- **The ZisK coordinator** and its GPU workers (ZisK 1.4.0, proving key installed) run on a
+  separate prover host.
+- **`proof-stats`** ([proof-stats/](proof-stats/README.md)) is optional and records the
+  per-stage timing.
+
+The full walkthrough, with Lighthouse, keys and the coordinator, is in
+[docs/tutorial-prove-and-submit.md](docs/tutorial-prove-and-submit.md). A beacon node that
+follows the chain on proofs alone, with no execution client, is in
+[docs/tutorial-lighthouse-without-el.md](docs/tutorial-lighthouse-without-el.md).
+
+### Build and install
+
+```bash
+make elf CHAIN=sepolia          # cpp-guest/zisk/build-sepolia-evmone/zisk_eth_guest.elf
+make exex proof-engine
+```
+
+The reference deployment uses this layout, with `$Z` for the data directory, for example
+`~/data/zisk`:
+
+| Path | Content |
+|---|---|
+| `/usr/local/bin/reth-zisk`, `/usr/local/bin/zisk-proof-engine` | The binaries. Keep the previous ones as `.bak-<date>` for rollback. |
+| `$Z/guest/<date>-<commit>-<tag>/zisk_eth_guest.elf` | One directory per deployed ELF. |
+| `$Z/guest/current` | Symlink to the deployed ELF's directory. |
+| `$Z/etc/reth-zisk.env` | `ZISK_COORDINATOR=http://<prover>:7000`, `ZISK_EXTRA_ARGS=--zisk.submit` |
+| `$Z/etc/proof-engine.env` | `PE_CHAIN_ID`, `PE_PROGRAM_VK`, `PE_SETUP_VK`, `PE_EXTRA_ARGS` |
+| `$Z/keys/` | The validator `keystore.json` and `password.txt`. |
+| `$Z/proofs/` | Per-block output, plus `program_vk.hex`. |
+
+The two systemd units, reduced to what matters. The reth flags are the same as
+`reth-sepolia.service`'s:
+
+```ini
+# /etc/systemd/system/reth-zisk-sepolia.service
+[Unit]
+Conflicts=reth-sepolia.service          # same datadir: only one of the two runs
+[Service]
+EnvironmentFile=$Z/etc/reth-zisk.env
+ExecStart=/usr/local/bin/reth-zisk node --chain sepolia --datadir <reth-sepolia datadir> \
+    <reth-sepolia's flags: ports, --authrpc.*, --http.api ...,debug,...> \
+    --zisk.mode prove --zisk.out-dir $Z/proofs \
+    --zisk.elf $Z/guest/current/zisk_eth_guest.elf \
+    --zisk.coordinator ${ZISK_COORDINATOR} --zisk.beacon-url http://127.0.0.1:5053 \
+    --zisk.keystore $Z/keys/keystore.json --zisk.keystore-password-file $Z/keys/password.txt \
+    $ZISK_EXTRA_ARGS
+Restart=always
+TimeoutStopSec=600
+
+# /etc/systemd/system/zisk-proof-engine.service
+[Service]
+EnvironmentFile=$Z/etc/proof-engine.env
+ExecStart=/usr/local/bin/zisk-proof-engine serve --listen 127.0.0.1:9551 \
+    --chain-id ${PE_CHAIN_ID} --program-vk ${PE_PROGRAM_VK} --setup-vk ${PE_SETUP_VK} $PE_EXTRA_ARGS
+Restart=always
+```
+
+Lighthouse is then started with `--proof-engine-endpoint http://127.0.0.1:9551`.
+
+### Upgrading the guest ELF
+
+Every change to the guest, its build flags, or the ZisK version produces a new **program
+VK**. Every proof engine that verifies the proofs must pin it, including remote nodes that
+receive the proofs over gossip. The exex mints the VK, so the steps go in this order:
+
+1. **Check before deploying.**
+   - Run `make killer` and `make eest` on the new code.
+   - Run the host guest and the ELF on a few recent Sepolia blocks (`input-gen` on blocks
+     near the head). Both must give the chain's hash and the same root.
+2. **Install.**
+   - Build the ELF with `make elf CHAIN=sepolia`. It records its build options in a
+     `ZEG_BUILD_FLAGS:` string (`strings zisk_eth_guest.elf | grep ZEG_BUILD_FLAGS`). The exex
+     refuses to prove with an ELF that has no stamp, or whose stamp isn't a deploy build for
+     the node's chain (fork from input, heap stats, another chain or output).
+   - Copy the ELF to a new `$Z/guest/<date>-<commit>-<tag>/` directory.
+   - Point `$Z/guest/current` at it.
+   - Install the new binaries if they changed, keeping the `.bak` copies.
+3. **Restart the exex.** `sudo systemctl restart reth-zisk-sepolia`. At startup it registers
+   the ELF with the coordinator, runs the setup, and writes `$Z/proofs/program_vk.hex`.
+4. **Re-pin the VK.**
+   - Set `PE_PROGRAM_VK` to that value in every proof engine's env file, and restart them.
+   - To switch over with no gap, pass the old VK as a second `--program-vk` in
+     `PE_EXTRA_ARGS` for a while.
+5. **Watch the first blocks.** Check that `status.json` reaches `submitted` and the proof
+   engine logs `VALID`. The exex only proves once reth is at the chain head; while catching up
+   it cancels each job.
+
+To roll back, point `current` at the previous directory, restore the binaries, restart the
+exex, and re-pin the old VK. An ELF from before the build stamp also needs the exex binary from
+before it.
+
+Things to keep in mind:
+- **One program at a time.** The coordinator keeps one active program. Any other client
+  that runs a setup (`kprove`, a test) displaces the exex's ELF, so stop
+  `reth-zisk-sepolia` first and restart it after.
+- **The proof layout is hand-copied.** `proof-engine/src/proof.rs` mirrors ZisK's `Proof`
+  bincode layout by hand. When the ZisK version changes, re-check its field order, or every
+  proof fails as trailing bytes.
+- **The setup VK changes with the proving key.** If the coordinator regenerates its proving
+  key, re-pin `PE_SETUP_VK`, using the raw 32 bytes of
+  `vadcop_final/vadcop_final.verkey.bin`.
+- **Pausing.** To stop proving, stop `reth-zisk-sepolia` and start `reth-sepolia`, on the same
+  datadir.
 
 ## Quick `make` reference
 
-```bash
-make all       # rust + cpp
-make rust      # input-gen + input-gen-from-manifest
-make cpp       # zisk_eth_guest
-make input BLOCK=25000000 ETH_RPC_URL=https://…  # build/block_input.bin
-make test      # rust unit tests
-make clean
-```
+| Target | Does |
+|---|---|
+| `make all` / `rust` / `cpp` | Host tools, and the mainnet evmone host guest in `cpp-guest/build`. |
+| `make input BLOCK=N` | `build/block_input.bin` from the RPC. |
+| `make test` | Rust unit tests. |
+| `make elf [CHAIN=] [EVM_BACKEND=]` | The deployable ZisK ELF. |
+| `make exex` / `proof-engine` / `bridge` | Builds those crates. |
+| `make guest-test` / `elf-test` | Host guest and ELF with `ZEG_FORK_FROM_INPUT=ON`. |
+| `make eest [EEST_PATHS=]` | The EEST conformance sweep. |
+| `make killer [KILLER_GAS=] [KILLER_PATHS=]` | The prover-killer sweep on the ELF. |
+| `make help` | Lists the variables: `EVM_BACKEND`, `CHAIN`, `JOBS`, `KILLER_JOBS`, `FIXTURES`, `ZISKEMU`, `RISCV_GCC_BIN`. |
+
+## License
+
+All code in this repository is licensed under one of the following options:
+
+- The Apache License, Version 2.0 (see LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0)
+
+- The MIT License (see LICENSE-MIT or http://opensource.org/licenses/MIT)
+
+You may choose either license at your discretion.

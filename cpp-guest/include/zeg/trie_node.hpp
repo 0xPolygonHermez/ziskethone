@@ -23,6 +23,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -134,10 +135,13 @@ struct StorageLeafR {
 /// it is wrapped in HP + RLP at pack time.
 struct PhantomLeafR {
     PackedPath           path_nibbles;
-    std::vector<uint8_t> value_rlp;
+    // Points into StateRoot::phantom_values_, keeping NodeR trivially copyable.
+    const uint8_t*       value_rlp;
+    std::size_t          value_len;
 };
 
 using NodeR = std::variant<EmptyR, HashR, ExtR, AccountLeafR, StorageLeafR, PhantomLeafR>;
+static_assert(std::is_trivially_copyable_v<NodeR>);
 
 // Construct a NodeR holding alternative `T`. Default-construct then
 // `.emplace<T>(...)` rather than the converting / in_place_type ctors —
@@ -160,6 +164,7 @@ enum class NodeType : uint8_t {
     Hash,
     ExtensionHash,
     PhantomLeaf,
+    PoolHash,  // a branch's Hash child; idx = slot in StateRoot's hash pool
 };
 
 struct Child {
@@ -170,6 +175,7 @@ struct Child {
 struct BranchNode {
     std::array<Child, 16> children;
     NodeR                 cached;  // computed result of this branch (post-fold)
+    uint64_t              tags = 0;  // witness child tags (see build_branch_node)
 };
 
 // ----- shared constants + emptiness predicates ------------------------------

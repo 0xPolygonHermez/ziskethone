@@ -70,11 +70,10 @@ MemGas EVMMem::ensure(size_t need_bytes, int64_t gas) {
     // arena would memset/memcpy out of bounds (UB / segfault). Treat zone
     // exhaustion as out-of-gas so the guest fails cleanly instead of crashing.
     //
-    // Memory cost is quadratic in gas, so within any realistic per-tx gas cap the
-    // cumulative footprint stays far below a zone and this never fires on valid
-    // blocks (a zone holds ~80M-gas worth of memory even under an adversary-
-    // favorable bound; mainnet block limits are ~30-45M, EIP-7825 caps a tx at
-    // 16.7M). It only bounds one known adversarial EEST state test,
+    // Memory cost is quadratic in gas, so under the EIP-7825 per-tx cap (2^24) a
+    // parity holds at most ~14 MiB live, below the kMaxMemPerTx of room every
+    // chain gets (see kMemBlockSize), and this never fires on valid blocks. It
+    // only bounds one known adversarial EEST state test,
     // stStaticCall/static_Call1MB1024Calldepth, which spends ~882e9 gas to hold
     // ~1 MiB in each of 1024 simultaneously-live frames (~1 GiB total) — beyond
     // what a fixed zero-init arena can hold, and impossible in a real block. On

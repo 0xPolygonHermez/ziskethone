@@ -52,15 +52,25 @@ rlp::Bytes build_branch_child(std::span<const PathEntry> bucket, size_t depth) {
 }
 
 rlp::Bytes build_node(std::span<const PathEntry> entries, size_t depth) {
-    // Single entry → leaf node: [HP(path[depth..], leaf=true), value].
+    // Single entry → leaf node: [HP(path[depth..], leaf=true), value],
+    // written once into an exact buffer (a receipt value can be tens of KiB,
+    // and the guest's allocator never frees the intermediate copies).
     if (entries.size() == 1) {
         const auto& e = entries[0];
         const auto rest = std::span<const uint8_t>{e.path}.subspan(depth);
         const auto hp = hex_prefix(rest, /*leaf=*/true);
-        return rlp::encode_list({
-            BytesView{rlp::encode(BytesView{hp.data(), hp.size()})},
-            BytesView{rlp::encode(BytesView{e.value->data(), e.value->size()})},
-        });
+        const auto str_size = [](const uint8_t* d, size_t n) {
+            return (n == 1 && d[0] < 0x80) ? size_t{1} : rlp::item_size(n);
+        };
+        const size_t payload = str_size(hp.data(), hp.size())
+                             + str_size(e.value->data(), e.value->size());
+        rlp::Bytes out(rlp::item_size(payload));
+        uint8_t hdr[5];
+        size_t n = rlp::detail::make_header<0xc0, 0xf7>(hdr, payload);
+        __builtin_memcpy(out.data(), hdr, n);
+        n += rlp::write_string(out.data() + n, hp.data(), hp.size());
+        rlp::write_string(out.data() + n, e.value->data(), e.value->size());
+        return out;
     }
 
     // Find the longest common prefix beyond `depth`. We know all

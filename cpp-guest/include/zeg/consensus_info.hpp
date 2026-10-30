@@ -8,7 +8,7 @@
 //
 // Layout in the input stream:
 //
-//   uint8[264] fixed_header_prefix     // see kFieldOffset constants
+//   uint8[376] fixed_header_prefix     // see kFieldOffset constants
 //   Withdrawal × withdrawals_count     // each 48 B (= multiple of 8)
 //
 // No per-record trailing padding is needed — every field is naturally
@@ -29,10 +29,10 @@ namespace zeg {
 
 class ConsensusInfo {
 public:
-    static constexpr uint64_t kFixedPrefixSize      = 368;
+    static constexpr uint64_t kFixedPrefixSize      = 376;
     static constexpr uint64_t kWithdrawalRecordSize = 48;
 
-    // Fixed offsets within the 344-byte header prefix. All 8-byte
+    // Fixed offsets within the 376-byte header prefix. All 8-byte
     // aligned by construction.
     static constexpr size_t kParentHashOffset            = 0;    // bytes32
     static constexpr size_t kBeneficiaryOffset           = 32;   // 20 B
@@ -85,7 +85,11 @@ public:
     // formula: parent.excess_blob_gas + parent.blob_gas_used *
     // (max - target) / max — see run.cpp.
     static constexpr size_t kMaxBlobGasPerBlockOffset    = 360;  // u64-le
-    // End of fixed prefix: 368.
+    // Amsterdam: the EIP-7843 beacon slot number (zero before Amsterdam).
+    // The EIP-7928 block access list hash is not an input: the guest
+    // builds the BAL and computes it.
+    static constexpr size_t kSlotNumberOffset            = 368;  // u64-le
+    // End of fixed prefix: 376.
 
     // Zero-copy view over one 48-byte withdrawal record (EIP-4895).
     //
@@ -112,7 +116,7 @@ public:
     // `cursor` is advanced past every byte consumed.
     explicit ConsensusInfo(const uint8_t*& cursor);
 
-    // ----- header accessors (zero-copy refs into the 232 B prefix) -----
+    // ----- header accessors (zero-copy refs into the fixed prefix) -----
     const evmc::bytes32&     parent_hash             () const noexcept;
     const evmc::address&     beneficiary             () const noexcept;
     uint64_t                 number                  () const noexcept;
@@ -142,6 +146,8 @@ public:
     const evmc::uint256be&   difficulty              () const noexcept;
     std::span<const uint8_t, 8> nonce                () const noexcept;
     const evmc::bytes32&     ommers_hash             () const noexcept;
+    // Amsterdam (EIP-7928 / EIP-7843); zero before Amsterdam.
+    uint64_t                 slot_number             () const noexcept;
     // The hardfork this block runs under. Callers derive both the EVM
     // revision and the header field-count from it (see zeg/fork.hpp).
     // ForkId::Unknown (0 = zero-filled / pre-fork_id inputs) resolves to

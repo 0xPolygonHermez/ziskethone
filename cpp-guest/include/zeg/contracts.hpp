@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <unordered_map>
 #include <vector>
 
@@ -117,7 +118,13 @@ private:
         }
     };
 
-    std::vector<Contract> contracts_;
+    // std::deque (not std::vector): the AnalysisCache stores a pointer to a
+    // Contract's `analysis` field (&c.analysis). A runtime `insert()` (CREATE/
+    // CREATE2/7702 stub) appends, and a vector's reallocation would invalidate
+    // every such pointer — leaving the cache able to hand one contract another's
+    // analysis (use-after-realloc). A deque never relocates existing elements on
+    // push_back, so those pointers stay valid for this object's lifetime.
+    std::deque<Contract> contracts_;
     std::unordered_map<evmc::bytes32, size_t, KeccakAsHash, KeccakEq> index_;
     // Stable owning storage for runtime-added contract code (via
     // `insert`). The Contract::code pointer for those entries lives

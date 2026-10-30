@@ -88,7 +88,10 @@ def run_guest(input_bin: Path, stdout_path: Path, stderr_path: Path,
 
 
 def read_cpp_hash(stdout_path: Path) -> Optional[str]:
-    """Return the first `0x<64hex>` line of cpp-guest's stdout, or None."""
+    """Return the first `0x<64hex>` line of cpp-guest's stdout, or None.
+
+    The host guest prints the execution block hash first; the second line is
+    the public output (the EIP-8025 new_payload_request_root)."""
     try:
         with stdout_path.open("r") as f:
             for line in f:

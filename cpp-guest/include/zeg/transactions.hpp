@@ -40,6 +40,9 @@ public:
         Type                       type()             const noexcept { return type_; }
         const evmc::bytes32&       transaction_hash() const noexcept { return transaction_hash_; }
         const evmc::address&       sender()           const noexcept { return sender_; }
+        // The canonical EIP-2718 wire envelope (`type || rlp` for typed txs,
+        // the RLP list for legacy), pointing into the input buffer.
+        std::span<const uint8_t>   envelope()         const noexcept { return envelope_; }
 
         // ----- common across all types -----
         uint64_t                   nonce()         const noexcept { return nonce_; }
@@ -95,6 +98,7 @@ public:
         Type           type_{Type::Legacy};
         evmc::bytes32  transaction_hash_{};
         evmc::address  sender_{};
+        std::span<const uint8_t> envelope_{};
 
         // ----- common -----
         uint64_t                 nonce_{0};

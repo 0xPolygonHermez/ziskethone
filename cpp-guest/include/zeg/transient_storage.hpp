@@ -11,14 +11,24 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <algorithm>
+#include <optional>
 #include <unordered_map>
 
 #include <evmc/evmc.hpp>
+
+#include "zeg/seeded_hash.hpp"
+#include "zeg/tx_arena.hpp"
 
 namespace zeg {
 
 class TransientStorage {
 public:
+    // `seed` keys `map_` with the per-run universal hash
+    // (zeg/seeded_hash.hpp); it must outlive the object.
+    explicit TransientStorage(const zeg::HashSeed& seed)
+        : seed_(&seed) { init(); }
+
     // Slot value at (addr, position); zero if not set.
     evmc::bytes32 get(const evmc::address& addr,
                       const evmc::bytes32& position) const noexcept;
@@ -44,23 +54,37 @@ public:
 
     // Clear every entry. Called at the start of each EVM frame (tx
     // or system call) per EIP-1153.
-    void reset() noexcept;
+    void reset() noexcept { release(); init(); }
 
-    size_t size() const noexcept { return map_.size(); }
+    // reset() in two halves around zeg::tx_arena_reset(): release()
+    // destroys the map (its nodes and buckets are in the tx arena), init()
+    // builds an empty one, which already allocates its first buckets. So
+    // at a tx start: release(), tx_arena_reset(), init(); no map may be
+    // used in between. init() starts from the previous map's bucket count
+    // (capped), as clear() would keep it, so a TSTORE-heavy tx doesn't
+    // rehash its way up again.
+    void release() noexcept {
+        buckets_hint_ = std::min(map_->bucket_count(), kMaxBucketsHint);
+        map_.reset();
+    }
+    void init() { map_.emplace(buckets_hint_, KeyHash{seed_}, KeyEq{}); }
+
+    size_t size() const noexcept { return map_->size(); }
 
 private:
     struct Key {
         evmc::address address;
         evmc::bytes32 position;
     };
+    // KeyHash reads the whole struct; no padding must creep in, or equal keys
+    // (compared field-wise by KeyEq) could hash differently.
+    static_assert(sizeof(Key) == 20 + 32, "TransientStorage::Key must have no padding");
     struct KeyHash {
+        // Seeded universal hash over the whole 52-byte Key — same rationale
+        // as the persistent Storages class. See zeg/seeded_hash.hpp.
+        const zeg::HashSeed* s_ = nullptr;
         size_t operator()(const Key& k) const noexcept {
-            // Both halves are high-entropy; XOR the low 8 bytes of
-            // each — same trick the persistent Storages class uses.
-            uint64_t a, p;
-            std::memcpy(&a, k.address.bytes  + sizeof(k.address.bytes)  - 8, 8);
-            std::memcpy(&p, k.position.bytes + sizeof(k.position.bytes) - 8, 8);
-            return static_cast<size_t>(a ^ p);
+            return static_cast<size_t>(zeg::hash_bytes(*s_, &k, sizeof(k)));
         }
     };
     struct KeyEq {
@@ -70,7 +94,13 @@ private:
         }
     };
 
-    std::unordered_map<Key, evmc::bytes32, KeyHash, KeyEq> map_;
+    // Per-tx state, so its nodes live in the tx arena (zeg/tx_arena.hpp).
+    using Map = std::unordered_map<Key, evmc::bytes32, KeyHash, KeyEq,
+                                   TxArenaAllocator<std::pair<const Key, evmc::bytes32>>>;
+    const zeg::HashSeed* seed_;
+    std::optional<Map>   map_;   // empty only between release() and init()
+    static constexpr size_t kMaxBucketsHint = size_t{1} << 17;
+    size_t buckets_hint_ = 0;
 };
 
 } // namespace zeg
