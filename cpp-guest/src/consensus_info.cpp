@@ -126,6 +126,9 @@ const evmc::bytes32& ConsensusInfo::ommers_hash() const noexcept {
     return *reinterpret_cast<const evmc::bytes32*>(header_ + kOmmersHashOffset);
 }
 uint64_t ConsensusInfo::slot_number() const noexcept {
+    // EIP-7843: there is no slot number before Amsterdam. Gated on the derived
+    // fork, so a pre-Amsterdam block can only ever publish slot_number 0.
+    if (fork_id() < ForkId::Amsterdam) return 0;
     return u64_at(header_ + kSlotNumberOffset);
 }
 
@@ -146,13 +149,26 @@ ConsensusInfo::ConsensusInfo(const uint8_t*& cursor) {
     if (u64_at(header_ + kForkIdOffset) > static_cast<uint64_t>(ForkId::Amsterdam)) {
         fatal("ConsensusInfo: unknown fork_id");
     }
+#if !defined(ZEG_FORK_FROM_INPUT)
+    // fork_id() ignores the input's fork field and derives the fork from the
+    // timestamp. An honest input carries the same fork (rust-input-gen resolves
+    // it from the same schedule), so a mismatch is a dishonest input or a
+    // schedule that drifted between input-gen and this ELF: reject both. A
+    // timestamp before the schedule (Unknown) never matches, so pre-Cancun
+    // blocks are rejected instead of running as Prague.
+    if (u64_at(header_ + kForkIdOffset) != static_cast<uint64_t>(fork_id())) {
+        fatal("ConsensusInfo: fork_id does not match the chain's fork schedule");
+    }
+#endif
     // EIP-7843: slot_number enters the header only at Amsterdam. Before Amsterdam
     // it is not part of the header or the block hash, yet execution_payload_root
     // folds it into the published NPR root. An honest pre-Amsterdam input carries
     // 0 (rust-input-gen writes slot_number.unwrap_or(0)); reject a non-zero value
     // so the output stays a unique function of the block — otherwise the prover
-    // could publish up to 2^64 distinct roots for one block. Changes no valid root.
-    if (u64_at(header_ + kForkIdOffset) < static_cast<uint64_t>(ForkId::Amsterdam) &&
+    // could publish up to 2^64 distinct roots for one block. Gated on the derived
+    // fork (audit H5: the raw field is not bound to the block). Changes no valid
+    // root.
+    if (fork_id() < ForkId::Amsterdam &&
         u64_at(header_ + kSlotNumberOffset) != 0) {
         fatal("ConsensusInfo: non-zero slot_number before Amsterdam");
     }
