@@ -78,7 +78,7 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
     //    leaf payloads, so they're created empty here.
     zeg::ConsensusInfo  consensus       (cursor);
     zeg::Transactions   transactions    (cursor);
-    zeg::Contracts      contracts       (cursor);
+    zeg::Contracts      contracts       (cursor, table_seed);
     zeg::PreviousBlocks previous_blocks (cursor);
     zeg::Accounts       accounts        (table_seed);
     zeg::Storages       storages        (table_seed);

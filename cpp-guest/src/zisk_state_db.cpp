@@ -494,8 +494,8 @@ evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
     // frame rolls back every write made under it.
     const auto cp = checkpoint();
 
-    std::span<const uint8_t> code;
-    evmc::bytes32            code_hash{};
+    std::span<const uint8_t>   code;
+    const Contracts::Contract* entry = nullptr;
 
     switch (msg.kind) {
         case EVMC_CALL: {
@@ -508,14 +508,14 @@ evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
             if (v_u != 0) {
                 transfer_value(msg.sender, msg.recipient, msg.value);
             }
-            code = this->code_and_hash(msg.code_address, code_hash);
+            code = this->code_and_entry(msg.code_address, entry);
             break;
         }
         case EVMC_CALLCODE:
         case EVMC_DELEGATECALL:
             // No value transfer (DELEGATECALL's `value` is apparent
             // only; CALLCODE keeps the value in the caller's storage).
-            code = this->code_and_hash(msg.code_address, code_hash);
+            code = this->code_and_entry(msg.code_address, entry);
             break;
 
         case EVMC_CREATE:
@@ -524,7 +524,7 @@ evmc::Result ZiskStateDB::call(const evmc_message& msg) noexcept {
     }
 
     auto result = evmc::Result{run_frame(&msg, code.data(), code.size(),
-        analysis_for(code_hash))};
+        analysis_for(entry))};
     if (result.status_code != EVMC_SUCCESS) {
         rollback(cp);
     }
@@ -729,33 +729,32 @@ evmc_access_status ZiskStateDB::access_storage(const evmc::address& addr,
 // ===== Public methods =====
 
 std::span<const uint8_t> ZiskStateDB::code(const evmc::address& addr) const noexcept {
-    evmc::bytes32 ignored;
-    return code_and_hash(addr, ignored);
+    const Contracts::Contract* ignored;
+    return code_and_entry(addr, ignored);
 }
 
-std::span<const uint8_t> ZiskStateDB::code_and_hash(
-        const evmc::address& addr, evmc::bytes32& out_hash) const noexcept {
-    out_hash = EMPTY_CODE_HASH;
+std::span<const uint8_t> ZiskStateDB::code_and_entry(
+        const evmc::address& addr, const Contracts::Contract*& out) const noexcept {
+    out = nullptr;
     const auto hash = const_cast<Accounts&>(accounts_).code_hash(addr, tx_counter_);
     if (hash == EMPTY_CODE_HASH) {
         return {};
     }
-    out_hash = hash;
-    const auto& c = contracts_.by_hash(hash);
-    return std::span<const uint8_t>{c.code, static_cast<size_t>(c.code_size)};
+    out = &contracts_.by_hash(hash);
+    return std::span<const uint8_t>{out->code, static_cast<size_t>(out->code_size)};
 }
 
-evmc2_pre_execution* ZiskStateDB::analysis_for(const evmc::bytes32& code_hash) noexcept {
-    if (code_hash == EMPTY_CODE_HASH) {
+evmc2_pre_execution* ZiskStateDB::analysis_for(const Contracts::Contract* entry) noexcept {
+    if (entry == nullptr) {
         return nullptr;  // no code → nothing to pre-analyze
     }
-    const auto& c = contracts_.by_hash(code_hash);
     // Acquire (preparing on a cache miss) and PIN the analysis for the frame
     // about to run; run_frame() releases the pin when that frame returns. The
     // cache keeps it in a fixed arena slot and may evict it later (when no frame
-    // pins it) to bound heap use. c.analysis is the cached slot handle, nulled
-    // by the cache on eviction.
-    return cache_->acquire(&c.analysis, c.code, static_cast<size_t>(c.code_size));
+    // pins it) to bound heap use. entry->analysis is the cached slot handle,
+    // nulled by the cache on eviction.
+    return cache_->acquire(&entry->analysis, entry->code,
+                           static_cast<size_t>(entry->code_size));
 }
 
 void ZiskStateDB::set_tx_context(const evmc_tx_context& ctx) noexcept {
@@ -774,11 +773,14 @@ ZiskStateDB::Checkpoint ZiskStateDB::checkpoint() noexcept {
 void ZiskStateDB::rollback(Checkpoint cp) noexcept {
     journal_.rollback(cp.journal_cp, accounts_, storages_, warm_keys_, transient_, pending_destruct_);
     if (!tx_receipts_.empty()) {
-        tx_receipts_.back().logs.resize(cp.log_count);
+        tx_receipts_.back().logs.truncate(cp.log_count);
     }
 }
 
 void ZiskStateDB::execute_block(const Transactions& transactions) noexcept {
+    // One receipt per tx: reserve them all, so the vector never leaves an
+    // outgrown buffer on the never-freed heap (~2x its size at ~9.5k txs).
+    tx_receipts_.reserve(transactions.size());
     pre_execute_block ();
     process_transactions(transactions);
     heap_mark("txs");
@@ -1256,7 +1258,7 @@ void ZiskStateDB::register_deployed_code(const evmc::address& new_addr,
     // mid-tx (see block 25193032), so we can't rely on the input
     // stream having pre-included this code. Insert is idempotent.
     if (result.output_size > 0) {
-        contracts_.insert(deployed_hash, result.output_data, result.output_size);
+        contracts_.insert(deployed_hash, result.output_data, result.output_size, new_idx);
     }
     const char* trace_env = std::getenv("ZEG_TRACE_TX");
     if (trace_env != nullptr &&
@@ -1279,7 +1281,7 @@ void ZiskStateDB::pre_execute_block() noexcept {
     // EIP-7928 (Amsterdam): start the block-level access list. Index 0
     // covers the pre-execution system calls below.
     if (is_amsterdam_or_later()) {
-        bal_ = std::make_unique<BlockAccessList>(accounts_.capacity());
+        bal_ = std::make_unique<BlockAccessList>(accounts_.capacity(), storages_.size());
         bal_->set_index(0);
         accounts_.set_block_access_list(bal_.get());
     }
@@ -2067,7 +2069,7 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item& auth_item,
             delegation, sizeof(delegation));
         accounts_.set_code_hash_at(signer_idx, delegation_hash, tx_counter_);
         // EIP-7928: a BAL code change carries the code bytes.
-        if (bal_) contracts_.insert(delegation_hash, delegation, sizeof(delegation));
+        if (bal_) contracts_.insert(delegation_hash, delegation, sizeof(delegation), signer_idx);
     }
 
     return (signer_was_non_empty && charges == nullptr) ? 12500 : 0;
@@ -2110,8 +2112,7 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
             }
         }
         if (tx.to() != nullptr) {
-            evmc::bytes32 code_hash{};
-            const auto code = code_and_hash(*tx.to(), code_hash);
+            const auto code = this->code(*tx.to());
             if (code.size() == 23 && code[0] == 0xef && code[1] == 0x01 && code[2] == 0x00) {
                 constexpr int64_t WARM_ACCESS     = 100;
                 constexpr int64_t COLD_ACCESS_ADD = 3000 - WARM_ACCESS;  // EIP-8038
@@ -2268,7 +2269,7 @@ evmc::Result ZiskStateDB::execute_top_level_message(const Transactions::View& tx
             // requests does a system_call into it.
             if (result.output_size > 0) {
                 contracts_.insert(deployed_hash, result.output_data,
-                                  result.output_size);
+                                  result.output_size, new_idx);
             }
             journal_.log_code_hash(new_idx,
                                    accounts_.code_hash_at(new_idx),
@@ -2315,8 +2316,8 @@ evmc::Result ZiskStateDB::execute_top_level_message(const Transactions::View& tx
         return call_precompile_dispatch(msg);
     }
 
-    evmc::bytes32 entry_code_hash{};
-    auto entry_code = this->code_and_hash(msg.recipient, entry_code_hash);
+    const Contracts::Contract* entry = nullptr;
+    auto entry_code = this->code_and_entry(msg.recipient, entry);
 
     // EIP-7702 top-level delegation: if the recipient is a delegated
     // EOA (code starts with 0xef0100 || delegate), execute the
@@ -2329,7 +2330,7 @@ evmc::Result ZiskStateDB::execute_top_level_message(const Transactions::View& tx
         evmc::address delegate;
         std::memcpy(delegate.bytes, entry_code.data() + 3, 20);
         msg.code_address = delegate;
-        entry_code = this->code_and_hash(delegate, entry_code_hash);
+        entry_code = this->code_and_entry(delegate, entry);
     }
 
     if (intx::be::load<intx::uint256>(msg.value) != 0) {
@@ -2337,7 +2338,7 @@ evmc::Result ZiskStateDB::execute_top_level_message(const Transactions::View& tx
     }
 
     return evmc::Result{run_frame(&msg, entry_code.data(), entry_code.size(),
-        analysis_for(entry_code_hash))};
+        analysis_for(entry))};
 }
 
 ZiskStateDB::TxGasUsed ZiskStateDB::settle_tx_gas(const Transactions::View& tx,
@@ -2629,13 +2630,15 @@ void ZiskStateDB::collect_system_requests(const evmc::address& addr,
 void ZiskStateDB::reset_tx_arena() noexcept {
     // Per-tx arena (zeg/tx_arena.hpp): the journal (no checkpoint spans a
     // tx), the transient map, the VM's EVM memory and call outputs (evmone
-    // patch 16) of the previous tx are dead. Drop every user's storage,
-    // reclaim the arena, and only then allocate storage for this tx.
+    // patch 16) of the previous tx are dead. Code the previous tx deployed
+    // moves to the heap if its account still has it. Drop every user's
+    // storage, reclaim the arena, and only then allocate storage for this tx.
+    contracts_.settle_staged(
+        [this](std::size_t row) { return accounts_.code_hash_at(row); });
     journal_.release();
     transient_.release();
     if (vm2_->release_tx_buffers != nullptr) vm2_->release_tx_buffers(&vm2_->base);
     tx_arena_reset();
-    journal_.init();
     transient_.init();
 }
 
@@ -2696,13 +2699,13 @@ evmc::Result ZiskStateDB::system_call(const evmc::address&     target,
     // pay); the caller may consume the result's output_data (e.g.
     // for EIP-7002 / EIP-7251 request dequeue).
     const auto cp = checkpoint();
-    evmc::bytes32 entry_code_hash{};
+    const Contracts::Contract* entry = nullptr;
     // EIP-7928: the target is loaded even without code (its caller,
     // SYSTEM_ADDRESS, is not).
-    const auto entry_code = code_and_hash(target, entry_code_hash);
+    const auto entry_code = code_and_entry(target, entry);
     in_system_call_ = true;
     auto result = evmc::Result{run_frame(&msg, entry_code.data(), entry_code.size(),
-        analysis_for(entry_code_hash))};
+        analysis_for(entry))};
     in_system_call_ = false;
     set_tx_context(saved_ctx);  // restore the surrounding block/tx context
     if (result.status_code != EVMC_SUCCESS) {

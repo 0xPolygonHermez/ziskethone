@@ -47,8 +47,10 @@ std::size_t list_header(uint8_t* dst, std::size_t payload_len) noexcept {
 
 }  // namespace
 
-BlockAccessList::BlockAccessList(std::size_t account_capacity)
-    : accounts_(account_capacity) {}
+BlockAccessList::BlockAccessList(std::size_t account_capacity, std::size_t slot_capacity)
+    : accounts_(account_capacity) {
+    slots_.reserve(slot_capacity);
+}
 
 void BlockAccessList::push(List& l, uint32_t index, const evmc::bytes32& value) {
     const auto id = static_cast<uint32_t>(changes_.size());

@@ -77,7 +77,10 @@ public:
         List          changes;
     };
 
-    explicit BlockAccessList(std::size_t account_capacity);
+    // One Account per Accounts row and at most one Slot per Storages row.
+    // `slots_` is reserved for all of them: grown by doubling it left ~2x
+    // its final size of never-freed heap behind.
+    BlockAccessList(std::size_t account_capacity, std::size_t slot_capacity);
 
     uint32_t index() const noexcept { return index_; }
     void     set_index(uint32_t i) noexcept { index_ = i; }

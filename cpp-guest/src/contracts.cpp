@@ -13,7 +13,8 @@
 
 namespace zeg {
 
-Contracts::Contracts(const uint8_t*& cursor) {
+Contracts::Contracts(const uint8_t*& cursor, const HashSeed& seed)
+    : index_(0, CodeHashHash{&seed}, KeccakEq{}) {
     const uint64_t count = read_u64_le(cursor);
     // Each contract needs at least its 8-byte size prefix, so a count beyond
     // that many remaining bytes is a malformed/oversized input — reject before

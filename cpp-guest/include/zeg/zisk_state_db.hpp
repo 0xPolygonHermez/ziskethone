@@ -128,19 +128,20 @@ public:
     // interface (callers below the top level use copy_code instead).
     std::span<const uint8_t> code(const evmc::address& addr) const noexcept;
 
-    // Like code(), but also returns the account's code-hash. `out_hash` is set
-    // to the empty-code hash when the account has no code. The hash keys the
-    // per-contract pre-analysis (see analysis_for).
-    std::span<const uint8_t> code_and_hash(const evmc::address& addr,
-                                           evmc::bytes32& out_hash) const noexcept;
+    // Like code(), but also returns the account's Contracts entry (`out` is
+    // null when the account has no code). The entry carries the per-contract
+    // pre-analysis (see analysis_for), so a call looks its code hash up once.
+    std::span<const uint8_t> code_and_entry(const evmc::address& addr,
+                                            const Contracts::Contract*& out) const noexcept;
 
-    // Returns the pre-analysis handle for the code at `code_hash`, preparing it
-    // once (via vm2_->prepare) on first use and caching it on the Contract for
-    // the rest of the block. Returns nullptr when the account has no code. Pass
-    // the result straight to vm2_->execute2 — that's how the call sites avoid
-    // re-analyzing a contract on every invocation. The handle is owned by the VM
-    // and released in the destructor (Contracts::release_analyses).
-    evmc2_pre_execution* analysis_for(const evmc::bytes32& code_hash) noexcept;
+    // Returns the pre-analysis handle for the code of `entry` (from
+    // code_and_entry), preparing it once (via vm2_->prepare) on first use and
+    // caching it on the Contract for the rest of the block. Returns nullptr when
+    // the account has no code (`entry` null). Pass the result straight to
+    // vm2_->execute2 — that's how the call sites avoid re-analyzing a contract
+    // on every invocation. The handle is owned by the VM and released in the
+    // destructor (Contracts::release_analyses).
+    evmc2_pre_execution* analysis_for(const Contracts::Contract* entry) noexcept;
 
     // ----- tx_context plumbing -----
     //
