@@ -375,13 +375,14 @@ std::size_t emit_child_slot(uint8_t* dst,
 // slots plus a header. The payload length is only known at the end, so the
 // header is written backwards into a reserved gap and the hash starts wherever
 // it landed.
-const NodeR* result_ptr(const Child& c, const std::vector<BranchNode>& branch_nodes,
-                        const std::vector<NodeR>& aux, const Accounts& accounts,
-                        const Storages& storages);
+const NodeR* result_ptr(const Child& c, const BranchNodes& branch_nodes,
+                        const AuxNodes& aux, const ChainNodes& chains,
+                        const Accounts& accounts, const Storages& storages);
 
-// Ctx is BuildCtx or EvalCtx. A PoolHash child's result is its pool slot.
-inline const uint8_t* pool_hash(const uint8_t* pool, uint32_t idx) {
-    return pool + std::size_t{idx} * 32;
+// Ctx is BuildCtx or EvalCtx. A PoolHash child's result is its 32 bytes in the
+// witness stream, `idx` 8-byte words past the section start.
+inline const uint8_t* pool_hash(const uint8_t* stream, uint32_t idx) {
+    return stream + std::size_t{idx} * 8;
 }
 template <class Ctx>
 evmc::bytes32 pack_branch(const std::array<Child, 16>& children, const Ctx& ctx,
@@ -400,10 +401,10 @@ evmc::bytes32 pack_branch(const std::array<Child, 16>& children, const Ctx& ctx,
             buf[n++] = 0x80;
         } else if (c.type == NodeType::PoolHash) {
             buf[n] = kRlpHash32Header;
-            zeg::zisk::zisk_xmemcpy<32>(buf + n + 1, pool_hash(ctx.pool, c.idx));
+            zeg::zisk::zisk_xmemcpy<32>(buf + n + 1, pool_hash(ctx.stream, c.idx));
             n += kSlotMax;
         } else {
-            n += emit_child_slot(buf + n, *result_ptr(c, ctx.branch_nodes, ctx.aux,
+            n += emit_child_slot(buf + n, *result_ptr(c, ctx.branch_nodes, ctx.aux, ctx.chains,
                                                       ctx.accounts, ctx.storages),
                                  ctx.accounts, ctx.storages, which);
         }
@@ -470,7 +471,7 @@ NodeR reduce_branch(const BranchNode& bn, const Ctx& ctx, ValueSet which)
         const Child& c = children[k];
         if (c.type == NodeType::PoolHash ||
             (c.type != NodeType::Empty &&
-             !std::holds_alternative<EmptyR>(*result_ptr(c, ctx.branch_nodes, ctx.aux,
+             !std::holds_alternative<EmptyR>(*result_ptr(c, ctx.branch_nodes, ctx.aux, ctx.chains,
                                                           ctx.accounts, ctx.storages)))) {
             ++count;
             single = k;
@@ -502,12 +503,12 @@ NodeR reduce_branch(const BranchNode& bn, const Ctx& ctx, ValueSet which)
         if (oc.type == NodeType::PoolHash) {
             check_orphan();
             evmc::bytes32 h;
-            zeg::zisk::zisk_xmemcpy<32>(h.bytes, pool_hash(ctx.pool, oc.idx));
+            zeg::zisk::zisk_xmemcpy<32>(h.bytes, pool_hash(ctx.stream, oc.idx));
             PackedPath one;
             one.prepend(nibble);
             return mk_node<ExtR>(std::move(one), h);
         }
-        const NodeR& only = *result_ptr(oc, ctx.branch_nodes, ctx.aux, ctx.accounts,
+        const NodeR& only = *result_ptr(oc, ctx.branch_nodes, ctx.aux, ctx.chains, ctx.accounts,
                                         ctx.storages);
         if (const auto* leaf = std::get_if<AccountLeafR>(&only)) {
             AccountLeafR copy = *leaf;
@@ -543,19 +544,62 @@ NodeR reduce_branch(const BranchNode& bn, const Ctx& ctx, ValueSet which)
     return mk_node<HashR>(pack_branch(children, ctx, which));
 }
 
+// reduce_branch's fold for a branch whose only child sits at `nibble` and has
+// result `r`. For a chain the guard against folding an orphan opaque hash never
+// applies: the witness showed every branch of the run with one child.
+NodeR fold_nibble(uint8_t nibble, const NodeR& r) {
+    if (const auto* h = std::get_if<HashR>(&r)) {
+        PackedPath one;
+        one.prepend(nibble);
+        return mk_node<ExtR>(std::move(one), h->hash);
+    }
+    NodeR out = r;  // EmptyR stays Empty (count == 0)
+    std::visit([nibble](auto& n) {
+        using T = std::decay_t<decltype(n)>;
+        if constexpr (std::is_same_v<T, ExtR>) {
+            n.ext_nibbles.prepend(nibble);
+        } else if constexpr (std::is_same_v<T, AccountLeafR> ||
+                             std::is_same_v<T, StorageLeafR> ||
+                             std::is_same_v<T, PhantomLeafR>) {
+            n.path_nibbles.prepend(nibble);
+        }
+    }, out);
+    return out;
+}
+
+// A chain's result: its single-child branches folded from the innermost out,
+// exactly as reduce_branch folds them one by one.
+template <class Ctx>
+NodeR chain_result(const ChainNode& ch, const Ctx& ctx) {
+    NodeR r;
+    if (ch.child.type == NodeType::PoolHash) {
+        evmc::bytes32 h;
+        zeg::zisk::zisk_xmemcpy<32>(h.bytes, pool_hash(ctx.stream, ch.child.idx));
+        r = mk_node<HashR>(h);
+    } else {
+        r = *result_ptr(ch.child, ctx.branch_nodes, ctx.aux, ctx.chains, ctx.accounts,
+                        ctx.storages);
+    }
+    for (std::size_t i = ch.prefix.size(); i-- > 0;) {
+        r = fold_nibble(ch.prefix.at(i), r);
+    }
+    return r;
+}
+
 // ===== build pass (stream -> node array) ====================================
 
 // Borrowed state for the old-root build walk.
 struct BuildCtx {
     Accounts&                accounts;
     Storages&                storages;
-    std::vector<BranchNode>& branch_nodes;
-    std::vector<NodeR>&      aux;
+    BranchNodes&             branch_nodes;
+    AuxNodes&                aux;
+    ChainNodes&              chains;
     std::deque<std::vector<uint8_t>>& phantom_values;
     std::size_t              next_state_idx;
     std::size_t              next_storage_idx;
     std::size_t              node_limit;
-    uint8_t*                 pool;
+    const uint8_t*           stream;  // section start: PoolHash children index from it
     // Running lengths of `branch_nodes` and `aux`. std::vector::size() is a
     // pointer difference divided by the element stride, and neither element is
     // power-of-two sized, so GCC lowers each call to a multiply by a reciprocal.
@@ -566,6 +610,7 @@ struct BuildCtx {
     // and written on the walk's hottest path (once per branch child).
     uint64_t                 aux_n = 0;
     uint64_t                 branch_n = 0;
+    uint64_t                 chain_n = 0;
     uint64_t                 pool_n = 0;  // PoolHash children; count against node_limit
 };
 
@@ -576,28 +621,28 @@ const NodeR& empty_result() {
 }
 
 // Pointer to a child's current cached result. Valid for both passes:
-// branch/aux results live in StateRoot's vectors, leaf results on the rows
-// (all pre-reserved or appended before use). Tables' `leaf_` is pre-reserved
-// so these pointers stay stable; `branch_nodes`/`aux` only grow during build,
-// and callers gather these pointers AFTER all siblings are built (so no
-// intervening reallocation invalidates them before they are consumed).
+// branch/chain/aux results live in StateRoot's chunked arrays, whose elements
+// never move, leaf results on the rows (tables' `leaf_` is pre-reserved), so
+// these pointers stay stable.
 // always_inline, not a hint: a branch calls this 16 times, and GCC otherwise
 // leaves a five-case switch out of line, where the call costs more than it.
 __attribute__((always_inline))
 const NodeR* result_ptr(const Child& c,
-                        const std::vector<BranchNode>& branch_nodes,
-                        const std::vector<NodeR>& aux,
+                        const BranchNodes& branch_nodes,
+                        const AuxNodes& aux,
+                        const ChainNodes& chains,
                         const Accounts& accounts,
                         const Storages& storages) {
     switch (c.type) {
         case NodeType::Empty:        return &empty_result();
         case NodeType::Branch:       return &branch_nodes[c.idx].cached;
+        case NodeType::Chain:        return &chains[c.idx].cached;
         case NodeType::Account:      return accounts.cached_at(c.idx);
         case NodeType::Storage:      return storages.cached_at(c.idx);
         case NodeType::Hash:
         case NodeType::ExtensionHash:
         case NodeType::PhantomLeaf:  return &aux[c.idx];
-        case NodeType::PoolHash:     break;  // no NodeR; read the pool
+        case NodeType::PoolHash:     break;  // no NodeR; read the stream
     }
     fatal("state_root: invalid node type");
 }
@@ -607,7 +652,7 @@ const NodeR* result_ptr(const Child& c,
 // large as its widest alternative.
 template <class T, class... Args>
 uint32_t aux_emplace(BuildCtx& ctx, Args&&... args) {
-    if (ctx.branch_n + ctx.aux_n + ctx.pool_n >= ctx.node_limit) {
+    if (ctx.branch_n + ctx.aux_n + ctx.chain_n + ctx.pool_n >= ctx.node_limit) {
         fatal("state_root: more nodes than declared (numberOfNodes overflow)");
     }
     ctx.aux.emplace_back(std::in_place_type<T>, std::forward<Args>(args)...);
@@ -677,6 +722,23 @@ Child build_node(const uint8_t*& cursor,
     fatal("state_root: invalid opcode in stream");
 }
 
+// A branch with one child (`only`, at `nibble`): grow the chain that child
+// already is by one nibble, or start a chain over it. The cached result folds
+// one more nibble, as reduce_branch would for the branch.
+Child build_chain(const Child& only, uint8_t nibble, BuildCtx& ctx) {
+    if (only.type == NodeType::Chain) {
+        ChainNode& ch = ctx.chains[only.idx];
+        ch.prefix.prepend(nibble);
+        ch.cached = fold_nibble(nibble, ch.cached);
+        return only;
+    }
+    ChainNode& ch = ctx.chains.emplace_back();
+    ch.child = only;
+    ch.prefix.prepend(nibble);
+    ch.cached = chain_result(ch, ctx);
+    return Child{NodeType::Chain, static_cast<uint32_t>(ctx.chain_n++)};
+}
+
 Child build_branch_node(const uint8_t*& cursor,
                         BuildCtx& ctx,
                         TreeKind kind,
@@ -719,7 +781,7 @@ Child build_branch_node(const uint8_t*& cursor,
     const uint8_t* cur = cursor;
     check_room(cur, __builtin_popcountll(lo));
     uint64_t pool_n = ctx.pool_n;
-    uint64_t others = ctx.branch_n + ctx.aux_n;
+    uint64_t others = ctx.branch_n + ctx.aux_n + ctx.chain_n;
     for (uint64_t m = lo | hi; m != 0; m &= m - 1) {
         const unsigned bit = static_cast<unsigned>(__builtin_ctzll(m));
         const uint8_t k = static_cast<uint8_t>(bit >> 1);
@@ -728,12 +790,17 @@ Child build_branch_node(const uint8_t*& cursor,
             if (others + pool_n >= ctx.node_limit) {
                 fatal("state_root: more nodes than declared (numberOfNodes overflow)");
             }
-            zeg::zisk::zisk_xmemcpy<32>(ctx.pool + pool_n * 32, cur);
+            // The hash stays in the stream, which outlives the node array: the
+            // child is its offset, in 8-byte words (the constructor checked the
+            // section fits 32 bits of them). Copying it out cost 32 B of heap
+            // for every hash child, never freed.
+            const uint64_t word = static_cast<uint64_t>(cur - ctx.stream) >> 3;
+            ++pool_n;
             cur += 32;
-            // Child{PoolHash, pool_n} as one aligned 8-byte store.
+            // Child{PoolHash, word} as one aligned 8-byte store.
             static_assert(sizeof(Child) == 8 && offsetof(Child, idx) == 4 &&
                           alignof(BranchNode) >= 8);
-            const uint64_t v = uint64_t(NodeType::PoolHash) | (pool_n++ << 32);
+            const uint64_t v = uint64_t(NodeType::PoolHash) | (word << 32);
             std::memcpy(__builtin_assume_aligned(&bn.children[k], 8), &v, sizeof(v));
             continue;
         }
@@ -745,15 +812,20 @@ Child build_branch_node(const uint8_t*& cursor,
         cur = cursor;
         check_room(cur, __builtin_popcountll(lo & m));
         pool_n = ctx.pool_n;
-        others = ctx.branch_n + ctx.aux_n;
+        others = ctx.branch_n + ctx.aux_n + ctx.chain_n;
     }
     ctx.pool_n = pool_n;
     cursor = cur;
-    bn.cached = reduce_branch(bn, ctx, ValueSet::Original);
 
-    if (ctx.branch_n + ctx.aux_n + ctx.pool_n >= ctx.node_limit) {
+    if (ctx.branch_n + ctx.aux_n + ctx.chain_n + ctx.pool_n >= ctx.node_limit) {
         fatal("state_root: more nodes than declared (numberOfNodes overflow)");
     }
+    // One child in the witness: part of a chain (see ChainNode), not a node.
+    if (__builtin_popcountll(lo | hi) == 1) {
+        const auto k = static_cast<uint8_t>(__builtin_ctzll(lo | hi) >> 1);
+        return build_chain(bn.children[k], k, ctx);
+    }
+    bn.cached = reduce_branch(bn, ctx, ValueSet::Original);
     ctx.branch_nodes.push_back(std::move(bn));
     return Child{NodeType::Branch, static_cast<uint32_t>(ctx.branch_n++)};
 }
@@ -829,7 +901,7 @@ Child build_leaf_node(const uint8_t*& cursor,
                 const Child storage_child = build_node(
                     cursor, ctx, TreeKind::Storage, storage_walked, &addr);
                 const evmc::bytes32 storage_root = finalize(
-                    *result_ptr(storage_child, ctx.branch_nodes, ctx.aux,
+                    *result_ptr(storage_child, ctx.branch_nodes, ctx.aux, ctx.chains,
                                 ctx.accounts, ctx.storages),
                     ctx.accounts, ctx.storages, ValueSet::Original);
 
@@ -873,9 +945,10 @@ Child build_leaf_node(const uint8_t*& cursor,
 struct EvalCtx {
     Accounts&                accounts;
     Storages&                storages;
-    std::vector<BranchNode>& branch_nodes;
-    std::vector<NodeR>&      aux;
-    const uint8_t*           pool;
+    BranchNodes&             branch_nodes;
+    AuxNodes&                aux;
+    ChainNodes&              chains;
+    const uint8_t*           stream;
 };
 
 // Walk one node of the materialized array against CURRENT values. Returns a
@@ -914,6 +987,34 @@ std::pair<const NodeR*, bool> eval_node(const Child& c, EvalCtx& ctx, std::size_
             return {r, ctx.storages.value_unchanged_at(idx)};
         }
 
+        case NodeType::Chain: {
+            ChainNode& ch = ctx.chains[c.idx];
+            switch (ch.child.type) {
+                case NodeType::Empty:
+                case NodeType::Hash:
+                case NodeType::ExtensionHash:
+                case NodeType::PhantomLeaf:
+                case NodeType::PoolHash:
+                    return {&ch.cached, true};  // a fixed child
+                default:
+                    break;
+            }
+            // chain_result reads it back via result_ptr (checked on host).
+            [[maybe_unused]] const auto [res, ro] =
+                eval_node(ch.child, ctx, depth + ch.prefix.size());
+#if !defined(ZEG_ZISK)
+            if (res != result_ptr(ch.child, ctx.branch_nodes, ctx.aux, ctx.chains,
+                                  ctx.accounts, ctx.storages)) {
+                fatal("state_root: chain child result not at its result_ptr");
+            }
+#endif
+            if (ro) {
+                return {&ch.cached, true};
+            }
+            ch.cached = chain_result(ch, ctx);
+            return {&ch.cached, false};
+        }
+
         case NodeType::Branch: {
             BranchNode& bn = ctx.branch_nodes[c.idx];
             bool all_ro = true;
@@ -933,7 +1034,7 @@ std::pair<const NodeR*, bool> eval_node(const Child& c, EvalCtx& ctx, std::size_
                 // reduce_branch reads it back via result_ptr (checked on host).
                 [[maybe_unused]] const auto [res, ro] = eval_node(child, ctx, depth + 1);
 #if !defined(ZEG_ZISK)
-                if (res != result_ptr(child, ctx.branch_nodes, ctx.aux, ctx.accounts,
+                if (res != result_ptr(child, ctx.branch_nodes, ctx.aux, ctx.chains, ctx.accounts,
                                       ctx.storages)) {
                     fatal("state_root: child result not at its result_ptr");
                 }
@@ -975,21 +1076,30 @@ StateRoot::StateRoot(const uint8_t*& cursor,
     accounts_.reserve(num_accounts);
     storages_.reserve(num_storages);
     accounts_.set_first_sorted(first_sorted);
-    aux_.reserve(num_nodes);  // aux nodes are only Hash/ExtensionHash/PhantomLeaf
-    // numberOfNodes bounds the PoolHash children; their idx is 32-bit.
+    // numberOfNodes counts every child slot of a branch (16 per branch, mostly
+    // Empty or Hash children that need no node of their own), so the node
+    // arrays are not sized by it: reserving an aux node and a 32-byte hash
+    // copy for each slot cost ~9 KB of never-freed heap per cold key on the
+    // real Sepolia trie (audit A). They grow in chunks instead.
+    // numberOfNodes bounds the node indices, which are 32-bit.
     if (num_nodes > UINT32_MAX) {
         fatal("state_root: numberOfNodes beyond 32-bit node indices");
     }
-    hash_pool_.reset(new uint8_t[static_cast<std::size_t>(num_nodes) * 32]);
+    // PoolHash children index the stream in 8-byte words, 32 bits of them.
+    stream_ = cursor;
+    if (const uint64_t left = stream_remaining(cursor);
+        left != UINT64_MAX && left / 8 > UINT32_MAX) {  // UINT64_MAX: no end set
+        fatal("state_root: witness beyond 32-bit stream offsets");
+    }
 
-    BuildCtx ctx{accounts_, storages_, branch_nodes_, aux_, phantom_values_,
+    BuildCtx ctx{accounts_, storages_, branch_nodes_, aux_, chains_, phantom_values_,
                  /*next_state_idx=*/0, /*next_storage_idx=*/0,
-                 static_cast<std::size_t>(num_nodes), hash_pool_.get()};
+                 static_cast<std::size_t>(num_nodes), stream_};
     WalkPath walked;
     root_ = build_node(cursor, ctx, TreeKind::State, walked, /*owning=*/nullptr);
 
     old_root_ = finalize(
-        *result_ptr(root_, branch_nodes_, aux_, accounts_, storages_),
+        *result_ptr(root_, branch_nodes_, aux_, chains_, accounts_, storages_),
         accounts_, storages_, ValueSet::Original);
 
     // No bijection check needed: the tables ARE the leaves (built here), so
@@ -1003,7 +1113,7 @@ evmc::bytes32 StateRoot::calculate_new_state_root() {
     // that didn't exist as an empty leaf — so there is nothing to insert:
     // evaluate the array against the current values. An empty leaf becomes
     // Empty and its branch folds; one that became non-empty is a leaf.
-    EvalCtx ctx{accounts_, storages_, branch_nodes_, aux_, hash_pool_.get()};
+    EvalCtx ctx{accounts_, storages_, branch_nodes_, aux_, chains_, stream_};
     const auto [root_res, root_ro] = eval_node(root_, ctx, 0);
     (void)root_ro;
     return finalize(*root_res, accounts_, storages_, ValueSet::Current);

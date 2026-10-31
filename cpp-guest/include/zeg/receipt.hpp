@@ -17,6 +17,7 @@
 
 #include <evmc/evmc.hpp>
 
+#include "zeg/chunked_vector.hpp"
 #include "zeg/transactions.hpp"
 
 namespace zeg {
@@ -32,13 +33,17 @@ struct LogEntry {
 // One tx receipt. `tx_type`, `status`, `cumulative_gas_used`, and
 // `logs_bloom` are finalized at the end of the tx; `logs` is filled
 // incrementally by `emit_log` during execution (with rollback
-// truncation if the EVM frame reverts).
+// truncation if the EVM frame reverts). The logs live for the whole block,
+// so they are kept in chunks: a doubling std::vector left ~2x their size of
+// dead buffers behind on the never-freed heap (LOG0 spam: ~0.9 B/gas). The
+// first chunk holds one log, so the common 1-log receipt costs no more than
+// it did in a vector.
 struct TxReceipt {
     Transactions::Type       tx_type{Transactions::Type::Legacy};
     bool                     status{false};
     uint64_t                 cumulative_gas_used{0};
     std::array<uint8_t, 256> logs_bloom{};
-    std::vector<LogEntry>    logs;
+    ChunkedVector<LogEntry, 1, 128> logs;
 };
 
 // Canonical receipt encoding per Yellow Paper §4.3.1.

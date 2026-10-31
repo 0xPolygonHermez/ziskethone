@@ -15,6 +15,8 @@
 //   * Hash / ExtensionHash /
 //     PhantomLeaf                  -> StateRoot::aux_ (a fixed, always
 //                                     read-only `NodeR`, built once)
+//   * Chain                        -> StateRoot::chains_
+//   * PoolHash                     -> the witness stream (offset in words)
 //   * Empty                        -> unused (a static EmptyR result)
 
 #pragma once
@@ -30,6 +32,7 @@
 
 #include <evmc/evmc.hpp>
 
+#include "zeg/chunked_vector.hpp"
 #include "zeg/fatal.hpp"
 
 namespace zeg {
@@ -164,7 +167,8 @@ enum class NodeType : uint8_t {
     Hash,
     ExtensionHash,
     PhantomLeaf,
-    PoolHash,  // a branch's Hash child; idx = slot in StateRoot's hash pool
+    PoolHash,  // a branch's Hash child; idx = its offset in the witness, in words
+    Chain,     // a run of single-child branches; idx = slot in StateRoot::chains_
 };
 
 struct Child {
@@ -177,6 +181,26 @@ struct BranchNode {
     NodeR                 cached;  // computed result of this branch (post-fold)
     uint64_t              tags = 0;  // witness child tags (see build_branch_node)
 };
+
+// A run of branches that each have one child in the witness: an extension
+// node the witness revealed, or the shared prefix input-gen splits off to
+// place an absent key next to an existing leaf. The stream spells it as one
+// Branch op per nibble. As BranchNodes that cost 224 bytes of never-freed heap
+// per nibble, and an author who grinds keys sharing long hashed prefixes makes
+// every touched key carry a long run of them. One ChainNode holds the whole run.
+// Its result is what the nested single-child branches fold to (reduce_branch).
+struct ChainNode {
+    Child      child;   // the innermost branch's child
+    PackedPath prefix;  // the branches' nibbles, outermost first
+    NodeR      cached;  // result with the original values, then the current ones
+};
+
+// Node arrays. Chunked: elements never move, and none of them is sized from
+// the header's numberOfNodes, which counts 16 slots per Branch op (so a long
+// prefix run would reserve 16 x 224 bytes per nibble).
+using BranchNodes = ChunkedVector<BranchNode, 64, 1024>;
+using AuxNodes    = ChunkedVector<NodeR, 64, 1024>;
+using ChainNodes  = ChunkedVector<ChainNode, 16, 1024>;
 
 // ----- shared constants + emptiness predicates ------------------------------
 

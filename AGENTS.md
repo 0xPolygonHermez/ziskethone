@@ -75,10 +75,17 @@
   per-transaction arena (`zeg/tx_arena.hpp`) that is reset at each transaction and system-call
   start (`ZiskStateDB::reset_tx_arena`).
   - **In the arena:** the journal, transient storage, evmone's EVM memory (patch 16; the VM
-    drops it through `release_tx_buffers` before the reset), and CREATE init-code analyses.
+    drops it through `release_tx_buffers` before the reset), CREATE init-code analyses
+    (evmone's in a LIFO `FrameScratch`, handed back when the frame returns), and the code a
+    transaction deploys: `Contracts::settle_staged` moves the code that survived to the heap
+    at the next reset and forgets the rest.
   - **Views, no copies:** call outputs and `return_data` point into the callee's memory, so
     anything kept past the next call at that depth must be copied (deployed code, requests).
   - **Arena memory is not zero** once reused: initialise what you allocate.
+  - **No doubling vectors for data that grows with gas:** a `std::vector` leaves every buffer
+    it outgrew behind. Use `zeg::ChunkedVector` (the journal, receipt logs, the state-root
+    node arrays) or reserve the exact count (BAL slots, receipts). evmone's EVM memory
+    recycles outgrown buffers through free lists (patch 16).
 - **Heap per backend:** evmone has about 407 MiB of heap. zevm has about 259 MiB, because its
   EVMMem zones and frame stacks are static.
 - **Measuring:** configure the ELF with `-DZEG_HEAP_STATS=ON` to print per-phase heap use.

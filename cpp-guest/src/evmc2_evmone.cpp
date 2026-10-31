@@ -21,7 +21,7 @@
 #include <evmone/vm.hpp>        // evmone::VM (the type behind the underlying vm)
 
 #include "zeg/system_addresses.hpp"  // kMaxCodeSizeAmsterdam (slot sizing)
-#include "zeg/tx_arena.hpp"          // zeg_tx_arena_alloc (CREATE analyses)
+#include "zeg/tx_arena.hpp"          // FrameScratch (CREATE analyses)
 
 namespace {
 
@@ -105,32 +105,37 @@ void w_release(evmc_vm* /*vm*/, evmc2_pre_execution* pre) noexcept {
     delete reinterpret_cast<Analysis*>(pre);
 }
 
+// Analyses of code no cache keeps (CREATE init code, or no code at all), for
+// the frame that runs it. execute() would analyze() onto the never-freed main
+// heap, about the init code's size per CREATE for the whole block (audit H2);
+// one allocation per frame from the tx arena still kept them all until the
+// transaction ended (audit D). The analysis is dead once the frame returns
+// (outputs are views of the frame's memory, patch 16), so it is handed back.
+zeg::FrameScratch g_frame_scratch;
+
 evmc_result w_execute2(evmc_vm* vm, const evmc_host_interface* host,
                        evmc_host_context* ctx, evmc_revision rev,
                        const evmc_message* msg, uint8_t const* code,
                        size_t code_size, evmc2_pre_execution* pre) noexcept {
-    auto* impl = wrap(vm)->impl;
-#if defined(ZEG_ZISK)
-    // No cached analysis (CREATE init code): analyze into the per-tx arena.
-    // execute() would analyze() onto the never-freed main heap, about the
-    // init code's size per CREATE for the whole block (audit H2). The frame
-    // ends within the transaction, so the arena outlives the analysis.
-    if (pre == nullptr) {
-        const size_t bytes = kAnalysisNode + analyze_storage_bytes(code_size);
-        auto* buf = static_cast<uint8_t*>(zeg_tx_arena_alloc(bytes));
-        pre = w_prepare(vm, code, code_size, buf, bytes);
+    auto& evm = *static_cast<evmone::VM*>(wrap(vm)->impl);
+    if (pre != nullptr) {
+        return evmone::baseline::execute(evm, *host, ctx, rev, *msg,
+                                         *reinterpret_cast<const Analysis*>(pre));
     }
-#else
-    if (pre == nullptr)  // no prepared analysis → behave exactly like execute()
-        return impl->execute(impl, host, ctx, rev, msg, code, code_size);
-#endif
-    const auto* analysis = reinterpret_cast<const Analysis*>(pre);
-    return evmone::baseline::execute(*static_cast<evmone::VM*>(impl), *host, ctx,
-                                     rev, *msg, *analysis);
+    // What evmone's own execute() does, with the analysis in the scratch.
+    const auto mark = g_frame_scratch.mark();
+    const size_t bytes = kAnalysisNode + analyze_storage_bytes(code_size);
+    auto* buf = static_cast<uint8_t*>(g_frame_scratch.alloc(bytes));
+    const auto* analysis =
+        reinterpret_cast<const Analysis*>(w_prepare(vm, code, code_size, buf, bytes));
+    const evmc_result r = evmone::baseline::execute(evm, *host, ctx, rev, *msg, *analysis);
+    g_frame_scratch.rewind(mark);
+    return r;
 }
 
 void w_release_tx_buffers(evmc_vm* vm) noexcept {
     static_cast<evmone::VM*>(wrap(vm)->impl)->release_tx_buffers();  // patch 16
+    g_frame_scratch.release();
 }
 
 }  // namespace

@@ -752,3 +752,114 @@ after the per-tx arena (a710606). Status and changes:
 - **H11 call depth.** evmone skips the 1024 check from Osaka on; patch 15
   restores it on every fork (zevm already had it), and `ZiskStateDB::call`
   fatals on a deeper message. Unreachable under EIP-7825.
+
+## Heap exhaustion by valid blocks (2026-10-30)
+
+A hunt for valid Amsterdam blocks the ELF cannot finish found several ways to run
+it out of memory, or past the emulator's step ceiling, inside Sepolia's 200M gas.
+Each memory vector was reproduced with a hand-built block that the host guest
+accepts. The blocks are EEST `blockchain_test` fixtures written by a first-party
+generator, bridged with `eest-witness-gen`, and run on heap-stats ELFs in ziskemu.
+An independent adversarial review of the first fixes found the rest.
+
+- **B — code deployed by a reverted frame stayed on the heap.**
+  - `Contracts::insert` copied every CREATE/CREATE2 output to the never-freed heap.
+  - A frame that reverts undoes the account's code hash but not the copy. EIP-8037
+    refunds the code-deposit state gas, so the same reservoir pays for the next
+    deployment: 64 KiB of distinct code per ~39k regular gas, ~1.7 bytes of heap
+    per gas.
+  - Ten such transactions (165M gas) halted zevm (`out of memory (heap)`).
+  - Fix: the copy goes in the tx arena, with its owner's account row. At the next
+    arena reset, `Contracts::settle_staged` moves the code an owner still has to
+    the heap and drops the rest from the table.
+- **D — CREATE init-code analyses piled up in the tx arena.**
+  - evmone allocated one per CREATE and kept it until the transaction ended: ~147
+    KB per CREATE of 128 KiB init code that reverts at once, 119 MB in one
+    2^24-gas transaction.
+  - On top of B's heap growth this halted evmone, the deployed backend. 10 B
+    transactions plus one D transaction (181.7M gas) end in `out of memory (tx
+    arena)`; 8 + 1 (~149M gas) are enough.
+  - Fix: evmone's uncached analyses (init code, empty code) use a LIFO
+    `zeg::FrameScratch` in the arena and hand it back when the frame returns. A
+    transaction then only holds its deepest live chain of CREATEs.
+- **A — the witness reservation was ~16× too large.**
+  - `numberOfNodes` counts all 16 child slots of every branch. The state root
+    reserved an 88-byte aux node and a 32-byte hash copy for each slot: ~8.8 KB of
+    heap per cold key on the real Sepolia trie.
+  - ~38k cold reads (~113M gas) would exhaust evmone. The benchmark blocks can't
+    show it, because their tries are shallow (~0.5 KB per key).
+  - Fix: a branch's hash children point into the input stream, and the node arrays
+    grow in chunks instead of being sized by the header.
+- **A2 — one branch node per nibble of a shared prefix.**
+  - input-gen places an absent key next to the leaf it diverges from behind one
+    single-child branch per shared nibble (and expands a revealed extension the
+    same way). The guest kept a 224-byte `BranchNode` for each.
+  - An author who grinds slot keys or addresses whose hashes share s leading
+    nibbles with existing ones makes every touched key carry ~s of them. That
+    takes a birthday search of ~5·10^8 keccaks for s = 10.
+  - The review's model puts the OOM at about s ≈ 10 for zevm and s ≈ 14 for evmone,
+    with ~95k cold SLOADs of such keys (the storage setup comes from earlier
+    blocks).
+  - Fix: a run of single-child branches is one `ChainNode` (prefix + child +
+    result). It folds exactly as the nested branches did in `reduce_branch`.
+  - Measured with ground keys: the state-root heap of 1,000 such keys is 1.42 MB
+    whether they share 8 or 10 nibbles. Before the fix it was 15.9 and 19.7 MB.
+- **Contracts index unseeded (step blow-up, not memory).**
+  - `Contracts::index_` used the first 8 bytes of the code hash as the bucket hash.
+    Those are author-chosen: grind EIP-7702 delegates or contract bytes.
+  - The bucket is that value modulo one of the guest's small fixed primes, so
+    ~2k delegation stubs fit in one bucket. Then every call to a code in it walks
+    the whole chain.
+  - The review estimates ~92·10^9 steps for one 200M-gas block, past the 2^36
+    ceiling. The host's libstdc++ primes differ, so only the ELF is hit.
+  - Fix: the per-run seeded hash, like the other maps (`zeg/seeded_hash.hpp`). A
+    call now looks its code up once (`code_and_entry` hands the entry to
+    `analysis_for`) instead of twice, which more than pays for the hash.
+- **Budget hardening.**
+  - The journal and the receipts' logs are `ChunkedVector`s. Under the bump
+    allocator a doubling `std::vector` left ~2× its size of dead buffers behind.
+  - evmone's EVM memory recycles outgrown buffers through per-size free lists
+    (patch 16). A depth's old buffer has no reader once copied.
+  - The BAL reserves one slot per storage row, and the block one receipt per
+    transaction (EIP-2780 lets a 200M block carry ~16.6k 12,000-gas transactions).
+
+Heap-stats ELFs, same inputs, before → after (heap = never-freed main heap, arena =
+peak of one transaction):
+
+| block | evmone | zevm |
+|---|---|---|
+| B×10 + D (181.7M gas) | OOM (tx arena) → heap 86.9 MB, arena 29.0 MB | OOM (heap) → 11.2 MB, 27.9 MB |
+| B×10 (165M gas) | heap 365 MB → 86.2 MB | OOM (heap) → 10.4 MB |
+| D (one 2^24 tx) | arena 119 MB → 1.6 MB | arena 13.9 → 13.5 MB |
+| LOG0 loop, 11 txs (184M gas) | heap 211.4 → 140.6 MB | 135.3 → 64.5 MB |
+| TSTORE loop (one 2^24 tx) | arena 40.4 → 27.4 MB | 40.4 → 27.4 MB |
+| recursive CALL, memory grown by doubling (one 2^24 tx) | arena 116.0 → 59.9 MB | 0.1 MB |
+| 16,000 self-transfers, 12,000 gas each (192M gas) | heap 139.9 → 135.7 MB | 63.8 → 59.6 MB |
+| 13,000 transactions with one log each (199.9M gas) | heap 134.8 → 129.7 MB | 58.7 → 53.7 MB |
+| 1,000 keys sharing 10 hashed nibbles | state root 19.7 → 1.4 MB | 19.7 → 1.4 MB |
+| Sepolia blocks 12028391, 12029017-19 | heap 96.7-103.6 → 88.5-89.8 MB (state root 9.5-15.6 → 1.5-2.2 MB) | — |
+
+Every one of these blocks gives the same root on the host and the ELF before and
+after. The ELF also matches the host and the chain on recent Sepolia blocks.
+`make eest` gives every block the verdict it had before, on both backends, and all
+2,528 killer blocks pass on both.
+
+Steps, on the killer blocks with the same inputs: the total is 0.6% lower on evmone
+and 0.4% lower on zevm, and the costliest block is unchanged (4.00 G steps on
+evmone, 13.97 G on zevm). Loops of calls and of LOG0 save the most, 7-11%: a call
+looks its code up once, and logs no longer move as a receipt grows. The largest
+increase is +4.4%, on zevm's loop of 32-byte EXTCODECOPY (+1.7% on evmone): the
+seeded code index costs a few steps per lookup. Every other block is within +2.0%.
+
+What is left, from the probes: logs are ~0.3 B/gas for the block; the witness is
+~1.2 KB per cold key (~0.6 B/gas at 2,100 gas); a transaction costs ~3.1 KB however
+little it does (parse 1.1 KB, execution 0.6 KB, receipts trie 0.8 KB, header and
+output 0.5 KB), ~50 MB for the ~16.6k that fit in 200M gas; evmone keeps a 32 KiB
+stack per call depth reached (~16 MB once, at the ~500 depths 2^24 gas reaches). A transaction's
+arena peaks at ~60 MB: recursive memory growth (the review's optimized construction
+estimates ~70 MB), TSTORE 27 MB, staged code 28 MB, nested CREATEs 27 MB.
+
+A separate limit is not a heap problem. Cold EXTCODESIZE of tens of thousands of
+pre-deployed 64 KiB contracts makes the input itself exceed ZisK's input region
+(the S3 code-loading ceiling). It needs setup worth thousands of blocks of state
+gas, and a larger input region or code metering, not a guest change.

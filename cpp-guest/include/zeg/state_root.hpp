@@ -64,19 +64,21 @@ private:
     Accounts& accounts_;
     Storages& storages_;
     // Declared node-count ceiling (header `numberOfNodes`); the build pass
-    // fatals if `branch_nodes_` + `aux_` would exceed it.
+    // fatals if the nodes it materializes would exceed it.
     uint64_t        node_limit_ = 0;
     evmc::bytes32   old_root_{};
 
     // The materialized node array. `branch_nodes_` holds every 16-ary
-    // branch (its child links + computed result); `aux_` holds the fixed,
+    // branch with two or more children (its child links + computed result);
+    // `chains_` every run of single-child branches; `aux_` the fixed,
     // always-read-only results of Hash / ExtensionHash / PhantomLeaf nodes.
     // Leaf results live on the Accounts/Storages rows. `root_` is the tree
     // root.
-    std::vector<BranchNode> branch_nodes_;
-    std::vector<NodeR>      aux_;
+    BranchNodes             branch_nodes_;
+    ChainNodes              chains_;
+    AuxNodes                aux_;
     std::deque<std::vector<uint8_t>> phantom_values_;  // PhantomLeafR points in; never moves
-    std::unique_ptr<uint8_t[]> hash_pool_;  // 32 B per PoolHash child
+    const uint8_t*          stream_ = nullptr;  // PoolHash children point into it
     Child                   root_{};
 };
 
