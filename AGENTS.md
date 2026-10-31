@@ -207,3 +207,75 @@ The procedure is in the README ("Upgrading the guest ELF"). The rules:
   coordinator for anything else (`kprove`, tests), and restart it afterwards.
 - **Ask first.** Deploying, restarting services, or touching the live nodes always needs the
   user's go-ahead.
+
+### Computing the program VK offline (coordinator down)
+
+Normally the exex mints the program VK at coordinator setup (writes `proofs/program_vk.hex`).
+When the coordinator is unreachable you can still deploy: the VK is the guest ROM's
+custom-commit Merkle root, deterministic from the ELF and **proving-key independent** (blake3,
+blowup factor 2, Merkle arity 2), so compute it offline and deploy **without starting the exex**.
+
+A tiny crate does it. Keep it in your scratchpad and rebuild it against the **local ZisK
+checkout at the prover's version tag** (`git -C ~/git/zisk describe --tags` must be e.g.
+`v1.4.0-alpha`) — the `CustomRom::build` / `write_custom_commit_c` API tracks the ZisK/proofman
+release, so a version bump may need the crate adjusted.
+
+`progvk/Cargo.toml`:
+
+```toml
+[package]
+name = "progvk"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+zisk-sm-rom = { path = "/home/jbaylina/git/zisk/state-machines/rom" }
+zisk-common = { path = "/home/jbaylina/git/zisk/common" }
+proofman-common       = "1.4.0-alpha"
+proofman-fields       = "1.4.0-alpha"
+proofman-starks-lib-c = "1.4.0-alpha"
+```
+
+`progvk/src/main.rs`:
+
+```rust
+use proofman_common::trace::Trace;
+use proofman_fields::Goldilocks;
+use zisk_common::HashMode;
+use zisk_sm_rom::CustomRom;
+
+fn main() {
+    let elf = std::fs::read(std::env::args().nth(1).expect("usage: progvk <elf>")).unwrap();
+    let mode = HashMode::Blake3;
+    proofman_starks_lib_c::set_hash_family_c("blake3"); // as GlobalInfo does for a blake3 key
+    let mut trace = CustomRom::build::<Goldilocks>(&elf).expect("building the ROM trace");
+    let (n, n_cols) = (trace.num_rows() as u64, trace.num_cols() as u64);
+    let n_ext = mode.blowup_factor() * n;
+    let mut root = [0u64; 4];
+    let buf: Vec<Goldilocks> = Trace::<Goldilocks>::get_buffer(&mut trace);
+    proofman_starks_lib_c::write_custom_commit_c(
+        root.as_mut_ptr() as *mut u8, mode.merkle_tree_arity(),
+        n.trailing_zeros() as u64, n_ext.trailing_zeros() as u64, n_cols,
+        std::ptr::null_mut(), buf.as_ptr() as *mut u8, ""); // no cache file; only the root
+    const MOD: u64 = 0xFFFF_FFFF_0000_0001; // Goldilocks modulus; reduce to canonical form
+    let bytes: Vec<u8> = root.iter().flat_map(|x| (x % MOD).to_le_bytes()).collect();
+    println!("0x{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>());
+}
+```
+
+Run it — **always validate first** by reproducing the live VK of the currently deployed ELF,
+only then trust it for the new one:
+
+```bash
+cargo build --release --manifest-path progvk/Cargo.toml
+# VALIDATE: this must equal the contents of $Z/proofs/program_vk.hex
+./target/release/progvk $Z/guest/current/zisk_eth_guest.elf
+# the new ELF's VK:
+./target/release/progvk cpp-guest/zisk/build-sepolia-evmone/zisk_eth_guest.elf
+```
+
+Then deploy with the exex stopped: stage the ELF and repoint `$Z/guest/current`, write the VK to
+`$Z/proofs/program_vk.hex`, set `PE_PROGRAM_VK` on **every** proof engine (local and remote) —
+keep `PE_SETUP_VK` (the proving key's `vadcop_final.verkey.bin`) unchanged unless the key itself
+changed — and restart the PEs. When the coordinator returns, start the exex and confirm the VK it
+mints equals the computed one (it will, being deterministic) and a fresh proof's setup VK matches;
+re-pin if either differs.
