@@ -490,6 +490,13 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
     if (block_hash_out != nullptr) {
         std::memcpy(block_hash_out, execution_block_hash.bytes, 32);
     }
+#if defined(ZEG_HEAP_STATS)
+    // Only in heap-stats builds: even as a no-op the call changes the deployed
+    // ELF's code (and so its program VK).
+    zeg::heap_block(static_cast<unsigned>(consensus.fork_id()), transactions.size(),
+                    consensus.withdrawals_count(), len, state.gas_used(),
+                    state.regular_gas_used(), state.state_gas_used());
+#endif
     zeg::heap_mark("end");
 
     return 0;

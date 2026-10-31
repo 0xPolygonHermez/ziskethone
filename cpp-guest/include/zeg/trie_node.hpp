@@ -202,6 +202,14 @@ using BranchNodes = ChunkedVector<BranchNode, 64, 1024>;
 using AuxNodes    = ChunkedVector<NodeR, 64, 1024>;
 using ChainNodes  = ChunkedVector<ChainNode, 16, 1024>;
 
+// Per-node heap costs the state-root budget relies on (HEAP_BUDGET.md). If a
+// layout change trips one of these, update the bytes in scripts/heap_gate/sites.tsv
+// (and so the generated table in HEAP_BUDGET.md) to match.
+static_assert(sizeof(Child) == 8);        // heap-budget: trie-child
+static_assert(sizeof(NodeR) == 88);       // heap-budget: trie-aux
+static_assert(sizeof(BranchNode) == 224); // heap-budget: trie-branch
+static_assert(sizeof(ChainNode) == 136);  // heap-budget: trie-chain
+
 // ----- shared constants + emptiness predicates ------------------------------
 
 // keccak256(rlp("")) — empty-trie root.

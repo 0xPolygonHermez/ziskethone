@@ -1,5 +1,5 @@
-.PHONY: all rust cpp input clean test help bridge guest-test elf-test elf exex proof-engine \
-        eest killer eest-fixtures killer-fixtures toolchain-check
+.PHONY: all rust cpp input clean test unit help bridge guest-test elf-test elf heap-elf \
+        exex proof-engine eest killer heap-gate eest-fixtures killer-fixtures toolchain-check
 
 BLOCK ?= 0
 OUTPUT ?= build/block_input.bin
@@ -35,12 +35,13 @@ TEST_HOST  := cpp-guest/build-test-$(EVM_BACKEND)
 TEST_ELF   := cpp-guest/zisk/build-test-$(EVM_BACKEND)
 DEPLOY_HOST:= cpp-guest/build-$(CHAIN)
 DEPLOY_ELF := cpp-guest/zisk/build-$(CHAIN)-$(EVM_BACKEND)
+HEAP_ELF   := cpp-guest/zisk/build-heap-$(CHAIN)-$(EVM_BACKEND)
 
 all: rust cpp
 
 help:
-	@echo "build:   rust cpp elf exex proof-engine bridge guest-test elf-test"
-	@echo "tests:   test  eest  killer"
+	@echo "build:   rust cpp elf heap-elf exex proof-engine bridge guest-test elf-test"
+	@echo "tests:   test  unit  eest  killer  heap-gate   (unit: SANITIZE=1 for ASan+UBSan)"
 	@echo "vars:    EVM_BACKEND=$(EVM_BACKEND) CHAIN=$(CHAIN) JOBS=$(JOBS) KILLER_JOBS=$(KILLER_JOBS)"
 	@echo "         KILLER_GAS=$(KILLER_GAS) FIXTURES=$(FIXTURES) ZISKEMU=$(ZISKEMU)"
 	@echo "         EEST_PATHS=... KILLER_PATHS=... (subsets) RISCV_GCC_BIN=..."
@@ -48,8 +49,20 @@ help:
 rust:
 	cargo build --release --manifest-path rust-input-gen/Cargo.toml
 
-test:
+test: unit
 	cargo test --manifest-path rust-input-gen/Cargo.toml
+
+# Host unit tests for the guest's memory-discipline building blocks (ctest
+# label "unit"). SANITIZE=1 builds them with ASan+UBSan in a separate dir.
+UNIT_HOST := $(if $(filter 1,$(SANITIZE)),cpp-guest/build-unit-asan,cpp-guest/build-unit)
+# evmone's precompiles/state libs link in uninstrumented, so turn off ASan's
+# link-order check; -fno-sanitize-recover already aborts on the first error.
+UNIT_ENV := $(if $(filter 1,$(SANITIZE)),ASAN_OPTIONS=verify_asan_link_order=0:detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1,)
+unit:
+	cmake -S cpp-guest -B $(UNIT_HOST) -DEVM_BACKEND=$(EVM_BACKEND) -DZEG_FORK_FROM_INPUT=ON \
+		-DZEG_SANITIZE=$(if $(filter 1,$(SANITIZE)),ON,OFF)
+	cmake --build $(UNIT_HOST) --target zeg_unit_tests -j $(JOBS)
+	$(UNIT_ENV) ctest --test-dir $(UNIT_HOST) -L unit --output-on-failure
 
 input: rust
 	cargo run --release --manifest-path rust-input-gen/Cargo.toml -- \
@@ -68,9 +81,10 @@ cpp:
 # (audit H8). The ELF records them: strings <elf> | grep ZEG_BUILD_FLAGS.
 DEPLOY_FLAGS := -DEVM_BACKEND=$(EVM_BACKEND) -DZEG_CHAIN=$(CHAIN) \
 	-DZEG_FORK_FROM_INPUT=OFF -DZEG_PUBLIC_OUTPUT=npr
-DEPLOY_ELF_FLAGS := -DCMAKE_BUILD_TYPE=Release -DZEG_HEAP_STATS=OFF \
-	-DZEG_JUMPDEST_SW=OFF -DZEG_BSWAP_BUILTIN=ON -DZEG_ZISK_DMA=OFF \
-	-DZEG_ANALYSIS_CACHE_SLOTS=1152
+# The deployed ELF's code options, shared with the heap-stats ELF (heap-elf).
+ELF_OPT_FLAGS := -DCMAKE_BUILD_TYPE=Release -DZEG_JUMPDEST_SW=OFF -DZEG_BSWAP_BUILTIN=ON \
+	-DZEG_ZISK_DMA=OFF -DZEG_ANALYSIS_CACHE_SLOTS=1152
+DEPLOY_ELF_FLAGS := $(ELF_OPT_FLAGS) -DZEG_HEAP_STATS=OFF
 
 elf: toolchain-check
 	cmake -S cpp-guest -B $(DEPLOY_HOST) $(DEPLOY_FLAGS)
@@ -103,8 +117,18 @@ guest-test:
 elf-test: guest-test toolchain-check
 	cmake -S cpp-guest/zisk -B $(TEST_ELF) -DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN) \
 		-DCMAKE_BUILD_TYPE=Release -DEVM_BACKEND=$(EVM_BACKEND) -DZEG_FORK_FROM_INPUT=ON \
-		-DEVMONE_SRC=$(ROOT)/$(TEST_HOST)/_deps/evmone-src
+		-DZEG_HEAP_STATS=OFF -DEVMONE_SRC=$(ROOT)/$(TEST_HOST)/_deps/evmone-src
 	cmake --build $(TEST_ELF) --target zisk_eth_guest.elf -j $(JOBS)
+
+# The deployed ELF's options plus per-phase heap stats (HEAP lines on the UART),
+# fork from the input: what heap-gate runs. Never deployable (the exex refuses
+# heap_stats=1).
+heap-elf: guest-test toolchain-check
+	cmake --fresh -S cpp-guest/zisk -B $(HEAP_ELF) -DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN) \
+		-DEVM_BACKEND=$(EVM_BACKEND) -DZEG_CHAIN=$(CHAIN) -DZEG_FORK_FROM_INPUT=ON \
+		-DZEG_PUBLIC_OUTPUT=npr $(ELF_OPT_FLAGS) -DZEG_HEAP_STATS=ON \
+		-DEVMONE_SRC=$(ROOT)/$(TEST_HOST)/_deps/evmone-src
+	cmake --build $(HEAP_ELF) --target zisk_eth_guest.elf -j $(JOBS)
 
 # ----- fixtures (downloaded once; delete the .done stamp to refetch) ---------
 
@@ -136,6 +160,18 @@ eest: rust bridge guest-test eest-fixtures
 killer: rust bridge elf-test killer-fixtures
 	scripts/killer_sweep.sh -g $(TEST_HOST)/zisk_eth_guest -e $(TEST_ELF)/zisk_eth_guest.elf \
 		-z $(ZISKEMU) -o build/killer-$(KILLER_GAS)-$(EVM_BACKEND) -j $(KILLER_JOBS) $(KILLER_PATHS)
+
+# Heap regression gate (HEAP_BUDGET.md): the gate blocks on the heap-stats ELF,
+# each block's heap/arena checked against its baseline, the bound, and a hard
+# share of the ELF heap. Uses the mainnet killer fixtures (chain id 1), so it
+# needs CHAIN=mainnet. HEAP_GATE_UPDATE=1 rewrites the baseline.
+heap-gate: unit rust bridge heap-elf killer-fixtures
+	@[ "$(CHAIN)" = mainnet ] || { echo "heap-gate needs CHAIN=mainnet (killer fixtures are chain 1)"; exit 2; }
+	scripts/heap_gate.py --backend $(EVM_BACKEND) --gas $(KILLER_GAS) --release "$(KILLER_RELEASE)" \
+		--host $(TEST_HOST)/zisk_eth_guest --elf $(HEAP_ELF)/zisk_eth_guest.elf \
+		--ziskemu $(ZISKEMU) --fixtures $(KILLER_PATHS) --jobs $(KILLER_JOBS) \
+		-o build/heap-gate-$(KILLER_GAS)-$(EVM_BACKEND)
+	scripts/heap_bound.py --backend $(EVM_BACKEND) --chain all --elf $(HEAP_ELF)/zisk_eth_guest.elf
 
 clean:
 	cargo clean --manifest-path rust-input-gen/Cargo.toml

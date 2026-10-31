@@ -1,0 +1,26 @@
+# Heap allocation sites of the ZisK guest, as a budget model (HEAP_BUDGET.md).
+# scripts/heap_bound.py reads this: `fixed`, `tx` and `arena` rows SUM per
+# backend; `gas` rows take the MAX (one gas unit is spent once, so per-gas heap
+# is bounded by the costliest way to spend it). `both` applies to evmone+zevm.
+#
+# Static .bss (keccak-f memo 100 MiB, zevm's 128 MiB EVM-memory zones and 33 MiB
+# frames) is NOT here: it is outside _heap_start.._heap_end, so it does not count
+# against the heap. Witness/code bytes are viewed in the input region, not
+# copied; the heap rows that index TOUCHED state are the gas rows below. A
+# witness larger than the 2 GiB input region is the S3 ceiling (operator-side),
+# not a heap term.
+#
+# bytes_per_unit: absolute for `fixed`/`arena`, B per regular-gas for `gas`,
+# B per transaction for `tx`.
+#
+backend	site	lifetime	resource	bytes_per_unit	citation
+evmone	analysis_cache	heap	fixed	85072992	evmc2_evmone.cpp:kSlotBytes(73808)*1152 + analysis_cache.hpp:50-51
+evmone	vm_state_vector	heap	fixed	467400	evmone vm.cpp:79 reserve(1025)*sizeof(ExecutionState)
+evmone	call_stacks	heap	fixed	33587200	evmone execution_state.hpp:51 32KiB/depth, <=1025 depths
+zevm	analysis_cache	heap	fixed	9483360	zevm.cpp:413 slot(8192)*1152 + analysis_cache.hpp:50-51
+both	cold_key_witness	heap	gas	0.60	state_root.cpp + accounts.cpp/storages.cpp: ~1.2KB per cold key / 2100 gas
+both	surviving_logs	heap	gas	0.375	zisk_state_db.cpp:647-655 receipt.hpp logs; 375+8/byte gas
+both	warmkey_revert_churn	heap	gas	0.30	warm_keys.hpp erase-on-rollback dead nodes, ~250 gas/cycle
+both	per_tx_overhead	heap	tx	3200	parse 1.1K + receipts-trie 0.8K + header/NPR 0.5K + exec 0.6K per tx
+evmone	tx_arena_peak	arena	arena	70000000	evmc2_evmone.cpp memory views + FrameScratch; recursive-memory tx
+zevm	tx_arena_peak	arena	arena	40000000	journal + transient map in the arena (zevm EVM memory is static .bss)

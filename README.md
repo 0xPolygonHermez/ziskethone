@@ -279,6 +279,26 @@ coordinator rather than emulate them, use `kprove` (`reth-zisk-exex/src/bin/kpro
 takes a list of input files and writes a CSV of proving times; stop the live exex first,
 because the coordinator runs one program at a time.
 
+## Heap regression gate: `make heap-gate`
+
+`make killer` checks correctness; the guest must also never run out of memory on a valid
+block. [HEAP_BUDGET.md](HEAP_BUDGET.md) bounds the guest's heap use per block and the gate
+keeps a change from silently exceeding it:
+
+```bash
+make heap-gate CHAIN=mainnet                  # evmone
+make heap-gate CHAIN=mainnet EVM_BACKEND=zevm  # zevm
+make unit                                     # the underlying memory-discipline unit tests
+make unit SANITIZE=1                           # the same under ASan+UBSan
+```
+
+It runs the heaviest killer blocks (`scripts/heap_gate/blocks-0200M.txt`) on a heap-stats ELF
+(`make heap-elf`) with a pinned seed, reads the per-phase `HEAP` lines, and fails if any
+block's heap or arena use regresses past its committed baseline
+(`scripts/heap_gate/baseline-0200M-<backend>.tsv`), past the modeled worst-case bound
+(`scripts/heap_bound.py`), or past 60% of the ELF heap. After an intended increase, rerun
+with `HEAP_GATE_UPDATE=1` and commit the new baseline with the code change.
+
 ## Live proving and deployment (Sepolia)
 
 The live stack proves every Sepolia block with ZisK and publishes the proofs over the
@@ -369,7 +389,8 @@ VK**. Every proof engine that verifies the proofs must pin it, including remote 
 receive the proofs over gossip. The exex mints the VK, so the steps go in this order:
 
 1. **Check before deploying.**
-   - Run `make killer` and `make eest` on the new code.
+   - Run `make killer`, `make eest`, and `make heap-gate CHAIN=mainnet` (both backends) on
+     the new code.
    - Run the host guest and the ELF on a few recent Sepolia blocks (`input-gen` on blocks
      near the head). Both must give the chain's hash and the same root.
 2. **Install.**
@@ -413,12 +434,15 @@ Things to keep in mind:
 |---|---|
 | `make all` / `rust` / `cpp` | Host tools, and the mainnet evmone host guest in `cpp-guest/build`. |
 | `make input BLOCK=N` | `build/block_input.bin` from the RPC. |
-| `make test` | Rust unit tests. |
+| `make test` | Rust unit tests, plus the host `unit` tests. |
+| `make unit [SANITIZE=1]` | Host memory-discipline unit tests (ASan+UBSan with `SANITIZE=1`). |
 | `make elf [CHAIN=] [EVM_BACKEND=]` | The deployable ZisK ELF. |
+| `make heap-elf [CHAIN=] [EVM_BACKEND=]` | A heap-stats ELF (`HEAP` lines); not deployable. |
 | `make exex` / `proof-engine` / `bridge` | Builds those crates. |
 | `make guest-test` / `elf-test` | Host guest and ELF with `ZEG_FORK_FROM_INPUT=ON`. |
 | `make eest [EEST_PATHS=]` | The EEST conformance sweep. |
 | `make killer [KILLER_GAS=] [KILLER_PATHS=]` | The prover-killer sweep on the ELF. |
+| `make heap-gate CHAIN=mainnet [EVM_BACKEND=]` | The heap regression gate ([HEAP_BUDGET.md](HEAP_BUDGET.md)). |
 | `make help` | Lists the variables: `EVM_BACKEND`, `CHAIN`, `JOBS`, `KILLER_JOBS`, `FIXTURES`, `ZISKEMU`, `RISCV_GCC_BIN`. |
 
 ## License

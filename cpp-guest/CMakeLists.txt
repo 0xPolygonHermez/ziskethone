@@ -390,9 +390,50 @@ endif()
 
 # ----- host unit tests -------------------------------------------------------
 #
+# Host executables that check the guest's memory-discipline building blocks
+# (zeg/chunked_vector.hpp, zeg/tx_arena.hpp, the seeded hash, Contracts staging,
+# state-root ChainNode folding). Each is a plain main() that exits non-zero on
+# failure (see test/*.cpp). They back the HEAP_BUDGET.md invariants and the
+# `make heap-gate` regression check. Build and run them with `make unit`
+# (optionally SANITIZE=1); they are EXCLUDE_FROM_ALL so the guest/eest/killer
+# builds don't depend on them.
+enable_testing()
+add_custom_target(zeg_unit_tests)
+
+# ZEG_SANITIZE=ON puts ASan+UBSan on the unit-test targets only (SANITIZE=1 via
+# the Makefile). It never touches the guest ELF or the sweep binaries.
+option(ZEG_SANITIZE "Build the zeg unit tests with ASan+UBSan" OFF)
+set(ZEG_SANITIZE_OPTS "")
+if(ZEG_SANITIZE)
+    set(ZEG_SANITIZE_OPTS -fsanitize=address,undefined -fno-sanitize-recover=all)
+endif()
+
+# zeg_unit_test(<name> <source> [extra sources...])
+function(zeg_unit_test name)
+    add_executable(${name} EXCLUDE_FROM_ALL ${ARGN})
+    target_include_directories(${name} PRIVATE include ${evmone_SOURCE_DIR}/lib
+        ${evmone_SOURCE_DIR}/include)
+    target_compile_options(${name} PRIVATE -Wall -Wextra -Wpedantic ${ZEG_SANITIZE_OPTS})
+    target_link_options(${name} PRIVATE ${ZEG_SANITIZE_OPTS})
+    target_link_libraries(${name} PRIVATE evmone::precompiles intx::intx)
+    add_test(NAME ${name} COMMAND ${name})
+    set_tests_properties(${name} PROPERTIES LABELS unit)
+    add_dependencies(zeg_unit_tests ${name})
+endfunction()
+
 # Known-answer tests for the SSZ merkleization behind the EIP-8025
 # new_payload_request_root (test/ssz_test.cpp).
-add_executable(ssz_test test/ssz_test.cpp src/ssz.cpp src/fatal.cpp)
-target_include_directories(ssz_test PRIVATE include)
-target_compile_options(ssz_test PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(ssz_test PRIVATE evmone::precompiles)
+zeg_unit_test(ssz_test test/ssz_test.cpp src/ssz.cpp src/fatal.cpp)
+
+# Memory-discipline tests (HEAP_BUDGET.md). test/alloc_count.hpp counts host
+# heap bytes so a test can assert bytes-per-operation, the host stand-in for
+# the guest's never-freeing bump allocator.
+zeg_unit_test(chunked_vector_test test/chunked_vector_test.cpp)
+zeg_unit_test(tx_arena_test test/tx_arena_test.cpp)
+zeg_unit_test(seeded_hash_test test/seeded_hash_test.cpp)
+zeg_unit_test(contracts_test test/contracts_test.cpp src/contracts.cpp src/fatal.cpp)
+# state_root_chain_test #includes ../src/state_root.cpp for its file-internal
+# folding helpers, so it must not also link that object.
+zeg_unit_test(state_root_chain_test test/state_root_chain_test.cpp
+    src/accounts.cpp src/storages.cpp src/block_access_list.cpp src/contracts.cpp
+    src/mpt.cpp src/hex_prefix.cpp src/rlp.cpp src/fatal.cpp)

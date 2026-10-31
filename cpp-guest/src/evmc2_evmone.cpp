@@ -79,6 +79,9 @@ inline constexpr size_t analyze_storage_bytes(size_t code_size) {
 // Slot size = node + storage for the largest cacheable (deployed) code.
 inline constexpr size_t kSlotBytes =
     kAnalysisNode + analyze_storage_bytes(zeg::kMaxCodeSizeAmsterdam);
+// The fixed analysis cache is 1152 * kSlotBytes (the biggest heap reservation);
+// if this moves, update scripts/heap_gate/sites.tsv and HEAP_BUDGET.md.
+static_assert(kSlotBytes == 73808);  // heap-budget: evmone-analysis-slot
 
 evmc2_pre_execution* w_prepare(evmc_vm* /*vm*/, uint8_t const* code,
                                size_t code_size, uint8_t* out_buf,

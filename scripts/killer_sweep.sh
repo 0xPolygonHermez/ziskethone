@@ -17,7 +17,10 @@
 # expect_exception blocks. Writes OUT/results.log (verdict rc steps secs
 # fixture block) and prints a tally plus the 20 costliest blocks by steps.
 # Env: MAXSTEPS (default 2^36-1), TMO (per-block seconds, default 7200),
-# P1_JOBS (phase-1 jobs, default nproc/2), SKIP_P1=1 (rerun phase 2 only).
+# P1_JOBS (phase-1 jobs, default nproc/2), SKIP_P1=1 (rerun phase 2 only),
+# ONLY_BLOCKS=<file of "slug/block-i" lines> (the heap gate): process and
+# emulate only those blocks. The bridge skips every other test (--only-tests),
+# phase 1 skips every other block, and phase 2 runs only the listed ones.
 set -uo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -49,8 +52,10 @@ done
 MAXSTEPS=${MAXSTEPS:-68719476735}
 TMO=${TMO:-7200}
 P1_JOBS=${P1_JOBS:-$(( ($(nproc) + 1) / 2 ))}
+ONLY_BLOCKS=${ONLY_BLOCKS:-}
+[ -n "$ONLY_BLOCKS" ] && ONLY_BLOCKS=$(realpath "$ONLY_BLOCKS")
 mkdir -p "$OUT/work" "$OUT/p1"
-export BRIDGE INPUTGEN HOST ELF ZISKEMU OUT MAXSTEPS TMO
+export BRIDGE INPUTGEN HOST ELF ZISKEMU OUT MAXSTEPS TMO ONLY_BLOCKS
 
 # One fixture: one line per block in OUT/p1/<id>:
 #   status neg expected_hash host_hash host_output input_base fixture name
@@ -60,14 +65,20 @@ phase1() {
     [ -e "$OUT/p1/$ID" ] && return 0     # done in an earlier run
     P=$OUT/p1/.$ID.tmp; rm -f "$P"
     rm -rf "$W"; mkdir -p "$W"
-    "$BRIDGE" --fixture "$FIX" --output-dir "$W" >"$W/bridge.log" 2>&1 || echo "BRIDGE_FAIL $FIX" >>"$P"
+    local only=()
+    [ -n "$ONLY_BLOCKS" ] && only=(--only-tests "$ONLY_BLOCKS")
+    "$BRIDGE" --fixture "$FIX" --output-dir "$W" "${only[@]}" >"$W/bridge.log" 2>&1 \
+        || echo "BRIDGE_FAIL $FIX" >>"$P"
     local i=0 m
     for m in $(find "$W" -name 'block-*.json' | sort); do
         i=$((i+1))
         local base=${m%.json} B=$W/b$i exp neg=0 name
+        name=$(basename "$(dirname "$m")")/$(basename "$m" .json)
+        # With an allowlist, a kept test's setup blocks are still written; run
+        # only the listed blocks (b<i> numbering is unaffected — i already ++'d).
+        [ -n "$ONLY_BLOCKS" ] && ! grep -qxF "$name" "$ONLY_BLOCKS" && continue
         exp=$(jq -r '.current.hash // empty' "$m")
         [ -s "$base.expect" ] && neg=1
-        name=$(basename "$(dirname "$m")")/$(basename "$m" .json)
         if ! "$INPUTGEN" --manifest "$m" --output "$B.bin" >"$B.ig.log" 2>&1; then
             echo "IG_FAIL $neg $exp - - $B $FIX $name" >>"$P"; continue
         fi
@@ -119,6 +130,12 @@ fi
 cat "$OUT"/p1/[!.]* > "$OUT/blocks.txt"
 grep -h '^BRIDGE_FAIL' "$OUT/blocks.txt" > "$OUT/bridge_fail.txt"
 grep -v '^BRIDGE_FAIL' "$OUT/blocks.txt" > "$OUT/blocks.run"
+if [ -n "$ONLY_BLOCKS" ]; then
+    # Keep only listed blocks (field 8 = name), so a copied/superset p1 narrows
+    # to the allowlist for phase 2.
+    awk 'NR==FNR{k[$0];next} ($8 in k)' "$ONLY_BLOCKS" "$OUT/blocks.run" > "$OUT/blocks.run.tmp"
+    mv "$OUT/blocks.run.tmp" "$OUT/blocks.run"
+fi
 echo "phase 1: $(wc -l <"$OUT/blocks.run") blocks, $(wc -l <"$OUT/bridge_fail.txt") bridge failures"
 
 # Biggest inputs first, so the slowest blocks don't finish last.
