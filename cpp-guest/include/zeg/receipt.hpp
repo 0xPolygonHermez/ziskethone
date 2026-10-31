@@ -46,6 +46,12 @@ struct TxReceipt {
     ChunkedVector<LogEntry, 1, 128> logs;
 };
 
+// Heap costs the receipts/logs budget relies on (HEAP_BUDGET.md): one receipt
+// per tx (reserved exactly) and one slot per surviving log. A layout change
+// here means updating scripts/heap_gate/sites.tsv.
+static_assert(sizeof(LogEntry) == 72);   // heap-budget: log-entry
+static_assert(sizeof(TxReceipt) == 344); // heap-budget: tx-receipt
+
 // Canonical receipt encoding per Yellow Paper §4.3.1.
 std::vector<uint8_t> encode_receipt(const TxReceipt& r);
 

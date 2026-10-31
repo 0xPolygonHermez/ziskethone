@@ -59,6 +59,20 @@
     `build/killer-0200M-<backend>/results.log`.
   - It needs `ziskemu` (`ZISKEMU=`) and the xpack GCC (`RISCV_GCC_BIN=`).
   - Expected: every block PASSes on both backends.
+- **`make unit`**: host unit tests for the guest's memory-discipline building blocks
+  (`cpp-guest/test/*_test.cpp`: ChunkedVector, the tx arena / FrameScratch, the seeded hash,
+  Contracts staging, state-root ChainNode folding). `make unit SANITIZE=1` runs them under
+  ASan+UBSan. Also run by `make test`.
+- **`make heap-gate CHAIN=mainnet`**: the heap regression gate (`scripts/heap_gate.py`, see
+  [HEAP_BUDGET.md](HEAP_BUDGET.md)). It runs the heaviest killer blocks
+  (`scripts/heap_gate/blocks-0200M.txt`) on a heap-stats ELF (`make heap-elf`) with a pinned
+  seed, and fails if any block's heap or arena use regresses past its baseline
+  (`scripts/heap_gate/baseline-0200M-<backend>.tsv`), past the modeled bound
+  (`scripts/heap_bound.py` over `scripts/heap_gate/sites.tsv`), or past 60% of the ELF heap.
+  `HEAP_GATE_UPDATE=1` rewrites the baseline for an intended change — commit the new TSV with
+  the code change and quote the per-block deltas it prints. If a `// heap-budget:`
+  `static_assert` trips, a per-node size moved: update `sites.tsv` (and so HEAP_BUDGET.md,
+  which `heap_bound.py --self-check` keeps in sync).
 - **Common variables:** `EVM_BACKEND=zevm` runs either suite on zevm. `JOBS` and
   `KILLER_JOBS` (default 4) set the parallelism.
 - **Memory:** ziskemu and the bridge are RAM-heavy. With the nodes running (about 20 GB of
@@ -88,7 +102,10 @@
     recycles outgrown buffers through free lists (patch 16).
 - **Heap per backend:** evmone has about 407 MiB of heap. zevm has about 259 MiB, because its
   EVMMem zones and frame stacks are static.
-- **Measuring:** configure the ELF with `-DZEG_HEAP_STATS=ON` to print per-phase heap use.
+- **Measuring:** `make heap-elf` builds a heap-stats ELF (`-DZEG_HEAP_STATS=ON`) that prints
+  per-phase `HEAP` lines and a per-block `HEAP block` line. [HEAP_BUDGET.md](HEAP_BUDGET.md)
+  turns these into a worst-case bound checked by `make heap-gate`; `scripts/heap_bound.py`
+  computes the bound and `--self-check`s the doc, the `static_assert`s and the citations.
 - **When a valid block fails:** an EMU_ERR on a block the host guest passes is usually heap
   exhaustion.
 
@@ -181,8 +198,9 @@ The procedure is in the README ("Upgrading the guest ELF"). The rules:
      at it.
   2. Restart `reth-zisk-sepolia`. At setup it writes `proofs/program_vk.hex`.
   3. Set `PE_PROGRAM_VK` on **every** proof engine, local and remote, and restart them.
-- **Before deploying:** `make killer` and `make eest` must pass. The host guest and the ELF
-  must agree on recent Sepolia blocks.
+- **Before deploying:** `make killer`, `make eest` and `make heap-gate CHAIN=mainnet` must
+  pass (the last on both backends: `EVM_BACKEND=evmone` and `=zevm`). The host guest and the
+  ELF must agree on recent Sepolia blocks.
 - **Build stamp:** build the deployed ELF with `make elf`. It carries `ZEG_BUILD_FLAGS:`, and
   the exex refuses an ELF without a deploy stamp for its chain.
 - **The coordinator runs one program at a time.** Stop `reth-zisk-sepolia` before using the

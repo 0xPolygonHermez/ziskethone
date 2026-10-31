@@ -185,6 +185,9 @@ public:
     uint64_t gas_used() const noexcept {
         return std::max(block_regular_gas_used_, block_state_gas_used_);
     }
+    // The two dimensions behind gas_used() (for zeg::heap_block).
+    uint64_t regular_gas_used() const noexcept { return block_regular_gas_used_; }
+    uint64_t state_gas_used() const noexcept { return block_state_gas_used_; }
 
     // Canonical withdrawals trie root (EIP-4895). Empty list yields the
     // well-known empty-trie root.

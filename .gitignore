@@ -36,3 +36,7 @@ build/
 
 # hob (runtime / personal state)
 .hob/
+
+# Python bytecode from scripts/
+__pycache__/
+*.pyc

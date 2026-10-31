@@ -171,6 +171,10 @@ private:
     // arena until the transaction ended (~25 MB more in one 2^24-gas TSTORE
     // loop). See zeg/chunked_vector.hpp.
     ChunkedVector<Entry, 256, 4096, TxArenaAllocator<Entry>> entries_;
+
+    // Per-entry arena cost the journal budget relies on (HEAP_BUDGET.md); a
+    // layout change means updating scripts/heap_gate/sites.tsv.
+    static_assert(sizeof(Entry) == 96);  // heap-budget: journal-entry
 };
 
 } // namespace zeg

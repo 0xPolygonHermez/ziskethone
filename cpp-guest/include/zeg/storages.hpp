@@ -36,7 +36,10 @@ class Storages {
 public:
     // Internal record stride in bytes. Documented in `View` below. No
     // longer a wire size — the table is built via `append`, not parsed.
-    static constexpr uint64_t kRecordSize = 88;
+    // Reserved once per block, so it is a per-storage-row heap cost the budget
+    // relies on (HEAP_BUDGET.md); update scripts/heap_gate/sites.tsv if it moves.
+    static constexpr uint64_t kRecordSize = 88;  // heap-budget: storage-record
+    static_assert(kRecordSize == 88);
 
     // Starts empty. Call `reserve(numberOfStorages)` once, then `append`
     // one row per storage-trie leaf during the StateRoot old-root walk.

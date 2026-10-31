@@ -396,6 +396,11 @@ evmc_result w_execute2(evmc_vm* /*vm*/, const evmc_host_interface* host,
 
 }  // namespace zevm
 
+// zevm's analysis-cache slot is the jumpdest bitset for the largest deployed
+// code; 1152 * this is the fixed cache. Pinned for the heap budget
+// (HEAP_BUDGET.md / scripts/heap_gate/sites.tsv).
+static_assert(((zeg::kMaxCodeSizeAmsterdam + 63) / 64) * 8 == 8192);  // heap-budget: zevm-analysis-slot
+
 extern "C" evmc2_vm* evmc2_create_zevm(void) {
     static evmc2_vm vm = {
         .base = {
@@ -410,6 +415,8 @@ extern "C" evmc2_vm* evmc2_create_zevm(void) {
         .execute2              = zevm::w_execute2,
         .release_pre_execution = zevm::w_release,
         // Slot = the jumpdest bitset for the largest cacheable (deployed) code.
+        // 1152 * this is zevm's fixed analysis cache (HEAP_BUDGET.md); if it
+        // moves, update scripts/heap_gate/sites.tsv.
         .analysis_slot_bytes   = ((zeg::kMaxCodeSizeAmsterdam + 63) / 64) * 8,
     };
     return &vm;

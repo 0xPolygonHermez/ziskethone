@@ -25,6 +25,7 @@
 //! gives us a clean entry point to layer reth on top in the next
 //! work block.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -54,6 +55,45 @@ struct Args {
     /// `<test_name>/block-<idx>.json`.
     #[arg(long, default_value = "build/eest-manifests")]
     output_dir: PathBuf,
+
+    /// Only process tests whose output slug is listed in this file (one per
+    /// line; a trailing `/block-<n>` is ignored, so the heap gate's block list
+    /// works directly). Tests not listed are skipped before execution, which
+    /// avoids the bridge cost of unwanted tests in a large fixture file. When
+    /// absent, every test in the fixture is processed.
+    #[arg(long)]
+    only_tests: Option<PathBuf>,
+}
+
+/// The output-directory slug for a test name: non-alphanumerics to `_`, capped
+/// at 180 chars, plus a deterministic hash of the full name for uniqueness.
+/// Must stay in lockstep with the directory created below.
+fn test_slug(name: &str) -> String {
+    let mut slug = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect::<String>();
+    slug.truncate(180);
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    name.hash(&mut h);
+    slug.push_str(&format!("_{:016x}", h.finish()));
+    slug
+}
+
+/// Load the `--only-tests` slug allowlist, stripping any `/block-<n>` suffix.
+fn load_only_tests(path: &std::path::Path) -> Result<HashSet<String>> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("reading --only-tests {}", path.display()))?;
+    Ok(text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(|l| match l.rsplit_once("/block-") {
+            Some((slug, n)) if n.chars().all(|c| c.is_ascii_digit()) => slug.to_string(),
+            _ => l.to_string(),
+        })
+        .collect())
 }
 
 fn main() -> Result<()> {
@@ -73,6 +113,12 @@ fn main() -> Result<()> {
 
     let fixture = load_fixture(&args.fixture)
         .with_context(|| format!("loading fixture {}", args.fixture.display()))?;
+
+    let only_tests = args
+        .only_tests
+        .as_deref()
+        .map(load_only_tests)
+        .transpose()?;
 
     info!(test_count = fixture.len(), "parsed fixture");
 
@@ -127,6 +173,13 @@ fn main() -> Result<()> {
     let mut failed_fixtures = 0usize;
 
     for (name, test) in &fixture {
+        let slug = test_slug(name);
+        // Skip tests not on the allowlist before the costly execute+bridge.
+        if let Some(only) = &only_tests {
+            if !only.contains(&slug) {
+                continue;
+            }
+        }
         info!(test = %name, network = %test.network, blocks = test.blocks.len(), "executing");
 
         let chain_spec = match chain_spec::from_network(&test.network, &test.config.blob_schedule) {
@@ -168,21 +221,11 @@ fn main() -> Result<()> {
             }
         };
 
-        let mut slug = name
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-            .collect::<String>();
-        // Cap the directory-name component well under the OS filename limit
-        // (255 bytes on macOS/ext4). EEST parametrized test names can exceed it,
-        // which would fail `create_dir_all` with "File name too long". Keep a
-        // readable prefix and append a deterministic hash of the full name for
-        // uniqueness — always, since names differing only in non-alphanumerics
-        // (`…N+1]` vs `…N-1]`) share a slug and would overwrite each other.
-        slug.truncate(180);
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        name.hash(&mut h);
-        slug.push_str(&format!("_{:016x}", h.finish()));
+        // `slug` (computed above) caps the directory-name component well under
+        // the OS filename limit (255 bytes on macOS/ext4): EEST parametrized
+        // names can exceed it, and names differing only in non-alphanumerics
+        // (`…N+1]` vs `…N-1]`) would otherwise collide, so the name hash is
+        // always appended.
         let test_dir = args.output_dir.join(&slug);
         std::fs::create_dir_all(&test_dir)
             .with_context(|| format!("creating {}", test_dir.display()))?;

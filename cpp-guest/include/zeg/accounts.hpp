@@ -40,7 +40,10 @@ class Accounts {
 public:
     // Internal record stride in bytes. Documented in `View` below. No
     // longer a wire size — the table is built via `append`, not parsed.
-    static constexpr uint64_t kRecordSize = 128;
+    // Reserved once per block, so it is a per-account heap cost the budget
+    // relies on (HEAP_BUDGET.md); update scripts/heap_gate/sites.tsv if it moves.
+    static constexpr uint64_t kRecordSize = 128;  // heap-budget: account-record
+    static_assert(kRecordSize == 128);
 
     // Starts empty. Call `reserve(numberOfAccounts)` once, then `append`
     // one row per state-trie leaf during the StateRoot old-root walk.
