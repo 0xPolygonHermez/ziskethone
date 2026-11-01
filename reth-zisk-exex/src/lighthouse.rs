@@ -167,13 +167,19 @@ fn requests(r: &Value) -> Result<Requests> {
         b.extend(hex_field(c, "target_pubkey")?);
         Ok(())
     })?;
-    // EIP-8282 builder requests: field names not pinned down yet; let the
-    // engine tap handle such blocks.
-    for k in ["builder_deposits", "builder_exits"] {
-        if r[k].as_array().is_some_and(|a| !a.is_empty()) {
-            bail!("envelope has {k}; not converted");
-        }
-    }
+    // EIP-8282 builder requests (Gloas `BuilderDepositRequest` / `BuilderExitRequest`).
+    push(0x03, &r["builder_deposits"], &|d, b| {
+        b.extend(hex_field(d, "pubkey")?);
+        b.extend(hex_field(d, "withdrawal_credentials")?);
+        b.extend(u64_field(d, "amount")?.to_le_bytes());
+        b.extend(hex_field(d, "signature")?);
+        Ok(())
+    })?;
+    push(0x04, &r["builder_exits"], &|e, b| {
+        b.extend(hex_field(e, "source_address")?);
+        b.extend(hex_field(e, "pubkey")?);
+        Ok(())
+    })?;
     Ok(Requests::new(out))
 }
 
@@ -215,6 +221,29 @@ fn envelope_to_block(msg: &Value) -> Result<(SealedBlock<reth_ethereum::Block>, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builder_requests() {
+        let h = |b: u8, n: usize| format!("0x{}", hex::encode(vec![b; n]));
+        let r = serde_json::json!({
+            "deposits": [], "withdrawals": [], "consolidations": [],
+            "builder_deposits": [{"pubkey": h(1, 48), "withdrawal_credentials": h(2, 32), "amount": "258", "signature": h(3, 96)}],
+            "builder_exits": [{"source_address": h(4, 20), "pubkey": h(5, 48)}],
+        });
+        let reqs = requests(&r).unwrap();
+        let reqs: Vec<_> = reqs.iter().collect();
+        assert_eq!(reqs.len(), 2);
+        let mut dep = vec![0x03];
+        dep.extend([1; 48]);
+        dep.extend([2; 32]);
+        dep.extend(258u64.to_le_bytes());
+        dep.extend([3; 96]);
+        assert_eq!(reqs[0].as_ref(), dep.as_slice());
+        let mut exit = vec![0x04];
+        exit.extend([4; 20]);
+        exit.extend([5; 48]);
+        assert_eq!(reqs[1].as_ref(), exit.as_slice());
+    }
 
     #[test]
     fn engine_json() {
