@@ -30,11 +30,13 @@ Measured on Sepolia, in ms from reth receiving newPayload (medians of 10 blocks 
 
 For comparison, re-executing after reth's own execution started proving at a median of 977 ms. The earlier BAL path, which carried only the parent and relied on a native pre-check, started at 304 ms, but 983 ms when a block read an older ancestor and had to be retried. With execution the ancestors are exact, so there are no retries.
 
-**Taking payloads from Lighthouse directly** (`--zisk.lighthouse-early`: its `execution_payload_gossip` SSE event, then `GET /eth/v1/beacon/execution_payload_envelopes/{root}`) gains nothing:
+**Taking payloads from Lighthouse directly** (`--zisk.lighthouse-early`: its `execution_payload_gossip` SSE event, then `GET /eth/v1/beacon/execution_payload_envelopes/{root}`) gains nothing when Lighthouse calls newPayload:
 - the gossip event arrives only 2–6 ms before Lighthouse's newPayload reaches reth;
 - the envelope isn't served until Lighthouse has imported the payload, after the EL has executed it (≈ +100 ms).
 
-The flag stays as a second source: the first one wins.
+But a Lighthouse running with `--proof-engine-endpoint` (the live Sepolia node) is optimistic and sends reth **no newPayload at all**, only forkchoiceUpdated; reth fetches the blocks itself. The tap then never fires, and the envelope is the source of every job. The envelope's EIP-7685 requests are rebuilt from its typed lists, including the EIP-8282 builder deposits (`0x03`) and exits (`0x04`), and the recomputed block hash must match the payload's.
+
+**Fallback.** When reth adds a block to the canonical chain and no source has started a job for it (an envelope that failed to convert or wasn't served in time, and no newPayload), the job starts from reth's executed block, re-executing it for the input (no BAL) and finding the beacon block root through the beacon API. Only blocks less than two slots old are taken, so catching up after a restart doesn't start a job per block. The first source wins; the others are only marked on the block's timeline.
 
 The guest commits only the 32-byte `new_payload_request_root`. The ExEx supplies the rest of the EIP-8025 `PublicInput`:
 - `successful_validation = true`, since the guest halts on an invalid block;

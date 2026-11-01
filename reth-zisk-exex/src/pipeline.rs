@@ -1,7 +1,8 @@
 //! One proof in flight: each payload, as soon as it is seen (the engine's
-//! payload tap, or Lighthouse's gossip when `--zisk.lighthouse-early`),
-//! starts a job (witness → pre-check → trim → prove → sign → submit). A newer
-//! block — the next height, or a replacement at the same height — cancels the
+//! payload tap, or Lighthouse's gossip when `--zisk.lighthouse-early`, else
+//! the executed block once reth adds it to the canonical chain), starts a
+//! job (witness → pre-check → trim → prove → sign → submit). A newer block —
+//! the next height, or a replacement at the same height — cancels the
 //! previous job at any stage, including a proof already running on the
 //! coordinator, which is `CancelJob`-ed to free the worker, and starts the new
 //! one. A reorg or an invalid block also discards the in-flight proof.
@@ -55,12 +56,17 @@ pub struct Incoming {
     pub bal: Option<alloy_primitives::Bytes>,
     /// The beacon block committing to the payload, when the source knows it.
     pub beacon_root: Option<Root>,
-    /// Timeline label of the source (`tap_payload`, `lh_envelope`).
+    /// Timeline label of the source (`tap_payload`, `lh_envelope`, `engine_executed`).
     pub source: &'static str,
     pub at: SystemTime,
     /// Earlier timeline marks from the same source (e.g. `lh_gossip`).
     pub extra_marks: Vec<(&'static str, SystemTime)>,
 }
+
+/// A canonical block no payload source delivered is proved from reth's
+/// executed copy only while it is this recent (two slots), so catching up
+/// after a restart does not start a job per block.
+const FALLBACK_MAX_AGE_SECS: u64 = 24;
 
 pub struct Config {
     pub mode: Mode,
@@ -192,7 +198,26 @@ where
             ConsensusEngineEvent::BlockReceived(num_hash) => {
                 self.timeline(num_hash.hash).mark("newpayload_received");
             }
-            ConsensusEngineEvent::CanonicalBlockAdded(executed, _) | ConsensusEngineEvent::ForkBlockAdded(executed, _) => {
+            ConsensusEngineEvent::CanonicalBlockAdded(executed, _) => {
+                self.timeline(executed.recovered_block.hash()).mark("executed");
+                // Fallback source: a live block no payload source delivered.
+                // Lighthouse in proof-engine mode sends no newPayload (so the
+                // tap is silent), and an envelope can fail to convert or
+                // arrive late; prove the executed block by re-execution.
+                let block = executed.recovered_block.sealed_block();
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                if !self.started.contains(&block.hash()) && now.saturating_sub(block.timestamp) <= FALLBACK_MAX_AGE_SECS {
+                    self.on_payload(Incoming {
+                        block: block.clone(),
+                        bal: None,
+                        beacon_root: None,
+                        source: "engine_executed",
+                        at: SystemTime::now(),
+                        extra_marks: vec![],
+                    });
+                }
+            }
+            ConsensusEngineEvent::ForkBlockAdded(executed, _) => {
                 self.timeline(executed.recovered_block.hash()).mark("executed");
             }
             ConsensusEngineEvent::InvalidBlock { block, error } => {
