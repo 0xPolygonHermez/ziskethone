@@ -92,6 +92,10 @@ endif()
 #       on ZEG_ZISK. The bump allocator never frees, so the per-call malloc
 #       leaked every output: a 200M-gas block RETURNing 1 KiB per CALL
 #       exhausted the heap. The arena is reset at every transaction start.
+#   17: ADD and SUB through the same U256 ABI as 03 (zkvm_u256_le_add/sub,
+#       inline zkvmcalls on the add256 precompile) instead of intx's carry
+#       chain, gated on ZEG_ZISK like 03. Each op saves about 18 steps (about
+#       870 of cost net of the precompile) on mainnet blocks.
 # The check covers the whole stack, not each patch alone: patches may overlap
 # (13 edits lines in 12's context), so a per-patch `git apply --reverse
 # --check` misreads an applied stack as missing 12. Instead we build
@@ -116,6 +120,7 @@ set(_evmone_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/14-evmone-zisk-tx-arena-call-output.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/15-evmone-depth-limit-all-forks.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/16-evmone-zisk-memory-views.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/17-evmone-zisk-u256-add-sub.patch"
 )
 find_program(GIT_EXECUTABLE git REQUIRED)
 set(_patched_index "${CMAKE_CURRENT_BINARY_DIR}/evmone-patched.index")
