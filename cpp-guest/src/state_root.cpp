@@ -384,6 +384,20 @@ const NodeR* result_ptr(const Child& c, const BranchNodes& branch_nodes,
 inline const uint8_t* pool_hash(const uint8_t* stream, uint32_t idx) {
     return stream + std::size_t{idx} * 8;
 }
+// A child that is neither Empty nor PoolHash: an already-built node whose result has
+// to be looked up and encoded. Under a tenth of the slots, and its encoders need a
+// large frame and most of the registers, so it stays out of pack_branch's loop:
+// inlined there, it made every call save and restore all twelve callee-saved
+// registers.
+template <class Ctx>
+__attribute__((noinline)) std::size_t emit_node_slot(uint8_t* dst, const Child& c,
+                                                     const Ctx& ctx, ValueSet which)
+{
+    return emit_child_slot(dst, *result_ptr(c, ctx.branch_nodes, ctx.aux, ctx.chains,
+                                            ctx.accounts, ctx.storages),
+                           ctx.accounts, ctx.storages, which);
+}
+
 template <class Ctx>
 evmc::bytes32 pack_branch(const std::array<Child, 16>& children, const Ctx& ctx,
                           ValueSet which)
@@ -395,20 +409,30 @@ evmc::bytes32 pack_branch(const std::array<Child, 16>& children, const Ctx& ctx,
 
     alignas(8) uint8_t buf[kBufSize];
 
-    std::size_t n = kHdrGap;
+    // A local, not ctx.stream: the copy below clobbers memory, so the field would
+    // be reloaded for every hash child.
+    const uint8_t* const stream = ctx.stream;
+    uint8_t* p = buf + kHdrGap;
     for (const Child& c : children) {
-        if (c.type == NodeType::Empty) {
-            buf[n++] = 0x80;
-        } else if (c.type == NodeType::PoolHash) {
-            buf[n] = kRlpHash32Header;
-            zeg::zisk::zisk_xmemcpy<32>(buf + n + 1, pool_hash(ctx.stream, c.idx));
-            n += kSlotMax;
+        // The whole 8-byte Child in one aligned load. Reading `type` and `idx`
+        // separately is a byte and a 4-byte access, which ZisK bills far above
+        // one aligned 8-byte one. Padding bytes 1..3 are masked off.
+        static_assert(sizeof(Child) == 8 && offsetof(Child, idx) == 4 &&
+                      alignof(BranchNode) >= 8);
+        uint64_t v;
+        std::memcpy(&v, __builtin_assume_aligned(&c, 8), sizeof(v));
+        const auto type = static_cast<NodeType>(v & 0xff);
+        if (type == NodeType::Empty) {
+            *p++ = 0x80;
+        } else if (type == NodeType::PoolHash) {
+            p[0] = kRlpHash32Header;
+            zeg::zisk::zisk_xmemcpy<32>(p + 1, pool_hash(stream, static_cast<uint32_t>(v >> 32)));
+            p += kSlotMax;
         } else {
-            n += emit_child_slot(buf + n, *result_ptr(c, ctx.branch_nodes, ctx.aux, ctx.chains,
-                                                      ctx.accounts, ctx.storages),
-                                 ctx.accounts, ctx.storages, which);
+            p += emit_node_slot(p, c, ctx, which);
         }
     }
+    std::size_t n = static_cast<std::size_t>(p - buf);
     buf[n++] = 0x80;  // the branch's own value slot — always empty
 
     const std::size_t payload = n - kHdrGap;
@@ -778,30 +802,36 @@ Child build_branch_node(const uint8_t*& cursor,
     const auto check_room = [](const uint8_t* c, uint64_t hashes) {
         if (stream_remaining(c) < 32 * hashes) fatal("stream: advance past end of input");
     };
+    // A Hash child stays in the stream, which outlives the node array: the child
+    // is Child{PoolHash, word}, `word` its offset from the section start in 8-byte
+    // words (the constructor checked the section fits 32 bits of them). Copying the
+    // hash out cost 32 B of heap for every hash child, never freed. The hashes sit
+    // back to back between Node children, so the next one's Child is the previous
+    // one's plus 4 words, kept ready as one aligned 8-byte value.
+    static_assert(sizeof(Child) == 8 && offsetof(Child, idx) == 4 &&
+                  alignof(BranchNode) >= 8);
+    constexpr uint64_t kHashStep = uint64_t{32 / 8} << 32;
+    const uint8_t* const stream = ctx.stream;
+    const auto pool_child = [stream](const uint8_t* at) {
+        return uint64_t(NodeType::PoolHash) | (uint64_t(at - stream) >> 3 << 32);
+    };
+
     const uint8_t* cur = cursor;
     check_room(cur, __builtin_popcountll(lo));
     uint64_t pool_n = ctx.pool_n;
-    uint64_t others = ctx.branch_n + ctx.aux_n + ctx.chain_n;
+    uint64_t next = pool_child(cur);
+    // Hash children count against numberOfNodes like every other node, but only
+    // the check after the loop enforces it: it fires whenever a per-child check
+    // would have (the counts only grow), and a Hash child allocates nothing, so
+    // nothing in between relies on the limit. Node children check their own.
     for (uint64_t m = lo | hi; m != 0; m &= m - 1) {
         const unsigned bit = static_cast<unsigned>(__builtin_ctzll(m));
         const uint8_t k = static_cast<uint8_t>(bit >> 1);
         if ((lo >> bit) & 1U) {
-            // Counts against numberOfNodes exactly as aux_emplace did.
-            if (others + pool_n >= ctx.node_limit) {
-                fatal("state_root: more nodes than declared (numberOfNodes overflow)");
-            }
-            // The hash stays in the stream, which outlives the node array: the
-            // child is its offset, in 8-byte words (the constructor checked the
-            // section fits 32 bits of them). Copying it out cost 32 B of heap
-            // for every hash child, never freed.
-            const uint64_t word = static_cast<uint64_t>(cur - ctx.stream) >> 3;
             ++pool_n;
+            std::memcpy(__builtin_assume_aligned(&bn.children[k], 8), &next, sizeof(next));
+            next += kHashStep;
             cur += 32;
-            // Child{PoolHash, word} as one aligned 8-byte store.
-            static_assert(sizeof(Child) == 8 && offsetof(Child, idx) == 4 &&
-                          alignof(BranchNode) >= 8);
-            const uint64_t v = uint64_t(NodeType::PoolHash) | (word << 32);
-            std::memcpy(__builtin_assume_aligned(&bn.children[k], 8), &v, sizeof(v));
             continue;
         }
         ctx.pool_n = pool_n;
@@ -812,7 +842,7 @@ Child build_branch_node(const uint8_t*& cursor,
         cur = cursor;
         check_room(cur, __builtin_popcountll(lo & m));
         pool_n = ctx.pool_n;
-        others = ctx.branch_n + ctx.aux_n + ctx.chain_n;
+        next = pool_child(cur);
     }
     ctx.pool_n = pool_n;
     cursor = cur;
