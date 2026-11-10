@@ -693,7 +693,9 @@ evmc_access_status ZiskStateDB::access_account(const evmc::address& addr) noexce
     // account counts as loaded only if that charge succeeds, which shows as
     // a further host callback in the same frame or the frame ending
     // normally (run_frame drops it on an exceptional halt). Matches revm
-    // skipping a cold load it can't pay for.
+    // skipping a cold load it can't pay for. Every paid access must make that
+    // further callback before the opcode ends, or a later halt loses it; a
+    // size-0 EXTCODECOPY reads the balance for this.
     if (bal_) bal_pending_ = idx;
     return was_warm ? EVMC_ACCESS_WARM : EVMC_ACCESS_COLD;
 }
