@@ -47,10 +47,10 @@ help:
 	@echo "         EEST_PATHS=... KILLER_PATHS=... (subsets) RISCV_GCC_BIN=..."
 
 rust:
-	cargo build --release --manifest-path rust-input-gen/Cargo.toml
+	cargo build --release --locked --manifest-path rust-input-gen/Cargo.toml
 
 test: unit
-	cargo test --manifest-path rust-input-gen/Cargo.toml
+	cargo test --locked --manifest-path rust-input-gen/Cargo.toml
 
 # Host unit tests for the guest's memory-discipline building blocks (ctest
 # label "unit"). SANITIZE=1 builds them with ASan+UBSan in a separate dir.
@@ -65,7 +65,7 @@ unit:
 	$(UNIT_ENV) ctest --test-dir $(UNIT_HOST) -L unit --output-on-failure
 
 input: rust
-	cargo run --release --manifest-path rust-input-gen/Cargo.toml -- \
+	cargo run --release --locked --manifest-path rust-input-gen/Cargo.toml -- \
 		--block $(BLOCK) --output $(OUTPUT)
 
 cpp:
@@ -95,10 +95,10 @@ elf: toolchain-check
 	@echo "ELF: $(DEPLOY_ELF)/zisk_eth_guest.elf"
 
 exex:
-	cd reth-zisk-exex && cargo build --release
+	cd reth-zisk-exex && cargo build --release --locked
 
 proof-engine:
-	cd proof-engine && cargo build --release
+	cd proof-engine && cargo build --release --locked
 
 toolchain-check:
 	@command -v riscv-none-elf-g++ >/dev/null || { \
@@ -108,7 +108,7 @@ toolchain-check:
 # ----- test builds -----------------------------------------------------------
 
 bridge:
-	cargo build --release --manifest-path eest-witness-gen/Cargo.toml
+	cargo build --release --locked --manifest-path eest-witness-gen/Cargo.toml
 
 guest-test:
 	cmake -S cpp-guest -B $(TEST_HOST) -DEVM_BACKEND=$(EVM_BACKEND) -DZEG_FORK_FROM_INPUT=ON

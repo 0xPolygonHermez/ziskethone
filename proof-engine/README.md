@@ -45,8 +45,8 @@ Both VKs are trusted configuration. A proof's own claimed VKs never count.
 ## Build
 
 ```bash
-cd proof-engine && cargo build --release      # -> target/release/zisk-proof-engine
-cargo test --release
+cd proof-engine && cargo build --release --locked   # -> target/release/zisk-proof-engine
+cargo test --release --locked
 ```
 
 ## Run

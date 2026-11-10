@@ -48,10 +48,11 @@ It writes the `PublicInput` and its `hash_tree_root` to `public_input.json`. The
 ## Build
 
 ```bash
-cd reth-zisk-exex && cargo build --release      # → target/release/reth-zisk
+cd reth-zisk-exex && cargo build --release --locked   # → target/release/reth-zisk
 ```
 - Rustc 1.95.
-- `.cargo/config.toml` makes Cargo resolve to versions that support rustc 1.95, because vergen 10.0.3 (pulled by reth) needs rustc 1.96. The repo does not commit `Cargo.lock` files.
+- `.cargo/config.toml` makes Cargo resolve to versions that support rustc 1.95, because vergen 10.0.3 (pulled by reth) needs rustc 1.96.
+- `Cargo.lock` is committed and the build is `--locked`: a fresh resolution picks crate versions that don't build together (`alloy-rlp-derive` 0.3.17 with `alloy-rlp` 0.3.16).
 - The crate is not a member of the root workspace.
 - `protoc` is needed for the coordinator client in `proto/`, which is vendored from ZisK v1.3.2-alpha.
 
