@@ -170,6 +170,7 @@ pub(crate) fn add_witness_keys(
 /// Mainnet (chain id 1):
 /// - BPO2   : 2026-01-07 (activationTime 1767747671), fraction 11684671, target 14, max 21
 /// - BPO1   : 2025-12-09 (1765290071),                fraction 8346193,  target 10, max 15
+/// - Osaka  : 2025-12-03 (1764798551), blob schedule unchanged from Prague
 /// - Prague : 2025-05-07 (1746612311),                fraction 5007716,  target 6,  max 9
 /// - Cancun : 2024-03-13 (1710338135),                fraction 3338477,  target 3,  max 6
 ///
@@ -186,17 +187,16 @@ pub(crate) fn add_witness_keys(
 ///
 /// `is_osaka` (EVM-revision dispatch) is tracked separately from the blob
 /// schedule rows — Osaka itself doesn't change the blob target/fraction (only
-/// the later BPO forks do). On mainnet it's approximated to BPO2's activation,
-/// which is immaterial in practice since this path only ever replays blocks
-/// within the node's ~32-block recent window (see CLAUDE.md). Amsterdam needs
-/// no flag: the guest detects it from the header's block_access_list_hash.
+/// the later BPO forks do). It must match the guest's `fork_schedule.hpp`,
+/// which halts on any other fork_id. Amsterdam needs no flag: the guest
+/// detects it from the header's block_access_list_hash.
 pub fn fork_params(chain_id: u64, timestamp: u64) -> Result<(bool, u64, u64, u64)> {
     const GAS_PER_BLOB: u64 = 131_072;
     // (osaka_activation, schedule) per chain; schedule rows are
     // (activation_time, base_fee_update_fraction, target_blob_count, max_blob_count).
     let (osaka_activation, schedule): (u64, &[(u64, u64, u64, u64)]) = match chain_id {
         1 => (
-            1767747671,
+            1764798551,
             &[
                 (1767747671, 11684671, 14, 21), // BPO2
                 (1765290071, 8346193, 10, 15),  // BPO1
@@ -445,5 +445,66 @@ mod tests {
             1,
             "parent number must appear exactly once"
         );
+    }
+
+    /// The guest's compiled-in schedule rows for one chain: (activation, is Osaka
+    /// or later, target blob gas, max blob gas, update fraction). The guest halts
+    /// on an input whose fork differs from these, so `fork_params` must agree.
+    fn guest_schedule(chain_section: &str) -> Vec<(u64, bool, u64, u64, u64)> {
+        const GAS_PER_BLOB: u64 = 131_072;
+        let num = |s: &str| s.trim().trim_end_matches("* kGasPerBlob").trim().parse::<u64>().unwrap();
+        chain_section
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix('{'))
+            .filter(|l| l.contains("ForkId::"))
+            .map(|l| {
+                let (act, rest) = l.split_once(", {ForkId::").unwrap();
+                let (fork, rest) = rest.split_once(',').unwrap();
+                let fields: Vec<&str> = rest.split("}}").next().unwrap().split(',').collect();
+                let is_osaka = matches!(fork, "Osaka" | "Amsterdam");
+                (
+                    num(act),
+                    is_osaka,
+                    num(fields[0]) * GAS_PER_BLOB,
+                    num(fields[1]) * GAS_PER_BLOB,
+                    num(fields[2]),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn fork_params_match_the_guest_schedule() {
+        let hpp = include_str!("../../cpp-guest/include/zeg/fork_schedule.hpp");
+        let (sepolia, mainnet) = hpp
+            .split_once("#if defined(ZEG_CHAIN_SEPOLIA)")
+            .unwrap()
+            .1
+            .split_once("#else")
+            .unwrap();
+        let mainnet = mainnet.split_once("#endif").unwrap().0;
+        for (chain_id, section) in [(1u64, mainnet), (11_155_111, sepolia)] {
+            let rows = guest_schedule(section);
+            assert!(rows.len() >= 5, "chain {chain_id}: parsed {} rows", rows.len());
+            for (act, is_osaka, target, max, fraction) in &rows {
+                let got = fork_params(chain_id, *act).unwrap();
+                assert_eq!(got, (*is_osaka, *fraction, *target, *max), "chain {chain_id} at {act}");
+            }
+            // One second before each fork, the previous row applies.
+            for pair in rows.windows(2) {
+                let (act, ..) = pair[0];
+                let (_, is_osaka, target, max, fraction) = pair[1];
+                let got = fork_params(chain_id, act - 1).unwrap();
+                assert_eq!(got, (is_osaka, fraction, target, max), "chain {chain_id} at {}", act - 1);
+            }
+        }
+    }
+
+    #[test]
+    fn mainnet_osaka_starts_at_fusaka() {
+        // Audit C4: Osaka, not BPO2, is where mainnet leaves Prague.
+        assert!(!fork_params(1, 1_764_798_550).unwrap().0);
+        assert!(fork_params(1, 1_764_798_551).unwrap().0);
+        assert!(fork_params(1, 1_765_290_071).unwrap().0); // BPO1
     }
 }
