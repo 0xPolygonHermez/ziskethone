@@ -1,0 +1,17 @@
+diff --git a/lib/evmone/instructions.hpp b/lib/evmone/instructions.hpp
+--- a/lib/evmone/instructions.hpp
++++ b/lib/evmone/instructions.hpp
+@@ -761,6 +761,13 @@
+         if (const auto num_bytes_to_clear = s - num_bytes_copied; num_bytes_to_clear > 0)
+             std::memset(&state.memory[dst + num_bytes_copied], 0, num_bytes_to_clear);
+     }
++    else if (state.rev >= EVMC_AMSTERDAM)
++    {
++        // ziskethone: the access is paid for, so the account is loaded (EIP-7928) even
++        // with nothing to copy. The host counts a load only on a host call after the
++        // access, and a later halt in this frame would otherwise lose it.
++        (void)state.host.get_balance(addr);
++    }
+ 
+     return {EVMC_SUCCESS, gas_left};
+ }

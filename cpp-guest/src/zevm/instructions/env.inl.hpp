@@ -320,6 +320,11 @@ bool op_extcodecopy(EvmState& s, Regs& R) {
             s.host->copy_code(s.context, &addr, static_cast<size_t>(src), mem, static_cast<size_t>(size));
         if (static_cast<size_t>(size) > copied)
             std::memset(mem + copied, 0, static_cast<size_t>(size) - copied);
+    } else if (s.rev >= EVMC_AMSTERDAM) {
+        // The access is paid for, so the account is loaded (EIP-7928) even with
+        // nothing to copy: the host counts a load only on a host call after the
+        // access, and a later halt in this frame would otherwise lose it.
+        (void)s.host->get_balance(s.context, &addr);
     }
     return true;
 }

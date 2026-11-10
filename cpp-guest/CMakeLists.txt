@@ -92,6 +92,10 @@ endif()
 #       on ZEG_ZISK. The bump allocator never frees, so the per-call malloc
 #       leaked every output: a 200M-gas block RETURNing 1 KiB per CALL
 #       exhausted the heap. The arena is reset at every transaction start.
+#   17: A size-0 EXTCODECOPY reads the balance from Amsterdam on, as it makes
+#       no copy_code call: the host counts the paid access as an EIP-7928 load
+#       only on a further host call (audit N1). Not done before Amsterdam, where
+#       the address needn't have a witness row.
 # The check covers the whole stack, not each patch alone: patches may overlap
 # (13 edits lines in 12's context), so a per-patch `git apply --reverse
 # --check` misreads an applied stack as missing 12. Instead we build
@@ -116,6 +120,7 @@ set(_evmone_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/14-evmone-zisk-tx-arena-call-output.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/15-evmone-depth-limit-all-forks.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/16-evmone-zisk-memory-views.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/17-evmone-extcodecopy-zero-bal-load.patch"
 )
 find_program(GIT_EXECUTABLE git REQUIRED)
 set(_patched_index "${CMAKE_CURRENT_BINARY_DIR}/evmone-patched.index")
