@@ -190,8 +190,40 @@ pub fn run_fixture(
         })
         .collect();
 
-    insert_genesis_state(&provider, genesis_state.iter())
+    // Code that starts like an EIP-7702 designator (0xef0100) but isn't 23 bytes
+    // is ordinary pre-London code (EIP-3541 stops new 0xef code), so only a
+    // pre-state holds it. reth's genesis import rejects it (`new_raw_checked`),
+    // so seed those accounts without code and store the code as legacy bytecode,
+    // as a node synced from before London has it; revm then runs it as such.
+    let legacy_ef01: Vec<(Address, Bytes)> = genesis_state
+        .iter()
+        .filter_map(|(addr, g)| {
+            g.code
+                .as_ref()
+                .filter(|c| c.starts_with(&[0xef, 0x01, 0x00]) && c.len() != 23)
+                .map(|c| (*addr, c.clone()))
+        })
+        .collect();
+    let mut seed_state = genesis_state.clone();
+    for (addr, _) in &legacy_ef01 {
+        seed_state.get_mut(addr).expect("seeded account").code = None;
+    }
+    insert_genesis_state(&provider, seed_state.iter())
         .context("insert_genesis_state")?;
+    for (addr, code) in &legacy_ef01 {
+        use reth_db::transaction::{DbTx, DbTxMut};
+        let hash = keccak256(code);
+        let tx = provider.tx_ref();
+        tx.put::<reth_db::tables::Bytecodes>(
+            hash,
+            reth_primitives_traits::Bytecode(Bytecode::new_legacy(code.clone())),
+        )?;
+        let mut account = tx
+            .get::<reth_db::tables::PlainAccountState>(*addr)?
+            .context("seeded account missing from PlainAccountState")?;
+        account.bytecode_hash = Some(hash);
+        tx.put::<reth_db::tables::PlainAccountState>(*addr, account)?;
+    }
     insert_genesis_hashes(&provider, genesis_state.iter())
         .context("insert_genesis_hashes")?;
     insert_genesis_history(&provider, genesis_state.iter())
