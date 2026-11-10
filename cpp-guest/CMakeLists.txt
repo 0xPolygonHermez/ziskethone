@@ -437,6 +437,9 @@ zeg_unit_test(chunked_vector_test test/chunked_vector_test.cpp)
 zeg_unit_test(tx_arena_test test/tx_arena_test.cpp)
 zeg_unit_test(seeded_hash_test test/seeded_hash_test.cpp)
 zeg_unit_test(contracts_test test/contracts_test.cpp src/contracts.cpp src/fatal.cpp)
+# Input-validation rules from the 2026-11-10 audit: RLP header sizes (M1),
+# zero alignment padding (P1), ancestor field counts (W1).
+zeg_unit_test(input_checks_test test/input_checks_test.cpp src/fatal.cpp)
 # state_root_chain_test #includes ../src/state_root.cpp for its file-internal
 # folding helpers, so it must not also link that object.
 zeg_unit_test(state_root_chain_test test/state_root_chain_test.cpp

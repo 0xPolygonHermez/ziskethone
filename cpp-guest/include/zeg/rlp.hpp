@@ -54,12 +54,16 @@ Bytes encode_list_payload(BytesView payload);
 // caller reserved ahead of it — the header's length depends on the payload's, so
 // it cannot be written up front. `prepend_*` return the new start offset.
 
+// Longest item header: the long-form byte plus up to 8 length bytes for a
+// 64-bit length (audit M1; 5 bytes covered lengths below 2^32 only).
+inline constexpr std::size_t kMaxHeaderSize = 1 + sizeof(std::size_t);
+
 namespace detail {
 
-// Header into a caller buffer (max 5 B); returns its length. Short form is
-// `ShortBase + len`, long form `LongBase + len-of-len` then the length.
+// Header into a caller buffer (max kMaxHeaderSize B); returns its length. Short
+// form is `ShortBase + len`, long form `LongBase + len-of-len` then the length.
 template <uint8_t ShortBase, uint8_t LongBase>
-inline std::size_t make_header(uint8_t hdr[5], std::size_t payload_len) {
+inline std::size_t make_header(uint8_t hdr[kMaxHeaderSize], std::size_t payload_len) {
     if (payload_len <= 55) {
         hdr[0] = static_cast<uint8_t>(ShortBase + payload_len);
         return 1;
@@ -95,7 +99,7 @@ inline std::size_t prepend(uint8_t* buf, std::size_t start, std::size_t end) {
         buf[start - 1] = static_cast<uint8_t>(ShortBase + len);
         return start - 1;
     }
-    uint8_t hdr[5];
+    uint8_t hdr[kMaxHeaderSize];
     const std::size_t n = make_header<ShortBase, LongBase>(hdr, len);
     __builtin_memcpy(buf + start - n, hdr, n);
     return start - n;
@@ -105,7 +109,7 @@ inline std::size_t prepend(uint8_t* buf, std::size_t start, std::size_t end) {
 
 // Encoded size of a string or list item with a `payload_len`-byte payload.
 inline std::size_t item_size(std::size_t payload_len) {
-    uint8_t hdr[5];
+    uint8_t hdr[kMaxHeaderSize];
     return detail::make_header<0x80, 0xb7>(hdr, payload_len) + payload_len;
 }
 
@@ -120,7 +124,7 @@ inline std::size_t write_string(uint8_t* dst, const uint8_t* src, std::size_t le
         __builtin_memcpy(dst + 1, src, len);
         return 1 + len;
     }
-    uint8_t hdr[5];
+    uint8_t hdr[kMaxHeaderSize];
     const std::size_t n = detail::make_header<0x80, 0xb7>(hdr, len);
     __builtin_memcpy(dst, hdr, n);
     __builtin_memcpy(dst + n, src, len);

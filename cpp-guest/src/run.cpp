@@ -38,6 +38,26 @@
 
 namespace zeg {
 
+namespace {
+
+// Whether this block is London's activation block, whose parent predates EIP-1559.
+// A deployed build takes its forks from the schedule, which starts long after
+// London, so that block is never the one being proven, and a zero parent base fee
+// is a malformed parent, not the sign of an activation (audit S2). Test builds
+// replay EEST's London-transition fixtures, where the zero fee is the only sign.
+bool is_london_activation([[maybe_unused]] const intx::uint256& parent_base_fee) noexcept {
+#if defined(ZEG_FORK_FROM_INPUT)
+    return parent_base_fee == 0;
+#else
+    if (parent_base_fee == 0) {
+        fatal("parent base_fee_per_gas is zero after London");
+    }
+    return false;
+#endif
+}
+
+} // namespace
+
 int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_out[32]) {
     // 1. Validate the ZEG0 magic + version directly on the in-memory buffer
     //    (mirrors read_input_stream) and position the cursor past the 8-byte
@@ -113,11 +133,15 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
     //     Cancun-or-later: pre-Cancun blocks have no blob schedule and all
     //     these fields decode to 0.
     if (consensus.fork_id() >= zeg::ForkId::Cancun) {
-        const auto&    parent      = previous_blocks.at(0);
-        const uint64_t parent_used = parent.blob_gas_used();
-        const uint64_t parent_sum  = parent.excess_blob_gas() + parent_used;
-        const uint64_t target      = consensus.target_blob_gas_per_block();
-        uint64_t expected_excess;
+        // The sums are mathematical integers (EIP-4844), so add in 256 bits: two
+        // u64 header fields can't wrap, and a result past 2^64 - 1 can't be any
+        // header's value, so it is rejected below (audit S4).
+        const auto&         parent      = previous_blocks.at(0);
+        const uint64_t      parent_used = parent.blob_gas_used();
+        const intx::uint256 parent_sum  =
+            intx::uint256{parent.excess_blob_gas()} + parent_used;
+        const uint64_t      target      = consensus.target_blob_gas_per_block();
+        intx::uint256 expected_excess;
         if (parent_sum < target) {
             expected_excess = 0;
         } else if (consensus.fork_id() >= zeg::ForkId::Osaka) {
@@ -141,15 +165,14 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
                 const uint64_t max = consensus.max_blob_gas_per_block();
                 const intx::uint256 scaled =
                     (intx::uint256{parent_used} * (max - target)) / max;
-                expected_excess = parent.excess_blob_gas() +
-                    static_cast<uint64_t>(scaled);
+                expected_excess = intx::uint256{parent.excess_blob_gas()} + scaled;
             } else {
                 expected_excess = parent_sum - target;
             }
         } else {
             expected_excess = parent_sum - target;
         }
-        if (consensus.excess_blob_gas() != expected_excess) {
+        if (expected_excess != intx::uint256{consensus.excess_blob_gas()}) {
             zeg::fatal("excess_blob_gas mismatch: header's claimed value doesn't "
                       "match the EIP-4844/7918 formula applied to the parent block");
         }
@@ -164,7 +187,7 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
         const intx::uint256  parent_base_fee  =
             intx::be::load<intx::uint256>(parent.base_fee_per_gas());
         intx::uint256 expected_base_fee;
-        if (parent_base_fee == 0) {
+        if (is_london_activation(parent_base_fee)) {
             // This is London's own activation block: the parent predates
             // EIP-1559 (no base_fee field), so the formula below doesn't
             // apply — the spec fixes the first London block's base_fee at
@@ -175,6 +198,11 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
             constexpr uint64_t kBaseFeeMaxChangeDenominator  = 8;
             const uint64_t parent_gas_target = parent.gas_limit() / kElasticityMultiplier;
             const uint64_t parent_gas_used   = parent.gas_used();
+            // A valid header's gas limit is at least 5000, so its target is never
+            // zero; a forged one would divide by zero below (audit A2).
+            if (parent_gas_target == 0) {
+                zeg::fatal("parent gas_limit below 2: zero EIP-1559 gas target");
+            }
             if (parent_gas_used == parent_gas_target) {
                 expected_base_fee = parent_base_fee;
             } else if (parent_gas_used > parent_gas_target) {
@@ -223,7 +251,7 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
         }
         uint64_t parent_gas_limit = parent.gas_limit();
         if (consensus.fork_id() >= zeg::ForkId::London &&
-            intx::be::load<intx::uint256>(parent.base_fee_per_gas()) == 0) {
+            is_london_activation(intx::be::load<intx::uint256>(parent.base_fee_per_gas()))) {
             parent_gas_limit *= 2;
         }
         const uint64_t max_delta = parent_gas_limit / 1024;

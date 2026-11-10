@@ -86,7 +86,7 @@ constexpr ForkId fork_from_field_count(uint32_t fc) noexcept {
         case 21: return ForkId::Prague;
         case 23: return ForkId::Amsterdam;
         case 0:  return ForkId::Prague;  // unset ⇒ mainnet default
-        default: return ForkId::Prague;
+        default: return ForkId::Unknown; // no fork has this many fields
     }
 }
 

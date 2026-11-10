@@ -20,7 +20,7 @@ std::size_t log_payload(const LogEntry& log) {
 }
 
 std::size_t write_list_header(uint8_t* dst, std::size_t payload_len) {
-    uint8_t hdr[5];
+    uint8_t hdr[rlp::kMaxHeaderSize];
     const std::size_t n = rlp::detail::make_header<0xc0, 0xf7>(hdr, payload_len);
     __builtin_memcpy(dst, hdr, n);
     return n;
