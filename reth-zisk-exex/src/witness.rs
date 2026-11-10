@@ -126,6 +126,10 @@ where
         }
     }
     let lowest_block_hash = statedb.block_hashes.lowest().map(|(n, _)| n);
+    // Keep the Legacy witness mode (here and below). It applies removals first,
+    // so when a deletion collapses a branch the surviving sibling is revealed.
+    // The guest needs that sibling's type and halts on an opaque one (audit C8);
+    // the Canonical mode would leave it opaque and reject valid blocks.
     let witness = ExecutionWitnessRecord::new(&statedb)
         .into_execution_witness_without_headers(&*state_provider, ExecutionWitnessMode::Legacy)?;
 
@@ -268,6 +272,7 @@ where
         }
     }
     let slots: usize = accessed.values().map(|s| s.len()).sum();
+    // Legacy mode: see sources_by_execution (audit C8).
     let state = state_provider.witness(Default::default(), hashed, ExecutionWitnessMode::Legacy)?;
     let proofs = t.elapsed();
 

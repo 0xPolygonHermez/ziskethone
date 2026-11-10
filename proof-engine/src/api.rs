@@ -7,6 +7,7 @@
 //!   body: raw proof_data (application/octet-stream)
 //!   200 {"status":"VALID"} | 200 {"status":"INVALID","reason":"..."}
 //!   400 {"error":"..."}  malformed query or unsupported proof_type
+//!   503 {"error":"busy"} every verifier slot is taken; retry later
 //! GET  /v1/proof_types -> {"proof_types":[..]}
 //! ```
 //!
@@ -32,6 +33,21 @@ pub const ZISK_PROOF_TYPE: u8 = 6;
 
 pub struct Engine {
     pub cfg: Config,
+    /// Verifications that may run at once, one per core by default. Past that
+    /// a request is answered busy at once: queued work would keep running after
+    /// Lighthouse's 5-second timeout gave up on it (audit A3).
+    slots: Arc<tokio::sync::Semaphore>,
+}
+
+impl Engine {
+    pub fn new(cfg: Config) -> Self {
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        Self::with_slots(cfg, cores)
+    }
+
+    pub fn with_slots(cfg: Config, slots: usize) -> Self {
+        Self { cfg, slots: Arc::new(tokio::sync::Semaphore::new(slots)) }
+    }
 }
 
 pub fn router(engine: Arc<Engine>) -> Router {
@@ -102,8 +118,16 @@ async fn verify_proof(
     let root = hex::encode(pi.new_payload_request_root);
     let bytes = body.len();
     let t0 = Instant::now();
+    let Ok(permit) = engine.slots.clone().try_acquire_owned() else {
+        warn!(root, bytes, "busy: every verifier slot is taken");
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "busy" }))).into_response();
+    };
     let e = engine.clone();
-    let result = tokio::task::spawn_blocking(move || verify::verify_execution_proof(&body, &pi, &e.cfg)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        verify::verify_execution_proof(&body, &pi, &e.cfg)
+    })
+    .await;
     let elapsed = t0.elapsed();
     match result {
         Ok(Ok(())) => {
@@ -129,20 +153,26 @@ mod tests {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
+    fn config() -> Config {
+        Config { chain_id: 1, program_vks: vec![[1, 2, 3, 4]], setup_vk: [5, 6, 7, 8], hash: "blake3".into() }
+    }
+
     fn engine() -> Arc<Engine> {
-        Arc::new(Engine {
-            cfg: Config { chain_id: 1, program_vks: vec![[1, 2, 3, 4]], setup_vk: [5, 6, 7, 8], hash: "blake3".into() },
-        })
+        Arc::new(Engine::new(config()))
     }
 
     const ROOT: &str = "0x0101010101010101010101010101010101010101010101010101010101010101";
 
     async fn call(query: &str, body: &'static [u8]) -> (StatusCode, serde_json::Value) {
+        call_on(engine(), query, body).await
+    }
+
+    async fn call_on(engine: Arc<Engine>, query: &str, body: &'static [u8]) -> (StatusCode, serde_json::Value) {
         let req = Request::post(format!("/v1/execution_proof_verifications?{query}"))
             .header("content-type", "application/octet-stream")
             .body(Body::from(body))
             .unwrap();
-        let resp = router(engine()).oneshot(req).await.unwrap();
+        let resp = router(engine).oneshot(req).await.unwrap();
         let status = resp.status();
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         (status, serde_json::from_slice(&body).unwrap())
@@ -158,6 +188,14 @@ mod tests {
         assert_eq!(s, StatusCode::BAD_REQUEST);
         let (s, _) = call(&format!("{ok}"), b"x").await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn busy_when_no_slot_is_free() {
+        let q = format!("new_payload_request_root={ROOT}&successful_validation=true&chain_id=1&schema_id=5377&proof_type=6");
+        let (s, v) = call_on(Arc::new(Engine::with_slots(config(), 0)), &q, b"\x00").await;
+        assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(v["error"], "busy");
     }
 
     #[tokio::test]

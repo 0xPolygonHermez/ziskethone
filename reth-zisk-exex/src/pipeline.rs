@@ -8,6 +8,7 @@
 //! one. A reorg or an invalid block also discards the in-flight proof.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -126,7 +127,11 @@ impl Timeline {
     }
 }
 
-struct InFlight {
+/// A job started for one block. Jobs stay reachable by hash after a newer one
+/// supersedes them: an invalid or reorged-out block must still drop a proof
+/// that finishes late (audit I3), and a failed job must not keep a later source
+/// from retrying the block (audit A4).
+struct Job {
     number: u64,
     hash: B256,
     /// Stop the job — including a proof already running on the coordinator,
@@ -134,18 +139,29 @@ struct InFlight {
     cancel: CancellationToken,
     /// The block left the canonical chain or is invalid: drop its proof.
     discard: CancellationToken,
+    /// The job ended in an error, so another source may start it again.
+    failed: Arc<AtomicBool>,
+}
+
+impl Job {
+    fn can_retry(&self) -> bool {
+        self.failed.load(Ordering::Relaxed)
+    }
 }
 
 pub struct Pipeline<P, E> {
     provider: P,
     evm_config: E,
     cfg: Arc<Config>,
-    current: Option<InFlight>,
+    /// Recent jobs, oldest first; the last one is the job in flight. The first
+    /// source of a block wins, unless its job failed.
+    jobs: std::collections::VecDeque<Job>,
     /// Timelines of recent blocks by hash: sources and engine events mark
     /// them in whatever order they arrive.
     timelines: std::collections::VecDeque<(B256, Timeline)>,
-    /// Blocks a job was started for (the first source wins).
-    started: std::collections::VecDeque<B256>,
+    /// One witness build at a time. Each uses many threads and much memory, and
+    /// a burst of payloads would otherwise run them side by side (audit A5).
+    witness_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl<P, E> Pipeline<P, E>
@@ -158,10 +174,19 @@ where
             provider,
             evm_config,
             cfg: Arc::new(cfg),
-            current: None,
+            jobs: Default::default(),
             timelines: Default::default(),
-            started: Default::default(),
+            witness_slots: Arc::new(tokio::sync::Semaphore::new(1)),
         }
+    }
+
+    fn job(&self, hash: B256) -> Option<&Job> {
+        self.jobs.iter().find(|j| j.hash == hash)
+    }
+
+    /// Whether a source may start a job for `hash`: none ran yet, or it failed.
+    fn may_start(&self, hash: B256) -> bool {
+        self.job(hash).is_none_or(Job::can_retry)
     }
 
     fn timeline(&mut self, hash: B256) -> Timeline {
@@ -206,7 +231,7 @@ where
                 // arrive late; prove the executed block by re-execution.
                 let block = executed.recovered_block.sealed_block();
                 let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-                if !self.started.contains(&block.hash()) && now.saturating_sub(block.timestamp) <= FALLBACK_MAX_AGE_SECS {
+                if self.may_start(block.hash()) && now.saturating_sub(block.timestamp) <= FALLBACK_MAX_AGE_SECS {
                     self.on_payload(Incoming {
                         block: block.clone(),
                         bal: None,
@@ -221,20 +246,20 @@ where
                 self.timeline(executed.recovered_block.hash()).mark("executed");
             }
             ConsensusEngineEvent::InvalidBlock { block, error } => {
-                if let Some(cur) = self.current.as_ref().filter(|c| c.hash == block.hash()) {
-                    warn!(number = cur.number, %error, "in-flight block is invalid");
-                    cur.cancel.cancel();
-                    cur.discard.cancel();
+                if let Some(job) = self.job(block.hash()) {
+                    warn!(number = job.number, %error, "block with a job is invalid");
+                    job.cancel.cancel();
+                    job.discard.cancel();
                 }
             }
             ConsensusEngineEvent::CanonicalChainCommitted(head, _) => {
-                // The in-flight block left the canonical chain (a reorg to a
+                // A block with a job left the canonical chain (a reorg to a
                 // sibling or back to an ancestor).
-                if let Some(cur) = &self.current {
-                    if head.number() <= cur.number && head.hash() != cur.hash {
-                        info!(number = cur.number, hash = %cur.hash, "in-flight block reorged out");
-                        cur.cancel.cancel();
-                        cur.discard.cancel();
+                for job in &self.jobs {
+                    if head.number() <= job.number && head.hash() != job.hash && !job.discard.is_cancelled() {
+                        info!(number = job.number, hash = %job.hash, "block with a job reorged out");
+                        job.cancel.cancel();
+                        job.discard.cancel();
                     }
                 }
             }
@@ -249,22 +274,24 @@ where
             timeline.at(label, *at);
         }
         timeline.at(p.source, p.at);
-        if self.started.contains(&hash) {
+        if !self.may_start(hash) {
             return; // another source was first
         }
-        if let Some(cur) = &self.current {
+        if let Some(cur) = self.jobs.back() {
             if number < cur.number {
                 return; // an older side block
             }
             cur.cancel.cancel();
         }
-        self.started.push_back(hash);
-        if self.started.len() > 64 {
-            self.started.pop_front();
-        }
+        self.jobs.retain(|j| j.hash != hash); // a failed earlier attempt
         let (cancel, discard) = (CancellationToken::new(), CancellationToken::new());
-        self.current = Some(InFlight { number, hash, cancel: cancel.clone(), discard: discard.clone() });
+        let failed = Arc::new(AtomicBool::new(false));
+        self.jobs.push_back(Job { number, hash, cancel: cancel.clone(), discard: discard.clone(), failed: failed.clone() });
+        if self.jobs.len() > 64 {
+            self.jobs.pop_front();
+        }
         let (provider, evm_config, cfg) = (self.provider.clone(), self.evm_config.clone(), self.cfg.clone());
+        let witness_slots = self.witness_slots.clone();
         tokio::spawn(async move {
             let dir = cfg.out_dir.join(format!("{number}-{}", &hex::encode(hash)[..16]));
             let t0 = Instant::now();
@@ -272,9 +299,11 @@ where
             let source = p.source;
             let block = p.block.clone();
             let has_bal = p.bal.is_some();
-            let result = run_job(&provider, &evm_config, &cfg, p, &dir, &cancel, &discard, &timeline).await;
+            let result =
+                run_job(&provider, &evm_config, &cfg, p, &dir, &cancel, &discard, &timeline, &witness_slots).await;
+            failed.store(result.is_err(), Ordering::Relaxed);
             if cfg.compare_exec && has_bal && result.is_ok() && !cancel.is_cancelled() {
-                if let Err(e) = compare_exec(&provider, &evm_config, &cfg, &block, &dir).await {
+                if let Err(e) = compare_exec(&provider, &evm_config, &cfg, &block, &dir, &witness_slots).await {
                     warn!(number, "compare-exec: {e:#}");
                 }
             }
@@ -333,6 +362,7 @@ async fn run_job<P, E>(
     cancel: &CancellationToken,
     discard: &CancellationToken,
     timeline: &Timeline,
+    witness_slots: &tokio::sync::Semaphore,
 ) -> Result<&'static str>
 where
     P: StateProviderFactory + HeaderProvider<Header = alloy_consensus::Header> + Clone + Send + Sync + 'static,
@@ -376,9 +406,14 @@ where
     // 2. Witness + ZEG0 input: from the BAL when present (its transactions
     //    run in parallel only to find the BLOCKHASH ancestors), else by
     //    re-executing.
+    let witness_slot = tokio::select! {
+        permit = witness_slots.acquire() => permit?,
+        _ = cancel.cancelled() => return Ok("cancelled"),
+    };
     timeline.mark("input_start");
     let t = Instant::now();
     let (sources, from_bal) = build_sources(provider, evm_config, cfg.chain_id, block, p.bal.as_ref()).await?;
+    drop(witness_slot);
     timeline.mark("witness_done");
     let input = rust_input_gen::offline::encode_binary(&sources)?;
     timeline.mark("input_done");
@@ -427,7 +462,12 @@ where
     std::fs::write(dir.join("proof.bin"), &proof.data)?;
 
     // 6. Sign for the beacon block that commits to this payload. Not
-    //    cancelled from here on: the proof stays valid for its block.
+    //    cancelled from here on: the proof stays valid for its block. A block
+    //    found invalid or reorged out meanwhile is still dropped.
+    if discard.is_cancelled() {
+        info!(number, %hash, "proof discarded before signing");
+        return Ok("discarded");
+    }
     let slot = block.header().slot_number.context("block has no slot_number (pre-Amsterdam)")?;
     let beacon_root = match p.beacon_root {
         Some(r) => r,
@@ -446,6 +486,10 @@ where
     }
 
     // 7. Submit.
+    if discard.is_cancelled() {
+        info!(number, %hash, "proof discarded before submission");
+        return Ok("discarded");
+    }
     sub.beacon.submit(std::slice::from_ref(&signed)).await?;
     info!(number, slot, "submitted proof");
     Ok("submitted")
@@ -454,14 +498,23 @@ where
 
 /// Build the re-execution input of `block` next to the BAL-built one
 /// (`input.exec.bin`) and check both give the same root.
-async fn compare_exec<P, E>(provider: &P, evm_config: &E, cfg: &Config, block: &SealedBlock<Block>, dir: &std::path::Path) -> Result<()>
+async fn compare_exec<P, E>(
+    provider: &P,
+    evm_config: &E,
+    cfg: &Config,
+    block: &SealedBlock<Block>,
+    dir: &std::path::Path,
+    witness_slots: &tokio::sync::Semaphore,
+) -> Result<()>
 where
     P: StateProviderFactory + HeaderProvider<Header = alloy_consensus::Header> + Clone + Send + Sync + 'static,
     E: ConfigureEvm<Primitives = EthPrimitives> + Clone + Send + Sync + 'static,
 {
+    let witness_slot = witness_slots.acquire().await?;
     let t = Instant::now();
     let (sources, _) = build_sources(provider, evm_config, cfg.chain_id, block, None).await?;
     let elapsed = t.elapsed();
+    drop(witness_slot);
     let path = dir.join("input.exec.bin");
     let bytes = rust_input_gen::offline::encode_binary(&sources)?;
     std::fs::write(&path, &bytes)?;

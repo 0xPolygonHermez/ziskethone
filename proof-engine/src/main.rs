@@ -104,7 +104,7 @@ async fn main() -> Result<()> {
                 hash = cfg.hash,
                 "proof engine listening"
             );
-            let app = api::router(Arc::new(api::Engine { cfg }));
+            let app = api::router(Arc::new(api::Engine::new(cfg)));
             let listener = tokio::net::TcpListener::bind(listen).await.with_context(|| format!("bind {listen}"))?;
             axum::serve(listener, app)
                 .with_graceful_shutdown(async {
