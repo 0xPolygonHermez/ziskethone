@@ -384,9 +384,20 @@ pub struct EmulatorProver {
 
 impl EmulatorProver {
     async fn prove(&self, input: &[u8], cancel: &CancellationToken) -> Result<Outcome> {
-        std::fs::create_dir_all(&self.work_dir)?;
-        let framed = self.work_dir.join("input.zisk.bin");
-        let out = self.work_dir.join("ziskemu.out");
+        // Each job gets its own directory: a superseded run can still be writing when
+        // the next one starts, and must not hand it its files (audit I5).
+        static NEXT_JOB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let job = NEXT_JOB.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = self.work_dir.join(format!("job-{job}"));
+        let result = self.run_in(&dir, input, cancel).await;
+        let _ = std::fs::remove_dir_all(&dir);
+        result
+    }
+
+    async fn run_in(&self, dir: &std::path::Path, input: &[u8], cancel: &CancellationToken) -> Result<Outcome> {
+        std::fs::create_dir_all(dir)?;
+        let framed = dir.join("input.zisk.bin");
+        let out = dir.join("ziskemu.out");
         std::fs::write(&framed, frame_input(input))?;
         let _ = std::fs::remove_file(&out);
         let mut child = tokio::process::Command::new(&self.ziskemu)
