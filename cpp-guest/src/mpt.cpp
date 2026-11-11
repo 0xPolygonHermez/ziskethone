@@ -65,7 +65,7 @@ rlp::Bytes build_node(std::span<const PathEntry> entries, size_t depth) {
         const size_t payload = str_size(hp.data(), hp.size())
                              + str_size(e.value->data(), e.value->size());
         rlp::Bytes out(rlp::item_size(payload));
-        uint8_t hdr[5];
+        uint8_t hdr[rlp::kMaxHeaderSize];
         size_t n = rlp::detail::make_header<0xc0, 0xf7>(hdr, payload);
         __builtin_memcpy(out.data(), hdr, n);
         n += rlp::write_string(out.data() + n, hp.data(), hp.size());

@@ -427,6 +427,13 @@ evmc::bytes32 pack_branch(const std::array<Child, 16>& children, const Ctx& ctx,
         buf[start + 2] = static_cast<uint8_t>(payload);
     }
 
+    // A branch whose RLP is under 32 bytes must be embedded in its parent, not
+    // referenced by hash. The guest always hashes it, so refuse the case rather
+    // than emit a wrong root (audit S5). Only storage tries can hold one, and only
+    // for two slots whose hashed keys share about 56 nibbles: about 2^112 work.
+    if (n - start < 32) {
+        fatal("state_root: branch under 32 bytes (embedded node) unsupported");
+    }
     return keccak256_bytes32(buf + start, n - start);
 }
 
@@ -1072,6 +1079,14 @@ StateRoot::StateRoot(const uint8_t*& cursor,
     const uint64_t num_accounts = read_u64_le(cursor);
     const uint64_t num_storages = read_u64_le(cursor);
     const uint64_t first_sorted = read_u64_le(cursor);
+    // Every row is a leaf record of at least 8 bytes in the rest of the
+    // section, so counts the input can't hold are malformed. Check before the
+    // reserves, which size the tables from these counts (audit A1); the bound
+    // also keeps `count * record size` far from overflowing.
+    const uint64_t max_rows = stream_remaining(cursor) / 8;
+    if (num_accounts > max_rows || num_storages > max_rows - num_accounts) {
+        fatal("state_root: more account/storage rows than the input can hold");
+    }
     node_limit_ = num_nodes;
     accounts_.reserve(num_accounts);
     storages_.reserve(num_storages);

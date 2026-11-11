@@ -5,6 +5,7 @@
 
 #include "zeg/block_header.hpp"
 #include "zeg/fatal.hpp"
+#include "zeg/fork_schedule.hpp"
 #include "zeg/stream.hpp"
 
 namespace zeg {
@@ -101,13 +102,34 @@ std::span<const uint8_t> PreviousBlocks::View::extra_data() const noexcept {
 
 namespace {
 
+// The fork whose header shape an ancestor record is hashed with. The count picks
+// the RLP field count, so a wrong one would hash a different header (audit W1).
+// A deployed build knows each ancestor's fork from its timestamp and requires the
+// record to match it; test builds replay EEST forks at synthetic times, so they
+// take the record's count, which must still be one that some fork has.
+ForkId ancestor_fork(const PreviousBlocks::View& v) {
+#if defined(ZEG_FORK_FROM_INPUT)
+    const ForkId fork = fork_from_field_count(v.field_count());
+    if (fork == ForkId::Unknown) {
+        fatal("PreviousBlocks: ancestor field_count matches no fork");
+    }
+    return fork;
+#else
+    const ForkId fork = fork_params_at(v.timestamp()).fork;
+    if (v.field_count() != fork_field_count(fork)) {
+        fatal("PreviousBlocks: ancestor field_count doesn't match its fork");
+    }
+    return fork;
+#endif
+}
+
 evmc::bytes32 compute_header_hash(const PreviousBlocks::View& v) {
     // Ancestor records still carry the legacy per-record `field_count`
     // (they are only re-hashed, never executed, so the EVM revision is
     // irrelevant — only the field count matters for the RLP). Map it to
     // a fork so the shared header encoder can derive the count back. 0 ==
     // unset (old manifests) → Prague (Pectra default), as mainnet wants.
-    const ForkId fork = fork_from_field_count(v.field_count());
+    const ForkId fork = ancestor_fork(v);
     return compute_block_header_hash(BlockHeader{
         .parent_hash              = v.parent_hash(),
         .ommers_hash              = v.ommers_hash(),
