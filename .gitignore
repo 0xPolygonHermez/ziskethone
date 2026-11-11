@@ -2,7 +2,6 @@
 target/
 target-dev/
 **/*.rs.bk
-Cargo.lock
 
 # C++ / CMake
 cpp-guest/build*/

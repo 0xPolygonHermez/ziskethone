@@ -172,7 +172,7 @@ Sepolia reth node serves it at `http://127.0.0.1:8645`.
 How it runs and builds:
 - It runs as `reth-zisk-sepolia.service` in place of `reth-sepolia.service`, on the same
   datadir. The units conflict, so only one of the two runs.
-- It has its own `Cargo.lock`. Build it with `make exex` or `cargo build --release` inside the
+- It has its own `Cargo.lock`. Build it with `make exex` or `cargo build --release --locked` inside the
   directory.
 - The extra `kprove` bin proves a list of input files on the coordinator and writes a CSV.
 - See `reth-zisk-exex/README.md` and the README's "Live proving and deployment" section.
