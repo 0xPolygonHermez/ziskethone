@@ -199,10 +199,10 @@ pub fn encode_binary(sources: &OfflineSources) -> Result<Vec<u8>> {
         sources.blob_base_fee_update_fraction,
         sources.target_blob_gas_per_block,
         sources.max_blob_gas_per_block,
-    );
+    )?;
     sections::write_transactions(&mut w, &sources.current)?;
     sections::write_contracts(&mut w, &prestate, &sources.witness, &sources.current)?;
-    sections::write_previous_blocks(&mut w, &sources.ancestors);
+    sections::write_previous_blocks(&mut w, &sources.ancestors)?;
     // The StateRoot trie hints are now witness-only: `state_root::write`
     // transcribes the pre-state MPT straight from `witness.state` +
     // `witness.keys`, emitting every revealed leaf and leaving created keys
