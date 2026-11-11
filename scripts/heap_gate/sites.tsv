@@ -3,9 +3,9 @@
 # backend; `gas` rows take the MAX (one gas unit is spent once, so per-gas heap
 # is bounded by the costliest way to spend it). `both` applies to evmone+zevm.
 #
-# Static .bss (keccak-f memo 100 MiB, zevm's 128 MiB EVM-memory zones and 33 MiB
-# frames) is NOT here: it is outside _heap_start.._heap_end, so it does not count
-# against the heap. Witness/code bytes are viewed in the input region, not
+# Static .bss (zevm's 128 MiB EVM-memory zones and 33 MiB frames) is NOT here:
+# it is outside _heap_start.._heap_end, so it does not count against the heap.
+# Witness/code bytes are viewed in the input region, not
 # copied; the heap rows that index TOUCHED state are the gas rows below. A
 # witness larger than the 2 GiB input region is the S3 ceiling (operator-side),
 # not a heap term.
