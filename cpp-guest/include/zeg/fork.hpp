@@ -15,9 +15,10 @@
 //
 // The numeric values are a wire contract with rust-input-gen
 // (`sections.rs`) — keep them in sync. `Unknown` (0) is what zero-filled
-// or pre-fork_id inputs decode to; it resolves to Prague, the mainnet
-// default, preserving the historical "field_count == 0 ⇒ Pectra"
-// behaviour.
+// or pre-fork_id inputs decode to. A test build (ZEG_FORK_FROM_INPUT) resolves
+// it to Prague, the mainnet default, preserving the historical
+// "field_count == 0 ⇒ Pectra" behaviour. A deployed build gets it only for a
+// timestamp before the fork schedule, and rejects the block.
 
 #pragma once
 
