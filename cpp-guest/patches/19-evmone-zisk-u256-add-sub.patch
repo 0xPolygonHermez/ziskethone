@@ -1,0 +1,31 @@
+diff --git a/lib/evmone/instructions.hpp b/lib/evmone/instructions.hpp
+index bd7e4e0..eb250ca 100644
+--- a/lib/evmone/instructions.hpp
++++ b/lib/evmone/instructions.hpp
+@@ -228,7 +228,13 @@ inline constexpr auto invalid = stop_impl<EVMC_INVALID_INSTRUCTION>;
+ 
+ inline void add(StackTop stack) noexcept
+ {
++#if defined(ZEG_ZISK)
++    const auto& x = stack.pop();
++    auto& y = stack.top();
++    zkvm_u256_le_add(zeg_u256::le(x), zeg_u256::le(y), zeg_u256::le(y));
++#else
+     stack.top() += stack.pop();
++#endif
+ }
+ 
+ inline void mul(StackTop stack) noexcept
+@@ -244,7 +250,12 @@ inline void mul(StackTop stack) noexcept
+ 
+ inline void sub(StackTop stack) noexcept
+ {
++#if defined(ZEG_ZISK)
++    auto& v = stack[1];
++    zkvm_u256_le_sub(zeg_u256::le(stack[0]), zeg_u256::le(v), zeg_u256::le(v));
++#else
+     stack[1] = stack[0] - stack[1];
++#endif
+ }
+ 
+ inline void div(StackTop stack) noexcept

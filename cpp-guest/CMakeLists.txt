@@ -99,6 +99,10 @@ endif()
 #   18: Only exactly 0xef0100 || address (23 bytes) is an EIP-7702 delegation
 #       for nested calls: copy one byte more and check the size, as the guest's
 #       zeg/delegation.hpp does for the top-level call (audit S1).
+#   19: ADD and SUB through the same U256 ABI as 03 (zkvm_u256_le_add/sub,
+#       inline zkvmcalls on the add256 precompile) instead of intx's carry
+#       chain, gated on ZEG_ZISK like 03. Each op saves about 18 steps (about
+#       870 of cost net of the precompile) on mainnet blocks.
 # The check covers the whole stack, not each patch alone: patches may overlap
 # (13 edits lines in 12's context), so a per-patch `git apply --reverse
 # --check` misreads an applied stack as missing 12. Instead we build
@@ -125,6 +129,7 @@ set(_evmone_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/16-evmone-zisk-memory-views.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/17-evmone-extcodecopy-zero-bal-load.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/18-evmone-exact-delegation-designator.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/19-evmone-zisk-u256-add-sub.patch"
 )
 find_program(GIT_EXECUTABLE git REQUIRED)
 set(_patched_index "${CMAKE_CURRENT_BINARY_DIR}/evmone-patched.index")
