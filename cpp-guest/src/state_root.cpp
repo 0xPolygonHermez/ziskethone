@@ -694,7 +694,8 @@ uint32_t aux_emplace(BuildCtx& ctx, Args&&... args) {
 // nested storage subtree). Out of line, so the common Hash/ExtensionHash calls
 // don't pay a frame sized for them. `noinline` is what survives -O2.
 __attribute__((noinline)) Child build_phantom_leaf_node(const uint8_t*& cursor,
-                                                        BuildCtx& ctx);
+                                                        BuildCtx& ctx,
+                                                        const WalkPath& walked);
 __attribute__((noinline)) Child build_leaf_node(const uint8_t*& cursor,
                                                 BuildCtx& ctx,
                                                 TreeKind kind,
@@ -732,6 +733,10 @@ Child build_node(const uint8_t*& cursor,
 
         case Op::ExtensionHash: {
             PackedPath ext = read_nibbles(cursor);
+            // The hashed child still needs a nibble of the key below it.
+            if (walked.size() + ext.size() >= 64) {
+                fatal("state_root: extension path reaches past a 64-nibble key");
+            }
             evmc::bytes32 h;
             require_bytes(cursor, sizeof(h.bytes));
             zeg::zisk::zisk_xmemcpy<sizeof(h.bytes)>(h.bytes, cursor);
@@ -741,7 +746,7 @@ Child build_node(const uint8_t*& cursor,
         }
 
         case Op::PhantomLeaf:
-            return build_phantom_leaf_node(cursor, ctx);
+            return build_phantom_leaf_node(cursor, ctx, walked);
 
         case Op::Leaf:
             return build_leaf_node(cursor, ctx, kind, walked, owning_address);
@@ -868,10 +873,16 @@ Child build_branch_node(const uint8_t*& cursor,
 }
 
 Child build_phantom_leaf_node(const uint8_t*& cursor,
-                              BuildCtx& ctx)
+                              BuildCtx& ctx,
+                              const WalkPath& walked)
 {
     {
             PackedPath path = read_nibbles(cursor);
+            // As pack_key_hash checks for keyed leaves: the walk and the suffix
+            // spell exactly one 64-nibble key.
+            if (walked.size() + path.size() != 64) {
+                fatal("state_root: phantom leaf path is not a 64-nibble key");
+            }
             const uint64_t value_len = read_u64_le(cursor);
             if (value_len > kMaxLeafValue) {
                 fatal("state_root: phantom leaf value exceeds the trie-leaf bound");

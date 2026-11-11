@@ -154,8 +154,12 @@ ConsensusInfo::ConsensusInfo(const uint8_t*& cursor) {
     // timestamp. An honest input carries the same fork (rust-input-gen resolves
     // it from the same schedule), so a mismatch is a dishonest input or a
     // schedule that drifted between input-gen and this ELF: reject both. A
-    // timestamp before the schedule (Unknown) never matches, so pre-Cancun
-    // blocks are rejected instead of running as Prague.
+    // timestamp before the schedule's first row gives Unknown (0), which an
+    // input fork_id of 0 would match, so reject it first: such a block would
+    // otherwise run with a mix of Prague and pre-Cancun rules.
+    if (fork_id() == ForkId::Unknown) {
+        fatal("ConsensusInfo: block timestamp precedes the chain's fork schedule");
+    }
     if (u64_at(header_ + kForkIdOffset) != static_cast<uint64_t>(fork_id())) {
         fatal("ConsensusInfo: fork_id does not match the chain's fork schedule");
     }

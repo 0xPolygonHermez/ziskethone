@@ -217,8 +217,14 @@ CREATE2.
   subtree, including slots the block never read, so the revived account gets a stale storage
   root.
 - **Why it can't happen on current forks:** since Cancun (EIP-6780), SELFDESTRUCT only destroys
-  an account created in the same transaction. EIP-7610 forbids creating at an address that has
-  storage.
+  an account created in the same transaction. And the guest refuses to create at an address that
+  has storage (EIP-7610), so nothing can be revived on top of old storage.
+- **EIP-7610 is a deliberate deviation:** execution-specs v21 and revm count a collision only on
+  nonce or code, and wipe the storage of the account they create. The guest follows EIP-7610 as
+  geth, Besu and Nethermind do (`init_create_account` in `zisk_state_db.cpp`). The two differ
+  only on a nonce-0, code-less account with storage, which on mainnet means about 28 pre-EIP-161
+  accounts and a 160-bit address grind to reach one; Sepolia has none. Revisit if EIP-7610 enters
+  execution-specs.
 - **Why it isn't fixed:** a fix would mean rebuilding storage subtrees in the state-root pass,
   which isn't worth it for a case that can't happen on the target forks.
 
