@@ -1,0 +1,44 @@
+diff --git a/lib/evmone/delegation.hpp b/lib/evmone/delegation.hpp
+--- a/lib/evmone/delegation.hpp
++++ b/lib/evmone/delegation.hpp
+@@ -16,10 +16,12 @@
+ constexpr uint8_t DELEGATION_MAGIC_BYTES[] = {0xef, 0x01, 0x00};
+ constexpr bytes_view DELEGATION_MAGIC{DELEGATION_MAGIC_BYTES, std::size(DELEGATION_MAGIC_BYTES)};
+ 
+-/// Check if code contains EIP-7702 delegation designator
++/// Check if code is an EIP-7702 delegation designator: the magic and an address, exactly.
++/// ziskethone: other code with the magic is ordinary code that aborts on 0xef (audit S1).
+ constexpr bool is_code_delegated(bytes_view code) noexcept
+ {
+-    return code.starts_with(DELEGATION_MAGIC);
++    return code.size() == std::size(DELEGATION_MAGIC) + sizeof(evmc::address) &&
++           code.starts_with(DELEGATION_MAGIC);
+ }
+ 
+ /// Get EIP-7702 delegate address from the code of addr, if it is delegated.
+diff --git a/lib/evmone/delegation.cpp b/lib/evmone/delegation.cpp
+--- a/lib/evmone/delegation.cpp
++++ b/lib/evmone/delegation.cpp
+@@ -32,10 +32,11 @@
+     if (code_hash == EMPTY_CODE_HASH || code_hash == evmc::bytes32{})
+         return {};
+ 
+-    // Slow path: load the code prefix up to the delegation designation size.
++    // Slow path: load the code prefix up to the delegation designation size, plus
++    // one byte so that longer code is seen as longer and not taken for a designation.
+     // The HostInterface::copy_code() copies up to the addr's code size
+     // and returns the number of bytes copied.
+-    uint8_t designation_buffer[std::size(DELEGATION_MAGIC) + sizeof(evmc::address)];
++    uint8_t designation_buffer[std::size(DELEGATION_MAGIC) + sizeof(evmc::address) + 1];
+     const auto size = host.copy_code(addr, 0, designation_buffer, std::size(designation_buffer));
+     const bytes_view designation{designation_buffer, size};
+ 
+@@ -44,8 +45,6 @@
+ 
+     // Copy the delegate address from the designation buffer.
+     evmc::address delegate_address;
+-    // Assume the designation with the valid magic has also valid length.
+-    assert(designation.size() == std::size(designation_buffer));
+     std::ranges::copy(designation.substr(std::size(DELEGATION_MAGIC)), delegate_address.bytes);
+     return delegate_address;
+ }

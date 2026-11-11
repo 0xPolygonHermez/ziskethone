@@ -90,10 +90,16 @@ inline void require_bytes(const uint8_t* cursor, uint64_t n) {
 }
 
 // Advance `cursor` to the next 8-byte boundary if the previous chunk's
-// `consumed` byte count was not already a multiple of 8.
+// `consumed` byte count was not already a multiple of 8. The padding must be
+// zero: the writer emits zeros, and any other bytes would be a second encoding
+// of the same input (audit P1).
 inline void align_to_u64(const uint8_t*& cursor, uint64_t consumed) {
     const uint64_t pad = (8 - (consumed & 7)) & 7;
+    const uint8_t* padding = cursor;
     advance_checked(cursor, pad);
+    for (uint64_t i = 0; i < pad; ++i) {
+        if (padding[i] != 0) fatal("stream: nonzero alignment padding");
+    }
 }
 
 } // namespace zeg

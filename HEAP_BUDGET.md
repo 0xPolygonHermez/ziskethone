@@ -42,9 +42,9 @@ Two allocators share it (`cpp-guest/zisk/runtime.cpp`):
 
 They meet in the middle; out of memory is when they would cross.
 
-**Static `.bss` is not in the heap.** The keccak-f memo (100 MiB) and, on zevm, the
-128 MiB EVM-memory zones and 33 MiB frame stacks live below `_heap_start`, so they
-do not count against the heap figures above and are not budget terms.
+**Static `.bss` is not in the heap.** On zevm, the 128 MiB EVM-memory zones and
+33 MiB frame stacks live below `_heap_start`, so they do not count against the heap
+figures above and are not budget terms.
 
 ## The model
 

@@ -92,7 +92,14 @@ endif()
 #       on ZEG_ZISK. The bump allocator never frees, so the per-call malloc
 #       leaked every output: a 200M-gas block RETURNing 1 KiB per CALL
 #       exhausted the heap. The arena is reset at every transaction start.
-#   17: ADD and SUB through the same U256 ABI as 03 (zkvm_u256_le_add/sub,
+#   17: A size-0 EXTCODECOPY reads the balance from Amsterdam on, as it makes
+#       no copy_code call: the host counts the paid access as an EIP-7928 load
+#       only on a further host call (audit N1). Not done before Amsterdam, where
+#       the address needn't have a witness row.
+#   18: Only exactly 0xef0100 || address (23 bytes) is an EIP-7702 delegation
+#       for nested calls: copy one byte more and check the size, as the guest's
+#       zeg/delegation.hpp does for the top-level call (audit S1).
+#   19: ADD and SUB through the same U256 ABI as 03 (zkvm_u256_le_add/sub,
 #       inline zkvmcalls on the add256 precompile) instead of intx's carry
 #       chain, gated on ZEG_ZISK like 03. Each op saves about 18 steps (about
 #       870 of cost net of the precompile) on mainnet blocks.
@@ -120,7 +127,9 @@ set(_evmone_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/14-evmone-zisk-tx-arena-call-output.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/15-evmone-depth-limit-all-forks.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/16-evmone-zisk-memory-views.patch"
-    "${CMAKE_CURRENT_SOURCE_DIR}/patches/17-evmone-zisk-u256-add-sub.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/17-evmone-extcodecopy-zero-bal-load.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/18-evmone-exact-delegation-designator.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/19-evmone-zisk-u256-add-sub.patch"
 )
 find_program(GIT_EXECUTABLE git REQUIRED)
 set(_patched_index "${CMAKE_CURRENT_BINARY_DIR}/evmone-patched.index")
@@ -437,6 +446,9 @@ zeg_unit_test(chunked_vector_test test/chunked_vector_test.cpp)
 zeg_unit_test(tx_arena_test test/tx_arena_test.cpp)
 zeg_unit_test(seeded_hash_test test/seeded_hash_test.cpp)
 zeg_unit_test(contracts_test test/contracts_test.cpp src/contracts.cpp src/fatal.cpp)
+# Input-validation rules from the 2026-11-10 audit: RLP header sizes (M1),
+# zero alignment padding (P1), ancestor field counts (W1).
+zeg_unit_test(input_checks_test test/input_checks_test.cpp src/fatal.cpp)
 # state_root_chain_test #includes ../src/state_root.cpp for its file-internal
 # folding helpers, so it must not also link that object.
 zeg_unit_test(state_root_chain_test test/state_root_chain_test.cpp

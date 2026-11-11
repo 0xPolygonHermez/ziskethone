@@ -24,6 +24,7 @@
 
 #include "evm_mem.hpp"
 #include "zeg/create_address.hpp"
+#include "zeg/delegation.hpp"
 
 namespace zevm {
 
@@ -159,9 +160,11 @@ bool call_impl(EvmState& s, Regs& R, evmc_call_kind kind, bool has_value, bool s
     // to the delegate. (EXTCODE* are unaffected: they see the designator.)
     evmc_address code_addr = dst;
     if (s.rev >= EVMC_PRAGUE) {
-        uint8_t desig[23];  // 0xef 0x01 0x00 + 20-byte delegate address
+        // 0xef 0x01 0x00 + 20-byte delegate address, plus one byte so that longer
+        // code with the prefix shows as longer and runs as ordinary code (audit S1).
+        uint8_t desig[zeg::kDelegationDesignatorSize + 1];
         const size_t n = s.host->copy_code(s.context, &dst, 0, desig, sizeof(desig));
-        if (n == sizeof(desig) && desig[0] == 0xef && desig[1] == 0x01 && desig[2] == 0x00) {
+        if (zeg::is_delegation_designator(desig, n)) {
             std::memcpy(code_addr.bytes, desig + 3, 20);
             const int64_t dcost =
                 s.host->access_account(s.context, &code_addr) == EVMC_ACCESS_COLD

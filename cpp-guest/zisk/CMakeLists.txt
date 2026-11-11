@@ -131,10 +131,9 @@ list(FILTER PRECOMP_SRC EXCLUDE REGEX "/bls\\.cpp$|/kzg\\.cpp$|/kzg_precomputed_
 # evmone::crypto::bn254::pairing_check, so exclude evmone's software pairing too.
 file(GLOB PAIRING_SRC   ${EVMONE_SRC}/lib/evmone_precompiles/pairing/*/*.cpp)
 list(FILTER PAIRING_SRC EXCLUDE REGEX "/pairing/bn254/")
-# Keccak: instead of evmone's software keccak.c, compile our drop-in: the sponge in
-# the guest, each permutation through zkvm_keccak_f1600 behind the keccak-f memo
-# (zeg/keccakf_cache.hpp). Same public symbol (ethash_keccak256), so every Keccak
-# call site goes through it.
+# Keccak: instead of evmone's software keccak.c, compile our drop-in, one
+# zkvm_keccak256 call (the native .zisk sponge). Same public symbol
+# (ethash_keccak256), so every Keccak call site goes through it.
 # zkvm_calls.s: the EF ABI zkvm_* functions as zkvmcall thunks. Each is
 # `csrs <id>, x0; ret`, which the transpiler turns into a jump to the native .zisk
 # routine.

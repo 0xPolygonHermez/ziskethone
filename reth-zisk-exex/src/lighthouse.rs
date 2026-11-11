@@ -90,7 +90,14 @@ async fn fetch_payload(http: &reqwest::Client, url: &str, root: &str) -> Result<
         tokio::time::sleep(Duration::from_millis(5)).await;
     };
     debug!(root, elapsed = ?t.elapsed(), "fetched envelope");
-    envelope_to_block(&v["data"]["message"])
+    let (block, bal, beacon_root) = envelope_to_block(&v["data"]["message"])?;
+    // The proof is signed for `beacon_root`, so it must be the block the event
+    // named: an envelope for another block would only waste the proof (audit I4).
+    let requested: B256 = root.parse().context("event block_root")?;
+    if beacon_root != requested {
+        bail!("envelope is for beacon block {beacon_root}, requested {requested}");
+    }
+    Ok((block, bal, beacon_root))
 }
 
 /// Beacon-API JSON (snake_case, decimal strings) → engine-API JSON

@@ -25,6 +25,7 @@
 #include "zeg/bloom.hpp"
 #include "zeg/config.hpp"
 #include "zeg/create_address.hpp"
+#include "zeg/delegation.hpp"
 #include "zeg/eip6110_deposit.hpp"
 #include "zeg/fake_exponential.hpp"
 #include "zeg/fatal.hpp"
@@ -693,7 +694,9 @@ evmc_access_status ZiskStateDB::access_account(const evmc::address& addr) noexce
     // account counts as loaded only if that charge succeeds, which shows as
     // a further host callback in the same frame or the frame ending
     // normally (run_frame drops it on an exceptional halt). Matches revm
-    // skipping a cold load it can't pay for.
+    // skipping a cold load it can't pay for. Every paid access must make that
+    // further callback before the opcode ends, or a later halt loses it; a
+    // size-0 EXTCODECOPY reads the balance for this.
     if (bal_) bal_pending_ = idx;
     return was_warm ? EVMC_ACCESS_WARM : EVMC_ACCESS_COLD;
 }
@@ -1732,9 +1735,8 @@ int64_t ZiskStateDB::check_transaction(const Transactions::View& tx,
     const auto sender_code_hash = accounts_.code_hash_at(sender_idx);
     if (sender_code_hash != EMPTY_CODE_HASH) {
         const auto& c = contracts_.by_hash(sender_code_hash);
-        const bool delegation = is_prague_or_later() && c.code_size == 23 &&
-                                c.code[0] == 0xef && c.code[1] == 0x01 &&
-                                c.code[2] == 0x00;
+        const bool delegation = is_prague_or_later() &&
+                                is_delegation_designator(c.code, c.code_size);
         if (!delegation) {
             fatal("tx sender has code");
         }
@@ -1969,11 +1971,7 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item& auth_item,
     const auto signer_code_hash = accounts_.code_hash_at(signer_idx);
     if (signer_code_hash != EMPTY_CODE_HASH) {
         const auto& c = contracts_.by_hash(signer_code_hash);
-        const bool is_delegation = c.code_size == 23
-            && c.code[0] == 0xef
-            && c.code[1] == 0x01
-            && c.code[2] == 0x00;
-        if (!is_delegation) {
+        if (!is_delegation_designator(c.code, c.code_size)) {
             return 0;
         }
     }
@@ -2113,7 +2111,7 @@ evmc::Result ZiskStateDB::execute_top_level_frame(const Transactions::View& tx,
         }
         if (tx.to() != nullptr) {
             const auto code = this->code(*tx.to());
-            if (code.size() == 23 && code[0] == 0xef && code[1] == 0x01 && code[2] == 0x00) {
+            if (is_delegation_designator(code.data(), code.size())) {
                 constexpr int64_t WARM_ACCESS     = 100;
                 constexpr int64_t COLD_ACCESS_ADD = 3000 - WARM_ACCESS;  // EIP-8038
                 if (gas < WARM_ACCESS) return runtime_oog();
@@ -2320,13 +2318,14 @@ evmc::Result ZiskStateDB::execute_top_level_message(const Transactions::View& tx
     auto entry_code = this->code_and_entry(msg.recipient, entry);
 
     // EIP-7702 top-level delegation: if the recipient is a delegated
-    // EOA (code starts with 0xef0100 || delegate), execute the
+    // EOA (code is exactly 0xef0100 || delegate), execute the
     // delegate's code instead of the 23-byte stub. evmone follows
     // delegation automatically for CALL/STATICCALL/etc. opcodes
     // inside execution, but NOT for the entry code we hand it for
-    // the top-level frame — that's our responsibility.
-    if (entry_code.size() >= 23 &&
-        entry_code[0] == 0xef && entry_code[1] == 0x01 && entry_code[2] == 0x00) {
+    // the top-level frame — that's our responsibility. Longer code
+    // with the prefix is ordinary code and aborts on 0xef (audit S1).
+    if (is_prague_or_later() &&
+        is_delegation_designator(entry_code.data(), entry_code.size())) {
         evmc::address delegate;
         std::memcpy(delegate.bytes, entry_code.data() + 3, 20);
         msg.code_address = delegate;

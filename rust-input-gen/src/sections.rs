@@ -106,7 +106,7 @@ pub fn write_consensus_info(
     blob_base_fee_update_fraction: u64,
     target_blob_gas_per_block: u64,
     max_blob_gas_per_block: u64,
-) {
+) -> Result<()> {
     let h = &current.header;
 
     // 0..32  parent_hash ← parent.state_root (this guest's convention)
@@ -124,9 +124,9 @@ pub fn write_consensus_info(
     w.u64_le(h.gas_limit);
     // 72..80 timestamp
     w.u64_le(h.timestamp);
-    // 80..88 extra_data_len  (must be ≤ 32; truncate if a non-mainnet
-    // block somehow exceeds it — Pectra mainnet caps at 32).
-    let ed_len = h.extra_data.len().min(32);
+    // 80..88 extra_data_len. A valid header has at most 32 bytes; a longer one
+    // would be proven as a different, truncated header, so refuse it.
+    let ed_len = checked_extra_data_len(current)?;
     w.u64_le(ed_len as u64);
     // 88..120 extra_data buffer (zero-padded to 32 B)
     w.bytes(&h.extra_data[..ed_len]);
@@ -210,6 +210,17 @@ pub fn write_consensus_info(
         }
     }
     w.assert_aligned();
+    Ok(())
+}
+
+/// Length of `block`'s extra_data, which must be at most 32 bytes (Yellow
+/// Paper): the guest's header record has room for 32 and the hash commits to all.
+fn checked_extra_data_len(block: &Block) -> Result<usize> {
+    let len = block.header.extra_data.len();
+    if len > 32 {
+        anyhow::bail!("block {}: extra_data is {len} bytes, over the 32-byte limit", block.header.number);
+    }
+    Ok(len)
 }
 
 /// Section 2 — `Transactions`.
@@ -431,7 +442,7 @@ pub fn storage_original_values(
 /// further back, and the guest rejects a longer list (`PreviousBlocks: more
 /// than 256 ancestor records`). Sources that carry the whole chain (EEST
 /// manifests past block 256) would otherwise produce an unprovable input.
-pub fn write_previous_blocks(w: &mut Writer, ancestors: &[Block]) {
+pub fn write_previous_blocks(w: &mut Writer, ancestors: &[Block]) -> Result<()> {
     const MAX_ANCESTORS: usize = 256;
     let ancestors = &ancestors[..ancestors.len().min(MAX_ANCESTORS)];
     w.u64_le(ancestors.len() as u64);
@@ -485,8 +496,8 @@ pub fn write_previous_blocks(w: &mut Writer, ancestors: &[Block]) {
         w.u64_le(h.gas_used);
         // 496..504 timestamp
         w.u64_le(h.timestamp);
-        // 504..512 extra_data_len (clamped to 32)
-        let ed_len = h.extra_data.len().min(32);
+        // 504..512 extra_data_len (at most 32, else refused)
+        let ed_len = checked_extra_data_len(blk)?;
         w.u64_le(ed_len as u64);
         // 512..544 extra_data buffer (zero-padded to 32 B)
         w.bytes(&h.extra_data[..ed_len]);
@@ -514,5 +525,32 @@ pub fn write_previous_blocks(w: &mut Writer, ancestors: &[Block]) {
         w.u64_le(h.slot_number.unwrap_or(0));
 
         w.assert_aligned();
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::consensus::Header;
+    use alloy::rpc::types::Header as RpcHeader;
+
+    fn block_with_extra_data(len: usize) -> Block {
+        let h = Header { number: 7, extra_data: vec![0xab; len].into(), ..Default::default() };
+        Block { header: RpcHeader::new(h), ..Default::default() }
+    }
+
+    #[test]
+    fn extra_data_up_to_32_bytes_is_written() {
+        let mut w = Writer::new();
+        write_previous_blocks(&mut w, &[block_with_extra_data(32)]).unwrap();
+    }
+
+    #[test]
+    fn extra_data_over_32_bytes_is_refused() {
+        // Audit C6: truncating it would prove a different header.
+        let mut w = Writer::new();
+        let err = write_previous_blocks(&mut w, &[block_with_extra_data(33)]).unwrap_err();
+        assert!(err.to_string().contains("extra_data is 33 bytes"), "{err}");
     }
 }
