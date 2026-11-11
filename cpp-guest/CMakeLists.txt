@@ -96,6 +96,9 @@ endif()
 #       no copy_code call: the host counts the paid access as an EIP-7928 load
 #       only on a further host call (audit N1). Not done before Amsterdam, where
 #       the address needn't have a witness row.
+#   18: Only exactly 0xef0100 || address (23 bytes) is an EIP-7702 delegation
+#       for nested calls: copy one byte more and check the size, as the guest's
+#       zeg/delegation.hpp does for the top-level call (audit S1).
 # The check covers the whole stack, not each patch alone: patches may overlap
 # (13 edits lines in 12's context), so a per-patch `git apply --reverse
 # --check` misreads an applied stack as missing 12. Instead we build
@@ -121,6 +124,7 @@ set(_evmone_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/15-evmone-depth-limit-all-forks.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/16-evmone-zisk-memory-views.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/17-evmone-extcodecopy-zero-bal-load.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/18-evmone-exact-delegation-designator.patch"
 )
 find_program(GIT_EXECUTABLE git REQUIRED)
 set(_patched_index "${CMAKE_CURRENT_BINARY_DIR}/evmone-patched.index")
