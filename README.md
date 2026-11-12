@@ -177,12 +177,12 @@ directory in `EEST_PATHS`.
 ### Current results
 
 `make eest` on [`tests@v21.0.1`](https://github.com/ethereum/execution-specs/releases/tag/tests%40v21.0.1),
-the evmone backend, 2026-10-29: 12,272 fixture files and about 134,000 blocks, across all forks and
+the evmone backend, 2026-11-11 (develop 48c756a): 12,272 fixture files and about 134,000 blocks, across all forks and
 transitions.
 
 | | Blocks |
 |---|---:|
-| PASS | 102,663 |
+| PASS | 102,726 |
 | PASS_NEG (correctly rejected invalid blocks) | 10,819 |
 | NA_POS (partial request records, no EIP-8025 root) | 12 |
 | **FAIL** (completeness gap: wrong hash on a valid block) | **12** |

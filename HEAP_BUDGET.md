@@ -26,8 +26,8 @@ It is enforced, not just written down:
 
 | Backend | Heap |
 |---|---|
-| evmone | 427.4 MB |
-| zevm | 259.3 MB |
+| evmone | 532.2 MB |
+| zevm | 364.1 MB |
 
 Two allocators share it (`cpp-guest/zisk/runtime.cpp`):
 
@@ -103,10 +103,10 @@ cannot peak together, so this is a loose upper bound):
 
 | Chain (fork) | evmone required / heap | zevm required / heap |
 |---|---|---|
-| sepolia (Amsterdam, 200M gas) | 362 MB / 427 MB | 223 MB / 259 MB |
-| mainnet (Osaka, 60M gas) | 243 MB / 427 MB | 104 MB / 259 MB |
+| sepolia (Amsterdam, 200M gas) | 362 MB / 532 MB | 223 MB / 364 MB |
+| mainnet (Osaka, 60M gas) | 243 MB / 532 MB | 104 MB / 364 MB |
 
-Both fit, with the smaller margin on zevm's Amsterdam case (~36 MB). The bound is a
+Both fit, with the smaller margin on zevm's Amsterdam case (~141 MB). The bound is a
 deliberate over-estimate: `heap_bound.py --check` over a heap-stats run of the
 killer suite finds the heaviest block at 0.50 of its own-fork bound on evmone and
 0.45 on zevm, so no real block comes near the ceiling. The heap gate records the
