@@ -94,10 +94,18 @@ cmake -S cpp-guest/zisk -B cpp-guest/zisk/build-dma \
 cmake --build cpp-guest/zisk/build-dma -j --target zisk_eth_guest.elf
 ```
 
-`ZEG_ZISK_DMA` is OFF by default, so a stock xPack toolchain keeps building the
-guest exactly as before. With it ON, configure probes the compiler for the flag
-and fails with a message pointing at the script rather than at a wall of
-assembler errors.
+`ZEG_ZISK_DMA` is ON by default and is what is deployed; `make toolchain` runs this
+script. With it ON, configure probes the compiler for the flag and fails with a
+message pointing at the script rather than at a wall of assembler errors.
+`-DZEG_ZISK_DMA=OFF` builds with a stock xPack toolchain.
+
+The guest also passes `--param=sra-max-scalarization-size-Ospeed=32` with the flag.
+GCC sizes scalar replacement of aggregates by `MOVE_RATIO`, which the patch drops to
+2, so SRA would stop at 16 bytes and every 32-byte `uint256` temporary would stay in
+memory: a dead clear and a DMA copy per stack push. On the PUSH-heavy Sepolia blocks
+that made `-mzisk-dma` 1-5% more expensive than no flag; with the parameter it is
+0.8-2.5% cheaper there and 3.3% cheaper on mainnet. Raising `CLEAR_RATIO` instead (to
+keep 32-byte clears inline) was worse: the dead clear stays, as four stores.
 
 ### What the script builds, and what it borrows
 

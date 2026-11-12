@@ -61,7 +61,7 @@ mod tests {
     }
 
     const SEPOLIA: &str = "chain=sepolia;backend=evmone;fork_from_input=0;output=npr;heap_stats=0;\
-        jumpdest_sw=0;bswap_builtin=1;zisk_dma=0;analysis_cache_slots=1152;build_type=Release";
+        jumpdest_sw=0;bswap_builtin=1;zisk_dma=1;analysis_cache_slots=1152;build_type=Release";
 
     #[test]
     fn deploy_stamp_passes() {

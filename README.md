@@ -56,8 +56,9 @@ structs.
 - Linux x86-64 (the reference host is Ubuntu). macOS works for the host builds; the bridge
   then needs `SDKROOT=$(xcrun --show-sdk-path)` so bindgen finds the system headers.
 - Rust (stable) and CMake 3.25+ with a C++20 compiler.
-- For the ZisK ELF: xpack `riscv-none-elf-gcc` **14 or 16** on `PATH`, or passed with
-  `RISCV_GCC_BIN=<dir>` (see [AGENTS.md](AGENTS.md) for why not 15).
+- For the ZisK ELF: the patched GCC 14.3.0 that `make toolchain` builds once (about 10
+  minutes) from the xpack `riscv-none-elf-gcc` 14.3.0-1 (`XPACK_DIR=`). See
+  [AGENTS.md](AGENTS.md); `RISCV_GCC_BIN=<dir>` picks another compiler.
 - For `make killer`: `ziskemu` from ZisK 1.4.0 (`ziskup`, or set `ZISKEMU=`).
 - For the test suites: `curl`, `jq`, `bc`, `python3`.
 - For live blocks: an Ethereum node with the `debug` namespace (`debug_executionWitness`,

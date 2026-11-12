@@ -57,7 +57,7 @@
   - A block passes when the ELF output equals the host root and the block hash is right.
   - It prints the costliest blocks by steps. Results go to
     `build/killer-0200M-<backend>/results.log`.
-  - It needs `ziskemu` (`ZISKEMU=`) and the xpack GCC (`RISCV_GCC_BIN=`).
+  - It needs `ziskemu` (`ZISKEMU=`) and the patched GCC (`make toolchain`, or `RISCV_GCC_BIN=`).
   - Expected: every block PASSes on both backends.
 - **`make unit`**: host unit tests for the guest's memory-discipline building blocks
   (`cpp-guest/test/*_test.cpp`: ChunkedVector, the tx arena / FrameScratch, the seeded hash,
@@ -111,10 +111,19 @@
 
 ## RISC-V ELF cross-compiler
 
-Build the ZisK guest ELF (`cpp-guest/zisk`) with GCC **14 or 16** (xpack
-`riscv-none-elf-gcc`). Ubuntu's `riscv64-unknown-elf-g++` 13.2.0 ships no libstdc++
-headers, so it can't build the C++ guest. Put the cross `bin/` on `PATH`;
-`toolchain.cmake` auto-detects the prefix.
+The ELFs build with `-mzisk-dma` (`ZEG_ZISK_DMA=ON`, the default and what is deployed),
+which only the patched **GCC 14.3.0** accepts. `make toolchain` builds it once into
+`~/.local/xPacks/zisk-dma-gcc-14.3.0` (`DMA_GCC_DIR`) from the xpack
+`riscv-none-elf-gcc` 14.3.0-1 (`XPACK_DIR`), whose headers, assembler and linker it
+borrows; the Make targets use it by default (`RISCV_GCC_BIN`). Ubuntu's
+`riscv64-unknown-elf-g++` 13.2.0 ships no libstdc++ headers, so it can't build the C++
+guest. A plain xpack GCC 14 or 16 still builds an ELF with `-DZEG_ZISK_DMA=OFF`.
+
+`-mzisk-dma` drops GCC's `MOVE_RATIO` to 2, and GCC sizes scalar replacement of
+aggregates by it, so without `--param=sra-max-scalarization-size-Ospeed=32` (set next
+to the flag in `cpp-guest/zisk/CMakeLists.txt`) every 32-byte `uint256` temporary stays
+in memory: a dead clear and a DMA copy per stack push. That made DMA 1-5% *more*
+expensive on Sepolia's PUSH-heavy blocks until 2026-11-12.
 
 History/caveat: GCC **15.2.0 and 16.1.0 miscompiled** an earlier *index-based* stack
 (`s.stack[sp]` with a 64-bit `sp`) → wrong block-state root (a GCC RISC-V wrong-code

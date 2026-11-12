@@ -1,5 +1,5 @@
 .PHONY: all rust cpp input clean test unit help bridge guest-test elf-test elf heap-elf \
-        exex proof-engine eest killer heap-gate eest-fixtures killer-fixtures toolchain-check
+        exex proof-engine eest killer heap-gate eest-fixtures killer-fixtures toolchain toolchain-check
 
 BLOCK ?= 0
 OUTPUT ?= build/block_input.bin
@@ -20,9 +20,13 @@ KILLER_JOBS    ?= 4
 ZISKEMU        ?= $(shell command -v ziskemu || echo $(HOME)/.zisk/bin/ziskemu)
 RELEASES_URL   := https://github.com/ethereum/execution-specs/releases/download
 
-# xpack riscv-none-elf-gcc 14 or 16 (see AGENTS.md). Set RISCV_GCC_BIN to its
-# bin/ when it isn't on PATH.
-RISCV_GCC_BIN ?=
+# The ELFs build with -mzisk-dma (ZEG_ZISK_DMA=ON), which only the patched GCC
+# 14.3.0 accepts: `make toolchain` builds it once into DMA_GCC_DIR from the
+# xPack riscv-none-elf-gcc 14.3.0-1 at XPACK_DIR (see AGENTS.md). RISCV_GCC_BIN
+# defaults to its bin/; pass another one to use a different compiler.
+XPACK_DIR     ?= $(HOME)/opt/xpack-riscv/xpack-riscv-none-elf-gcc-14.3.0-1
+DMA_GCC_DIR   ?= $(HOME)/.local/xPacks/zisk-dma-gcc-14.3.0
+RISCV_GCC_BIN ?= $(DMA_GCC_DIR)/bin
 ifneq ($(RISCV_GCC_BIN),)
 export PATH := $(RISCV_GCC_BIN):$(PATH)
 endif
@@ -45,6 +49,7 @@ help:
 	@echo "vars:    EVM_BACKEND=$(EVM_BACKEND) CHAIN=$(CHAIN) JOBS=$(JOBS) KILLER_JOBS=$(KILLER_JOBS)"
 	@echo "         KILLER_GAS=$(KILLER_GAS) FIXTURES=$(FIXTURES) ZISKEMU=$(ZISKEMU)"
 	@echo "         EEST_PATHS=... KILLER_PATHS=... (subsets) RISCV_GCC_BIN=..."
+	@echo "setup:   toolchain   (the -mzisk-dma GCC the ELFs need, built once)"
 
 rust:
 	cargo build --release --locked --manifest-path rust-input-gen/Cargo.toml
@@ -83,7 +88,7 @@ DEPLOY_FLAGS := -DEVM_BACKEND=$(EVM_BACKEND) -DZEG_CHAIN=$(CHAIN) \
 	-DZEG_FORK_FROM_INPUT=OFF -DZEG_PUBLIC_OUTPUT=npr
 # The deployed ELF's code options, shared with the heap-stats ELF (heap-elf).
 ELF_OPT_FLAGS := -DCMAKE_BUILD_TYPE=Release -DZEG_JUMPDEST_SW=OFF -DZEG_BSWAP_BUILTIN=ON \
-	-DZEG_ZISK_DMA=OFF -DZEG_ANALYSIS_CACHE_SLOTS=1152
+	-DZEG_ZISK_DMA=ON -DZEG_ANALYSIS_CACHE_SLOTS=1152
 DEPLOY_ELF_FLAGS := $(ELF_OPT_FLAGS) -DZEG_HEAP_STATS=OFF
 
 elf: toolchain-check
@@ -100,10 +105,14 @@ exex:
 proof-engine:
 	cd proof-engine && cargo build --release --locked
 
+# The patched GCC: a no-op once it is installed.
+toolchain:
+	PATH=$(XPACK_DIR)/bin:$$PATH ZISK_XPACK_DIR=$(XPACK_DIR) ZISK_DMA_GCC_PREFIX=$(DMA_GCC_DIR) \
+		cpp-guest/patches/gcc/build-toolchain.sh
+
 toolchain-check:
 	@command -v riscv-none-elf-g++ >/dev/null || { \
-		echo "riscv-none-elf-g++ not found: put xpack riscv-none-elf-gcc 14 or 16 bin/ on PATH" \
-		     "or pass RISCV_GCC_BIN=<dir>"; exit 1; }
+		echo "riscv-none-elf-g++ not found: run 'make toolchain' or pass RISCV_GCC_BIN=<dir>"; exit 1; }
 
 # ----- test builds -----------------------------------------------------------
 
@@ -116,7 +125,7 @@ guest-test:
 
 elf-test: guest-test toolchain-check
 	cmake -S cpp-guest/zisk -B $(TEST_ELF) -DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN) \
-		-DCMAKE_BUILD_TYPE=Release -DEVM_BACKEND=$(EVM_BACKEND) -DZEG_FORK_FROM_INPUT=ON \
+		$(ELF_OPT_FLAGS) -DEVM_BACKEND=$(EVM_BACKEND) -DZEG_FORK_FROM_INPUT=ON \
 		-DZEG_HEAP_STATS=OFF -DEVMONE_SRC=$(ROOT)/$(TEST_HOST)/_deps/evmone-src
 	cmake --build $(TEST_ELF) --target zisk_eth_guest.elf -j $(JOBS)
 
