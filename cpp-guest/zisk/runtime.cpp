@@ -39,6 +39,13 @@ extern "C" {
 extern char _heap_bottom;
 extern char _heap_top;
 
+// Address of _heap_top, as a word in .rodata (_start.s). The heap ends at the end of
+// RAM, 0x1_4000_0000, beyond the 2 GiB that -mcmodel=medany reaches from the code, so
+// code must not take &_heap_top itself (the link fails with a truncated relocation):
+// it reads this word. Static initialisers may still name &_heap_top, since those are
+// absolute 64-bit data relocations.
+extern char *const zeg_heap_top;
+
 // Abnormal termination (abort / fatal / unreachable stubs). Unlike a clean
 // program exit (handled in _start.s via `ecall a7=93`), an abort must FAIL the
 // run — there is no "exit with error" syscall on ZisK. So, mirroring _start.s's
@@ -61,7 +68,7 @@ extern "C" [[noreturn]] void zeg_zisk_halt() {
 [[noreturn]] static void halt() { zeg_zisk_halt(); }
 
 // ===========================================================================
-// Bump allocator. Single-shot execution: free() is a no-op. ~0.5 GB heap.
+// Bump allocator. Single-shot execution: free() is a no-op. ~2 GB heap.
 // (No calloc: nothing links it.) malloc'd memory is NOT guaranteed zero: the
 // main heap grows into space the per-tx arena already used and reset, so
 // callers must initialise what they read. Only memory taken before the first
@@ -112,7 +119,7 @@ extern "C" void *zeg_tx_arena_alloc(size_t size) noexcept {
     return g_tx_low;
 }
 
-extern "C" void zeg_tx_arena_reset() noexcept { g_tx_low = &_heap_top; }
+extern "C" void zeg_tx_arena_reset() noexcept { g_tx_low = zeg_heap_top; }
 
 #if defined(ZEG_HEAP_STATS)
 // zeg/heap_stats.hpp: main heap in use, deepest tx arena so far, and the gap
@@ -120,7 +127,7 @@ extern "C" void zeg_tx_arena_reset() noexcept { g_tx_low = &_heap_top; }
 extern "C" void zeg_heap_stats(size_t *used, size_t *tx_peak, size_t *free_bytes) noexcept {
     char *next = g_next ? g_next : &_heap_bottom;
     *used = static_cast<size_t>(next - &_heap_bottom);
-    *tx_peak = static_cast<size_t>(&_heap_top - g_tx_min);
+    *tx_peak = static_cast<size_t>(zeg_heap_top - g_tx_min);
     *free_bytes = static_cast<size_t>(g_tx_low - next);
 }
 #endif

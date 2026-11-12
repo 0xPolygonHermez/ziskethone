@@ -113,7 +113,7 @@ signatures is the ABI's. zevm's inline U256 operations run in small `noinline`
 helpers: expanded inside its dispatch loop they made GCC spill registers across
 the whole loop.
 
-UART debug output (`uart_putc`, at `0xA0400200`) is a plain memory-mapped write,
+UART debug output (`uart_putc`, at `0xC0400200`) is a plain memory-mapped write,
 not part of the proof.
 
 ## Layout

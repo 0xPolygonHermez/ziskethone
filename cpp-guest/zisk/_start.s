@@ -188,3 +188,18 @@ memset:
 .endr
     .option pop
 .size memset, .-memset
+
+/* Top of the heap (= end of RAM, 0x1_4000_0000), as data.
+ *
+ * RAM ends above the 2 GiB that -mcmodel=medany reaches from the code (see
+ * _pc_reach_end in zisk.ld), so `la reg, _heap_top` does not link. A 64-bit data
+ * word takes an absolute relocation instead, which has no range limit; code reads
+ * the address from here (runtime.cpp), with a load that is within reach because
+ * .rodata sits next to the code. */
+.section .rodata.zeg_heap_top,"a",@progbits
+.p2align 3
+.global zeg_heap_top
+.type zeg_heap_top, @object
+zeg_heap_top:
+    .quad _heap_top
+.size zeg_heap_top, .-zeg_heap_top

@@ -4,7 +4,7 @@
 // output go through the EF zkVM I/O ABI (zkvm_io.h: read_input / write_output),
 // zkvmcall thunks that the transpiler turns into jumps to the ZisK library's
 // routines; the guest no longer reads or writes their fixed addresses itself.
-// Debug printing still writes the UART byte at 0xA0400200 (= SYS_ADDR + 0x200),
+// Debug printing still writes the UART byte at 0xC0400200 (= SYS_ADDR + 0x200),
 // which is plain memory-mapped output, not part of the proof.
 //
 // The host (rust-input-gen) writes the block container starting with the
@@ -41,7 +41,7 @@ inline void set_output_bytes32(const uint8_t bytes[32]) { ::write_output(bytes, 
 
 // UART debug: write one byte to the console.
 inline void uart_putc(char c) {
-    *reinterpret_cast<volatile unsigned char *>(0xA0400200) =
+    *reinterpret_cast<volatile unsigned char *>(0xC0400200) =
         static_cast<unsigned char>(c);
 }
 
