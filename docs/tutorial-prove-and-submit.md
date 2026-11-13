@@ -44,23 +44,20 @@ Values marked *(Sepolia, 2026-10)* are the ones in use when this was written.
   `<provingKey>/zisk/vadcop_final/vadcop_final.verkey.json` on the prover server.
 - **An active validator's EIP-2335 keystore and its password**. Lighthouse only accepts proofs
   signed by an active validator.
-- **Build tools**: rustc 1.95, `protoc`, cmake, and the xpack `riscv-none-elf-gcc` **14** for the
-  guest ELF (see [CLAUDE.md](../CLAUDE.md)).
+- **Build tools**: rustc 1.95, `protoc`, cmake, and the xpack `riscv-none-elf-gcc` **14.3.0-1**,
+  from which `make toolchain` builds the patched GCC the guest ELF needs (see
+  [CLAUDE.md](../CLAUDE.md)).
 
 ## 1. Build
 
 ```bash
 cd ziskethone
-# Host build once: it fetches evmone and intx for the ELF build.
-cmake -S cpp-guest -B cpp-guest/build-sepolia -DEVM_BACKEND=evmone -DZEG_CHAIN=sepolia
-cmake --build cpp-guest/build-sepolia -j
+# The patched GCC, once (about 10 minutes; XPACK_DIR= if the xpack is elsewhere)
+make toolchain
 
-# The ZisK guest ELF for Sepolia (the chain is compiled in)
-export PATH=$HOME/opt/xpack-riscv/xpack-riscv-none-elf-gcc-14.3.0-1/bin:$PATH
-cmake -S cpp-guest/zisk -B cpp-guest/zisk/build-npr-sep-evmone -DEVM_BACKEND=evmone -DZEG_CHAIN=sepolia \
-      -DCMAKE_TOOLCHAIN_FILE=$PWD/cpp-guest/zisk/toolchain.cmake -DCMAKE_BUILD_TYPE=Release
-cmake --build cpp-guest/zisk/build-npr-sep-evmone --target zisk_eth_guest.elf -j
-ELF=$PWD/cpp-guest/zisk/build-npr-sep-evmone/zisk_eth_guest.elf
+# The ZisK guest ELF for Sepolia (the chain is compiled in), with the deploy stamp
+make elf CHAIN=sepolia
+ELF=$PWD/cpp-guest/zisk/build-sepolia-evmone/zisk_eth_guest.elf
 
 (cd reth-zisk-exex && cargo build --release)   # -> target/release/reth-zisk
 (cd proof-engine   && cargo build --release)   # -> target/release/zisk-proof-engine

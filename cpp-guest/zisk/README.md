@@ -32,10 +32,12 @@ meaning; every `ziskemu` / `cargo-zisk` includes the ZisK library.
 
 ## Prerequisites
 
-- GCC 14 or 16 for bare-metal RISC-V on `PATH`, e.g. the xPack
-  `riscv-none-elf-gcc` (`toolchain.cmake` also finds `riscv64-unknown-elf-` and
-  `riscv64-elf-`). Ubuntu's `riscv64-unknown-elf-g++` 13 ships no libstdc++
-  headers; see `AGENTS.md` for the GCC versions to avoid.
+- The patched GCC 14.3.0 (`make toolchain`, see `../patches/gcc/`) first on `PATH`,
+  for the default `ZEG_ZISK_DMA=ON`. With `-DZEG_ZISK_DMA=OFF`, any GCC 14 or 16 for
+  bare-metal RISC-V works, e.g. the xPack `riscv-none-elf-gcc` (`toolchain.cmake`
+  also finds `riscv64-unknown-elf-` and `riscv64-elf-`). Ubuntu's
+  `riscv64-unknown-elf-g++` 13 ships no libstdc++ headers; see `AGENTS.md` for the
+  GCC versions to avoid.
 - The host build configured once, so evmone's source is fetched and this
   branch's patches (`cpp-guest/patches/`) are applied:
   `cmake -S cpp-guest -B cpp-guest/build` (populates `build/_deps/evmone-src` and
@@ -62,7 +64,7 @@ The evmone source is found in `cpp-guest/build*/_deps/evmone-src`; pass
 | `EVM_BACKEND` | `evmone` | `evmone` or `zevm` (the hand-written interpreter); use a separate build directory per backend |
 | `ZEG_JUMPDEST_SW` | `OFF` | `ON` runs the software JUMPDEST walk instead of the precompile, for A/B step counts |
 | `ZEG_BSWAP_BUILTIN` | `ON` | `OFF` selects the legacy zero-shortcut `rev8` inline asm (see `include/zeg/bswap.hpp`) |
-| `ZEG_ZISK_DMA` | `OFF` | `ON` passes `-mzisk-dma` to a patched GCC (`../patches/gcc/`), which lowers block `mem*`, including the copies it synthesizes itself, to the same DMA markers `zkvm_mem.h` inlines; -5% to -6% area on the perf branch (`docs/perf-notes.md`) |
+| `ZEG_ZISK_DMA` | `ON` | Passes `-mzisk-dma` to a patched GCC (`../patches/gcc/`), which lowers block `mem*`, including the copies it synthesizes itself, to the same DMA markers `zkvm_mem.h` inlines, with SRA kept at 32 bytes; -10% steps and -3.3% cost on mainnet blocks, -0.8% to -2.5% cost on Sepolia (2026-11-12). `OFF` builds with a stock GCC |
 
 ## Run / benchmark
 

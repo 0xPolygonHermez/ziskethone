@@ -190,10 +190,11 @@ option(ZEG_BSWAP_BUILTIN "Use plain __builtin_bswap64 (Zbb lowers it to one rev8
 # patches/gcc/build-toolchain.sh builds once from upstream sources plus
 # patches/gcc/0001-riscv-zisk-dma-lowering.patch.
 #
-# OFF by default so a stock xPack toolchain still builds the guest unchanged.
-# Measured on the perf branch (docs/perf-notes.md, 32 blocks): -14.5% steps,
-# -4.96% area on evmone; -16.4% / -6.31% on zevm.
-option(ZEG_ZISK_DMA "Lower block mem* to the ZisK DMA markers (needs the patched GCC)" OFF)
+# ON by default, and what is deployed: `make toolchain` builds the compiler.
+# Measured 2026-11-12 on evmone, against OFF from the same commit: -10% steps and
+# -3.3% cost on 8 mainnet blocks, -1.4..-4.7% steps and -0.8..-2.5% cost on the
+# 6 gas-burner Sepolia blocks of the Nethermind comparison.
+option(ZEG_ZISK_DMA "Lower block mem* to the ZisK DMA markers (needs the patched GCC)" ON)
 if(ZEG_ZISK_DMA)
   include(CheckCXXCompilerFlag)
   set(CMAKE_REQUIRED_FLAGS "-march=${ZISK_MARCH} -mabi=lp64")
@@ -202,10 +203,16 @@ if(ZEG_ZISK_DMA)
   if(NOT ZEG_HAS_ZISK_DMA)
     message(FATAL_ERROR
       "ZEG_ZISK_DMA=ON but ${CMAKE_CXX_COMPILER} does not accept -mzisk-dma.\n"
-      "Build the patched compiler once and put it first on PATH:\n"
-      "    ${CMAKE_CURRENT_SOURCE_DIR}/../patches/gcc/build-toolchain.sh")
+      "Build the patched compiler once (`make toolchain`) and put it first on PATH.\n"
+      "CMake caches the compiler and this check, so a build dir configured with\n"
+      "another compiler must be deleted first: rm -rf ${CMAKE_BINARY_DIR}")
   endif()
   list(APPEND ZEG_GUEST_OPT_LIST "-mzisk-dma")
+  # The patch drops MOVE_RATIO to 2, and GCC sizes scalar replacement of
+  # aggregates by it (MOVE_RATIO words), so a 32-byte uint256 temporary would
+  # stay in memory: a dead clear and a DMA copy per stack push. Keep SRA at the
+  # size stock GCC gives it.
+  list(APPEND ZEG_GUEST_OPT_LIST "--param=sra-max-scalarization-size-Ospeed=32")
   message(STATUS "ZisK DMA lowering: ON (-mzisk-dma)")
 endif()
 
@@ -215,29 +222,6 @@ endif()
 # byte walk in both, for A/B step counts and as a fallback if the precompile is
 # unavailable in the pinned toolchain.
 option(ZEG_JUMPDEST_SW "Use the software JUMPDEST analysis (no jump_dest_bitmap precompile)" OFF)
-
-# Lower block memcpy/memset/memcmp to the DMA precompile markers instead of
-# calling the ziskos mem* thunks. Needs the patched cross-compiler — plain GCC
-# has no such flag — which patches/gcc/build-toolchain.sh builds once from
-# upstream sources plus patches/gcc/0001-riscv-zisk-dma-lowering.patch.
-#
-# OFF by default so a stock xPack toolchain still builds the guest unchanged.
-# Measured on block 25659678: -12.06% steps, -3.17% cost.
-option(ZEG_ZISK_DMA "Lower block mem* to the ZisK DMA precompiles (needs the patched GCC)" OFF)
-if(ZEG_ZISK_DMA)
-  include(CheckCXXCompilerFlag)
-  set(CMAKE_REQUIRED_FLAGS "-march=${ZISK_MARCH} -mabi=lp64")
-  check_cxx_compiler_flag("-mzisk-dma" ZEG_HAS_ZISK_DMA)
-  unset(CMAKE_REQUIRED_FLAGS)
-  if(NOT ZEG_HAS_ZISK_DMA)
-    message(FATAL_ERROR
-      "ZEG_ZISK_DMA=ON but ${CMAKE_CXX_COMPILER} does not accept -mzisk-dma.\n"
-      "Build the patched compiler once and put it first on PATH:\n"
-      "    ${CMAKE_CURRENT_SOURCE_DIR}/../patches/gcc/build-toolchain.sh")
-  endif()
-  list(APPEND ZEG_GUEST_OPT_LIST "-mzisk-dma")
-  message(STATUS "ZisK DMA lowering: ON (-mzisk-dma)")
-endif()
 
 # JUMPDEST analysis: by default both backends offload it to the jump_dest_bitmap
 # precompile (CSR 0x81C, one op per contract — see evm/jump_dest_bitmap.hpp,
