@@ -84,7 +84,8 @@
 
 ## Guest memory (ZisK ELF)
 
-- **Layout:** 512 MiB of RAM minus a 4 MiB stack. The heap is whatever the static data leaves.
+- **Layout:** 2 GiB of RAM at 0xC000_0000; the stack (4 MiB) and ZisK's reserved regions take
+  the first 4.4 MiB, up to 0xC047_0000. The heap is whatever the static data leaves.
 - **Allocator:** a bump allocator that never frees (`zisk/runtime.cpp`), plus a
   per-transaction arena (`zeg/tx_arena.hpp`) that is reset at each transaction and system-call
   start (`ZiskStateDB::reset_tx_arena`).
@@ -100,7 +101,7 @@
     it outgrew behind. Use `zeg::ChunkedVector` (the journal, receipt logs, the state-root
     node arrays) or reserve the exact count (BAL slots, receipts). evmone's EVM memory
     recycles outgrown buffers through free lists (patch 16).
-- **Heap per backend:** evmone has about 507 MiB of heap. zevm has about 347 MiB, because its
+- **Heap per backend:** evmone has about 2044 MiB of heap. zevm has about 1883 MiB, because its
   EVMMem zones and frame stacks are static.
 - **Measuring:** `make heap-elf` builds a heap-stats ELF (`-DZEG_HEAP_STATS=ON`) that prints
   per-phase `HEAP` lines and a per-block `HEAP block` line. [HEAP_BUDGET.md](HEAP_BUDGET.md)

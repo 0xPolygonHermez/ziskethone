@@ -21,13 +21,13 @@ It is enforced, not just written down:
 
 ## The allocator
 
-512 MiB of RAM, minus a 4 MiB stack and small reserved regions, leaves the heap
+2 GiB of RAM, minus a 4 MiB stack and small reserved regions, leaves the heap
 (`cpp-guest/zisk/zisk.ld`, `_heap_start.._heap_end`):
 
 | Backend | Heap |
 |---|---|
-| evmone | 532.2 MB |
-| zevm | 364.1 MB |
+| evmone | 2142.8 MB |
+| zevm | 1974.7 MB |
 
 Two allocators share it (`cpp-guest/zisk/runtime.cpp`):
 

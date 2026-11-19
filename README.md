@@ -252,7 +252,7 @@ make killer KILLER_GAS=0030M                # the 30M-gas set
 ```
 
 A prover-killer is a valid block that costs far more to prove than a normal block, or can't be
-proven at all, for example because it exhausts the guest's 512 MiB of RAM. The zkevm-benchmark
+proven at all, for example because it exhausts the guest's 2 GiB of RAM. The zkevm-benchmark
 fixtures (execution-specs release `KILLER_RELEASE`, default
 [`tests-zkevm-benchmark@v21.0.5`](https://github.com/ethereum/execution-specs/releases/tag/tests-zkevm-benchmark%40v21.0.5))
 fill whole blocks with the worst case of one opcode or precompile: cold account access, SSTORE,
