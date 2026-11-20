@@ -54,13 +54,15 @@ endif()
 #       walk. Applies on top of 04 and is likewise gated on ZEG_ZISK, so the
 #       host keeps the software reference.
 #   06: Fused superinstructions in evmone's cgoto dispatch, gated on
-#       ZEG_ZISK. The patch is only a hook (a guarded #include plus one line
-#       in the dispatch macro); the fusions themselves live in the guest tree
-#       at zisk/evm/fused_dispatch.inl. Hot dynamic opcode sequences execute
+#       ZEG_ZISK. The patch is only hooks (a guarded #include of
+#       zisk/evm/dispatch.inl and four macros in dispatch_cgoto); the fusions
+#       live in the guest tree: jump sequences (zisk/evm/fused_dispatch.inl)
+#       and fused opcode pairs entered through per-opcode rows or peeks
+#       (zisk/evm/pair_dispatch.inl). Hot dynamic opcode sequences execute
 #       as one fused step; every edge case falls back to the generic handlers
-#       so semantics stay bit-identical. Each fusion is individually measured
-#       on mainnet blocks — the .inl documents the method, the numbers and
-#       the rejected candidates.
+#       so semantics stay bit-identical (test/fused_dispatch_difffuzz.cpp).
+#       Each fusion is measured on mainnet and Sepolia blocks — the .inl files
+#       document the method, the numbers and the rejected candidates.
 #   07: Reuse one growing output buffer in call_precompile instead of new[] per
 #       call. The ZisK bump allocator never frees, so the per-call allocation
 #       leaked max_output_size every precompile call — a block spamming identity
@@ -203,6 +205,16 @@ set(EVMONE_FUZZING       OFF CACHE BOOL "" FORCE)
 set(EVMONE_PRECOMPILES_SILKPRE OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(${evmone_SOURCE_DIR} ${evmone_BINARY_DIR})
+
+# Host-only profile of the opcode sequences evmone's dispatch executes, to
+# choose the pairs pair_dispatch.inl fuses: every run appends "A B C count"
+# lines to $ZEG_PAIR_STATS_OUT (zisk/evm/pair_stats.inl). Use its own build
+# dir; no fusion runs in it.
+option(ZEG_PAIR_STATS "Count executed opcode triples (host profiling build)" OFF)
+if(ZEG_PAIR_STATS)
+    target_compile_definitions(evmone PRIVATE ZEG_PAIR_STATS)
+    target_include_directories(evmone PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/zisk)
+endif()
 
 # evmone::state provides `is_precompile` + `call_precompile` (ECRECOVER,
 # SHA256, RIPEMD160, IDENTITY, MODEXP, BN254 ops, BLAKE2F, KZG-PE, BLS12,

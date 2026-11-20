@@ -7,10 +7,13 @@
 // block's ZisK steps (2.4% of its cost), measured on 25 mainnet blocks on top
 // of develop.
 //
-// Wiring: baseline_execution.cpp includes this file inside its anonymous
-// namespace above dispatch_cgoto and calls ZEG_TRY_FUSE from its ON_OPCODE
-// macro — that hook is all patch 06 contains. Active under ZEG_ZISK (guest) or
-// ZEG_FUSE_TEST (the host differential fuzzer).
+// Wiring: dispatch.inl includes this file, then pair_dispatch.inl, inside
+// baseline_execution.cpp's anonymous namespace above dispatch_cgoto (patch
+// 06). JUMP and PUSH4 peek at the bytes after them from ZEG_TRY_FUSE, at the
+// top of their generic handlers; PUSH2 + JUMP/JUMPI and ISZERO/EQ + PUSH2 +
+// JUMPI are entered from pair_dispatch.inl's opcode rows instead, which pick
+// among all of an opcode's fused partners with one indexed jump. Active under
+// ZEG_ZISK (guest) or ZEG_FUSE_TEST (the host differential fuzzer).
 //
 // Contract, all or nothing: zeg_try_fuse<Op>() either executes Op plus what
 // follows — leaving position/gas/stack exactly as the generic handlers would —
@@ -22,13 +25,12 @@
 // interpreter. Peeking at code_it[k] is always safe: executable code is
 // STOP-padded, and padding matches no pattern.
 //
-// Only jumps are fused, chosen from the most frequent opcode pairs and
-// triples executed on mainnet blocks; each one cuts steps on all 25 blocks it
-// was measured on. LT/GT/SLT/SGT + PUSH2 + JUMPI would save another 0.4% but
-// are left out to keep the fused surface small. Fusions of PUSH1+{ADD,PUSH1,
-// DUP2,SHL,SHR,SAR}, DUPn+MUL, POP+POP, SWAPn+{SWAPm,POP,PUSH1} and SGT+ISZERO
-// cost more than they save: their generic handlers are cheap enough that the
-// next-byte peek on every miss outweighs the fused path.
+// The sequences here are the jumps, chosen from the most frequent opcode
+// pairs and triples executed on mainnet blocks; each one cut steps on all 25
+// blocks it was measured on. Fusions of PUSH1+{ADD,PUSH1,DUP2,SHL,SHR,SAR},
+// POP+POP and SWAPn+{SWAPm,POP} cost more than they saved as *peeks* (each
+// miss pays a compare per partner); pair_dispatch.inl's rows make a miss one
+// indexed jump, which is what lets them pay now.
 
 // The fused paths charge gas as literals, while the generic path reads the
 // current revision's cost table. That is only equivalent for opcodes whose
@@ -51,19 +53,11 @@ static_assert(zeg_gas_fixed<OP_ISZERO, 3>());
 static_assert(zeg_gas_fixed<OP_EQ, 3>());
 static_assert(zeg_gas_fixed<OP_PUSH4, 3>());
 
-// Entry opcodes with a fused fast path; every other opcode pays nothing.
+// Entry opcodes that peek at the bytes after them for a fused fast path
+// (pair_dispatch.inl's ZEG_TRY_FUSE runs the peek); every other opcode either
+// has a row in pair_dispatch.inl or pays nothing.
 template <Opcode Op>
-constexpr bool zeg_fusable = Op == OP_JUMP || Op == OP_PUSH2 || Op == OP_PUSH4 ||
-                             Op == OP_ISZERO || Op == OP_EQ;
-
-// Attempt the fusion for OPCODE; on success re-dispatch directly. Expanded
-// inside dispatch_cgoto's ON_OPCODE, where position/gas/... are in scope.
-#define ZEG_TRY_FUSE(OPCODE)                                                    \
-    if constexpr (zeg_fusable<OPCODE>)                                          \
-    {                                                                           \
-        if (zeg_try_fuse<OPCODE>(stack_bottom, position, gas, state, code))     \
-            goto* cgoto_table[*position.code_it];                               \
-    }
+constexpr bool zeg_fusable = Op == OP_JUMP || Op == OP_PUSH4;
 
 // Charge `cost` gas, or leave `gas` untouched and report failure so the
 // caller falls back to the generic (and exactly-attributed) OOG path.
