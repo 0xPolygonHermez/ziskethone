@@ -178,8 +178,8 @@ directory in `EEST_PATHS`.
 ### Current results
 
 `make eest` on [`tests@v21.0.1`](https://github.com/ethereum/execution-specs/releases/tag/tests%40v21.0.1),
-the evmone backend, 2026-11-11 (develop 48c756a): 12,272 fixture files and about 134,000 blocks, across all forks and
-transitions.
+the evmone backend, 2026-11-11 (develop 48c756a), re-run with the same numbers on 2026-11-20 after the
+2026-11-17 audit fixes: 12,272 fixture files and about 134,000 blocks, across all forks and transitions.
 
 | | Blocks |
 |---|---:|
@@ -242,6 +242,35 @@ CREATE2.
   The evmone ELF couldn't hold it either; it passes only in the host build.
 
 Run `make eest` before a release, and check that Osaka and Amsterdam still have zero failures.
+
+### Assumptions and known deviations
+
+These differ from execution-specs only on states or inputs that don't exist on mainnet or
+Sepolia (reviewed in the 2026-11-17 audit):
+- **No empty accounts in the pre-state.** The guest decides whether an account "exists" by the
+  EIP-161 rule (nonce, code or balance), where the spec asks whether it is in the trie. That
+  rule drives EIP-7702's "authority exists" (the 12,500 refund on Osaka, the NEW_ACCOUNT
+  state gas on Amsterdam, `account_exists`). An account that is in the trie but empty
+  can't arise after Spurious Dragon, EIP-7523 records that mainnet has none left, and Sepolia
+  started after EIP-161. Together with the EIP-7610 collision rule above, the stated
+  assumption is: the pre-state holds no empty accounts and no storage-only accounts.
+- **A key that doesn't exist needs an explicit empty leaf.** Every account and slot the block
+  loads must be a row in the witness. A key that doesn't exist is an empty leaf placed where it
+  would sit, even under an account whose storage root is empty, where the spec would return 0
+  with no nodes ([BINARY_FORMAT.md](BINARY_FORMAT.md), "Keys that don't exist"). This proves
+  the same absence as the spec's path proof, but a host that leaves the row out makes a valid
+  block unprovable. input-gen writes them, and the zero-FAIL EEST run (through the bridge)
+  exercises SLOAD on empty storage, calls to accounts that don't exist, and withdrawals to them.
+- **Call depth 1024 is out of reach.** The guest keeps the depth limit on every fork. With
+  1023 nested 63/64 gas forwards a frame at depth 1024 has under 2 gas of a 2^24-gas
+  transaction, so two differences there can't occur. A CALL that fails on depth now refills its
+  NEW_ACCOUNT state gas, as the spec does (evmone patch 15). A CALL to a delegated account that
+  fails on depth and is followed by an exceptional halt loses the delegate's BAL read; the spec
+  records it.
+- **The input encoding isn't unique.** The guest requires zero bytes in the 8-byte alignment
+  padding, but not in a few other pads (the low nibble of an odd-length path, the address
+  pad, the high bits of a branch's child tags, the tail of `extra_data`). None of them enters a
+  hash, and the public output is the root alone.
 
 ## Prover-killer blocks: `make killer`
 
@@ -418,6 +447,12 @@ receive the proofs over gossip. The exex mints the VK, so the steps go in this o
    engine logs `VALID`. The exex only proves once reth is at the chain head; while catching up
    it cancels each job.
 
+**A new fork on mainnet needs a new ELF before it activates.** The mainnet schedule
+(`cpp-guest/include/zeg/fork_schedule.hpp`) ends at BPO2. Once Amsterdam has a mainnet
+timestamp, add its row there and in `rust-input-gen`'s fork schedule (`assemble.rs`), rebuild,
+and deploy before activation. Until then an Amsterdam block fails closed: the input's
+`fork_id` doesn't match the schedule's Osaka, and the guest halts.
+
 To roll back, point `current` at the previous directory, restore the binaries, restart the
 exex, and re-pin the old VK. An ELF from before the build stamp also needs the exex binary from
 before it.
@@ -432,6 +467,11 @@ Things to keep in mind:
 - **The setup VK changes with the proving key.** If the coordinator regenerates its proving
   key, re-pin `PE_SETUP_VK`, using the raw 32 bytes of
   `vadcop_final/vadcop_final.verkey.bin`.
+- **The setup VK also pins the ZisK version.** The guest takes the result of the BN254 and
+  BLS12-381 pairing accelerators as the precompile's answer, so their behaviour is part of what
+  a proof means. ZisK v1.4.0-alpha includes 9263069de (any number of pairing pairs, not at
+  most 32). A ZisK upgrade comes with a new proving key and setup VK: check the accelerator
+  changes before re-pinning.
 - **Pausing.** To stop proving, stop `reth-zisk-sepolia` and start `reth-sepolia`, on the same
   datadir.
 

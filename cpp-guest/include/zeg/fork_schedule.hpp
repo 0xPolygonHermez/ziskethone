@@ -68,6 +68,12 @@ inline constexpr ScheduleRow kForkSchedule[] = {
 
 }  // namespace detail
 
+// Keep the oldest row while it can still be an ancestor's fork: every one of
+// the 256 ancestors a block may carry must resolve to a row, or the guest
+// halts ("ancestor predates the fork schedule"), so a row may only be dropped
+// once the next one activated more than 256 blocks before the oldest block
+// still to be proven.
+//
 // Authoritative fork + blob parameters for this build's chain at `timestamp`:
 // the newest row whose activation <= timestamp. Used by the enforcing build to
 // derive them from the committed block timestamp instead of trusting input.

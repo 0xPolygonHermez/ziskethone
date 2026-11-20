@@ -7,6 +7,7 @@
 
 #include <evmone_precompiles/keccak.hpp>
 
+#include "zeg/debug_env.hpp"
 #include "zeg/fatal.hpp"
 #include "zeg/hash_reserve.hpp"
 #include "zeg/stream.hpp"
@@ -51,7 +52,7 @@ size_t Contracts::index_of(const evmc::bytes32& hash) const {
 #if !defined(ZEG_ZISK)
     // DEBUG (host): report each code the block uses, so a host can drop the
     // unused ones from the input (reth-zisk-exex trims its BAL-built input).
-    static const bool dump_used = std::getenv("ZEG_DUMP_USED") != nullptr;
+    static const bool dump_used = zeg::debug_env("ZEG_DUMP_USED") != nullptr;
     if (dump_used) {
         static std::set<evmc::bytes32> seen;
         if (seen.insert(hash).second) {

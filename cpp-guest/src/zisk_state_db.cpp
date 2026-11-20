@@ -25,6 +25,7 @@
 #include "zeg/bloom.hpp"
 #include "zeg/config.hpp"
 #include "zeg/create_address.hpp"
+#include "zeg/debug_env.hpp"
 #include "zeg/delegation.hpp"
 #include "zeg/eip6110_deposit.hpp"
 #include "zeg/fake_exponential.hpp"
@@ -258,7 +259,10 @@ evmc::uint256be ZiskStateDB::get_balance(const evmc::address& addr) const noexce
 }
 
 uint64_t ZiskStateDB::get_nonce(const evmc::address& addr) const noexcept {
-    // The VM asks for the creator's nonce to derive a CREATE address.
+    // The VM asks for the creator's nonce to derive a CREATE address. Settle a
+    // pending BAL read first, like every other host callback (audit
+    // 2026-11-17, Z-11; today the next callback would do it).
+    bal_commit_pending();
     return const_cast<Accounts&>(accounts_).nonce(addr, tx_counter_);
 }
 
@@ -611,7 +615,7 @@ evmc::bytes32 ZiskStateDB::get_block_hash(int64_t block_number) const noexcept {
     const uint64_t target = static_cast<uint64_t>(block_number);
 #if !defined(ZEG_ZISK)
     // DEBUG (host): report each BLOCKHASH depth used (see Contracts::index_of).
-    static const bool dump_used = std::getenv("ZEG_DUMP_USED") != nullptr;
+    static const bool dump_used = zeg::debug_env("ZEG_DUMP_USED") != nullptr;
     if (dump_used) std::fprintf(stderr, "USED blockhash %llu\n", static_cast<unsigned long long>(target));
 #endif
 
@@ -993,7 +997,7 @@ evmc::bytes32 ZiskStateDB::build_block_access_list_hash() noexcept {
     if (entries.size() != bal_->accessed_accounts() || slots.size() != bal_->accessed_slots()) {
         fatal("BAL: accessed count mismatch");
     }
-    if (std::getenv("ZEG_DUMP_BAL") != nullptr) bal_->dump(entries, contracts_);  // DEBUG
+    if (zeg::debug_env("ZEG_DUMP_BAL") != nullptr) bal_->dump(entries, contracts_);  // DEBUG
     bal_rlp_ = bal_->encode(entries, contracts_);
     return keccak256_bytes32(bal_rlp_.data(), bal_rlp_.size());
 }
@@ -1263,7 +1267,7 @@ void ZiskStateDB::register_deployed_code(const evmc::address& new_addr,
     if (result.output_size > 0) {
         contracts_.insert(deployed_hash, result.output_data, result.output_size, new_idx);
     }
-    const char* trace_env = std::getenv("ZEG_TRACE_TX");
+    const char* trace_env = zeg::debug_env("ZEG_TRACE_TX");
     if (trace_env != nullptr &&
         tx_counter_ == static_cast<uint64_t>(std::atoi(trace_env) + 1)) {
         std::fprintf(stderr, "DBG deployed addr=0x");
@@ -1432,7 +1436,9 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         // made inside the checkpoint (value transfer, EVM writes) are
         // undone if the frame fails.
         const auto cp     = checkpoint();
+#if !defined(ZEG_ZISK)
         std::fprintf(stderr, "TX %zu START\n", i);
+#endif
         auto       result = execute_top_level_frame(tx, sender_idx, g);
         if (g.runtime_oog) {
             rollback(cp_runtime);
@@ -1441,9 +1447,11 @@ void ZiskStateDB::process_transactions(const Transactions& transactions) noexcep
         }
 
         const auto used = settle_tx_gas(tx, result, sender_idx, auth_refund);
+#if !defined(ZEG_ZISK)
         std::fprintf(stderr, "TX %zu gas_used=%llu status=%d\n",
                      i, (unsigned long long)used.gas_used,
                      (int)result.status_code);
+#endif
         finalize_receipt(result, used);
 
         // Apply deferred SELFDESTRUCT clears now that the tx has
@@ -1559,9 +1567,11 @@ evmc_tx_context ZiskStateDB::build_per_tx_context(
             tx.max_priority_fee_per_gas());
         const auto max_fee  = intx::be::load<intx::uint256>(
             tx.max_fee_per_gas());
-        const auto eff = (base_fee + priority < max_fee)
-                             ? (base_fee + priority)
-                             : max_fee;
+        // base + min(priority, max_fee - base), which cannot wrap (audit
+        // 2026-11-17, Z-12). max_fee < base is invalid and halts in
+        // check_transaction before this value is used.
+        const auto eff = max_fee < base_fee ? max_fee
+            : base_fee + (priority < max_fee - base_fee ? priority : max_fee - base_fee);
         ctx.tx_gas_price = intx::be::store<evmc::uint256be>(eff);
     }
 
@@ -2066,8 +2076,12 @@ int64_t ZiskStateDB::process_single_authorization(const rlp::Item& auth_item,
         const auto delegation_hash = keccak256_bytes32(
             delegation, sizeof(delegation));
         accounts_.set_code_hash_at(signer_idx, delegation_hash, tx_counter_);
-        // EIP-7928: a BAL code change carries the code bytes.
-        if (bal_) contracts_.insert(delegation_hash, delegation, sizeof(delegation), signer_idx);
+        // Register the designator as code on every fork, as the spec does
+        // (eoa_delegation.py sets the code from the transaction, not the
+        // witness): a later CALL, EXTCODESIZE or second authorization finds it
+        // without the host having to ship it (audit 2026-11-17, Z-7). Amsterdam
+        // also needs the bytes for the BAL code change. Idempotent per hash.
+        contracts_.insert(delegation_hash, delegation, sizeof(delegation), signer_idx);
     }
 
     return (signer_was_non_empty && charges == nullptr) ? 12500 : 0;

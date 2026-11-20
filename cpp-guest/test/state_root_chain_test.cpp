@@ -14,6 +14,9 @@
 
 #include "zeg/seeded_hash.hpp"
 
+#include <sys/wait.h>
+#include <unistd.h>
+
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -144,12 +147,88 @@ void chain_vs_nested_leaf_child(const zeg::HashSeed& seed, std::mt19937_64& rng)
     std::printf("chain_vs_nested (leaf child) ok\n");
 }
 
+// ---- audit 2026-11-17 Z-2: no ExtensionHash in the witness --------------------
+//
+// An ExtensionHash with an empty path, under a branch whose only other child is
+// an absent key's empty leaf, reproduces the real extension in the old-root pass
+// (reduce_branch prepends the slot nibble) but hashes as rlp([0x00, H]) once the
+// key is created, so the post-state root is not canonical. input-gen never emits
+// the op, so the guest rejects it outright, at any path length.
+
+// Whether `f` halts the process (zeg::fatal aborts).
+template <typename F>
+bool halts(F f) {
+    std::fflush(stdout);
+    const pid_t pid = fork();
+    if (pid == 0) {
+        std::freopen("/dev/null", "w", stderr);
+        f();
+        std::_Exit(0);
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    return !(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
+void put_u64(std::vector<uint8_t>& out, uint64_t v) {
+    for (int i = 0; i < 8; ++i) out.push_back(static_cast<uint8_t>(v >> (8 * i)));
+}
+
+// A state-witness section whose root is a Branch with one child, at nibble
+// `slot`: a Hash child (what input-gen writes for an extension's still-hashed
+// child), or a full ExtensionHash node with `ext_len` zero nibbles before H.
+std::vector<uint8_t> one_child_witness(uint8_t slot, const evmc::bytes32& H, bool ext, uint64_t ext_len) {
+    std::vector<uint8_t> w;
+    put_u64(w, 64);         // numberOfNodes (an upper bound)
+    put_u64(w, 0);          // numberOfAccounts
+    put_u64(w, 0);          // numberOfStorages
+    put_u64(w, UINT64_MAX); // firstSortedAccount: none
+    put_u64(w, 4);          // Op::Branch
+    put_u64(w, uint64_t{ext ? 2u : 1u} << (2 * slot));
+    if (ext) {
+        put_u64(w, 2);      // Op::ExtensionHash
+        put_u64(w, ext_len);
+        w.insert(w.end(), ((ext_len + 1) / 2 + 7) / 8 * 8, 0);
+    }
+    w.insert(w.end(), H.bytes, H.bytes + 32);
+    return w;
+}
+
+evmc::bytes32 old_root_of(const std::vector<uint8_t>& w, const HashSeed& seed) {
+    const uint8_t* cursor = w.data();
+    set_stream_end(w.data() + w.size());
+    Accounts accounts(seed);
+    Storages storages(seed);
+    StateRoot sr(cursor, accounts, storages);
+    return sr.old_state_root();
+}
+
+void extension_hash_rejected(const HashSeed& seed) {
+    evmc::bytes32 H;
+    for (int i = 0; i < 32; ++i) H.bytes[i] = static_cast<uint8_t>(0x40 + i);
+    const uint8_t x = 0x7;
+
+    // The honest form folds to ext([x], H): keccak(rlp([hp([x], ext), H])).
+    uint8_t rlp[35] = {0xe2, static_cast<uint8_t>(0x10 | x), 0xa0};
+    std::memcpy(rlp + 3, H.bytes, 32);
+    const evmc::bytes32 ref = keccak256_bytes32(rlp, sizeof(rlp));
+    CHECK(eq(old_root_of(one_child_witness(x, H, false, 0), seed), ref));
+
+    // ExtensionHash halts: the empty path the audit built, and a real one.
+    for (const uint64_t len : {uint64_t{0}, uint64_t{1}, uint64_t{5}}) {
+        const auto w = one_child_witness(x, H, true, len);
+        CHECK(halts([&] { (void)old_root_of(w, seed); }));
+    }
+    std::printf("extension_hash_rejected ok\n");
+}
+
 int run_tests() {
     const uint8_t rs[16] = {0xa2,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
     const HashSeed seed = HashSeed::derive(rs);
     std::mt19937_64 rng(12345);
     chain_vs_nested_hash_child(seed, rng);
     chain_vs_nested_leaf_child(seed, rng);
+    extension_hash_rejected(seed);
     std::printf(g_fail == 0 ? "ALL OK\n" : "%d FAILURES\n", g_fail);
     return g_fail == 0 ? 0 : 1;
 }

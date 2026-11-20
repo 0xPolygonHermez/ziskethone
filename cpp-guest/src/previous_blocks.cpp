@@ -116,6 +116,13 @@ ForkId ancestor_fork(const PreviousBlocks::View& v) {
     return fork;
 #else
     const ForkId fork = fork_params_at(v.timestamp()).fork;
+    // Before the schedule's oldest row there is no fork to take the header
+    // shape from (Unknown would hash it with 21 fields). Unreachable with the
+    // 256-block BLOCKHASH window while that row stays in the schedule; an
+    // explicit halt instead of a hash mismatch (audit 2026-11-17, Z-13).
+    if (fork == ForkId::Unknown) {
+        fatal("PreviousBlocks: ancestor predates the fork schedule");
+    }
     if (v.field_count() != fork_field_count(fork)) {
         fatal("PreviousBlocks: ancestor field_count doesn't match its fork");
     }

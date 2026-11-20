@@ -118,7 +118,9 @@ Fixture counts are from `for_amsterdam/amsterdam/<dir>`.
   are now in zevm too.
 - **EIP-2780's "authority existed"** test is EIP-161 non-empty
   (`account_exists`). revm also counts an empty account that is in the trie;
-  such an account can't arise on mainnet after Spurious Dragon.
+  such an account can't arise on mainnet after Spurious Dragon. The README's
+  "Assumptions and known deviations" states this as an assumption on the
+  pre-state.
 - **Total tx gas cap.** `TX_MAX_TOTAL_GAS_LIMIT` (2^32 − 1) comes from
   execution-specs and the fixtures; revm 43 and reth 2.7 don't implement it.
 - **System calls** get 30M regular gas plus a 16-slot state-gas reservoir, as
