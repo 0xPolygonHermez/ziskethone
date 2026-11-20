@@ -8,7 +8,7 @@
 
 #include "evmc2_evmone.hpp"
 
-#include <cstdlib>  // std::getenv
+#include <cstdlib>
 #if !defined(ZEG_ZISK)
 #include <iostream> // std::cerr
 #endif
@@ -20,6 +20,7 @@
 #endif
 #include <evmone/vm.hpp>        // evmone::VM (the type behind the underlying vm)
 
+#include "zeg/debug_env.hpp"
 #include "zeg/system_addresses.hpp"  // kMaxCodeSizeAmsterdam (slot sizing)
 #include "zeg/tx_arena.hpp"          // FrameScratch (CREATE analyses)
 
@@ -153,7 +154,7 @@ extern "C" evmc2_vm* evmc2_create_evmone(void) {
     // emitted in zisk_state_db.cpp's process_transactions loop. Host-only:
     // the ZisK build has no stderr/iostream (std::cerr isn't linkable in the
     // freestanding guest, and tracing to it would be meaningless in-circuit).
-    if (std::getenv("ZEG_TRACE_OPCODES") != nullptr) {
+    if (zeg::debug_env("ZEG_TRACE_OPCODES") != nullptr) {
         static_cast<evmone::VM*>(impl)->add_tracer(
             evmone::create_instruction_tracer(std::cerr));
     }

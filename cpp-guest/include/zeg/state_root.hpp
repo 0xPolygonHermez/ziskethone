@@ -71,7 +71,7 @@ private:
     // The materialized node array. `branch_nodes_` holds every 16-ary
     // branch with two or more children (its child links + computed result);
     // `chains_` every run of single-child branches; `aux_` the fixed,
-    // always-read-only results of Hash / ExtensionHash / PhantomLeaf nodes.
+    // always-read-only results of Hash / PhantomLeaf nodes.
     // Leaf results live on the Accounts/Storages rows. `root_` is the tree
     // root.
     BranchNodes             branch_nodes_;

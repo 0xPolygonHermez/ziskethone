@@ -196,10 +196,12 @@ int __clzdi2(uint64_t x) {          // x != 0 (undefined for 0, per libgcc)
 void abort() { halt(); }
 
 // ===========================================================================
-// No-op libc stdio / env stubs. The guest's debug-logging sites
-// (std::fprintf(stderr,…), std::getenv("ZEG_…"), etc.) must LINK; with getenv
-// returning null they never fire at runtime. stderr/stdout expand to
-// (_impure_ptr->_stdXXX), so provide a dummy _impure_ptr too.
+// No-op libc stdio / env stubs, so the guest's remaining diagnostics
+// (std::fprintf(stderr, …) before a fatal, and anything libc/libstdc++
+// references) link. The ZEG_* debug switches don't depend on getenv here:
+// zeg::debug_env is a constant null under ZEG_ZISK, so they are compiled out
+// (zeg/debug_env.hpp). stderr/stdout expand to (_impure_ptr->_stdXXX), so
+// provide a dummy _impure_ptr too.
 // ===========================================================================
 // Layout-compatible enough: newlib's `stderr` macro reads _impure_ptr->_stderr,
 // but our stub printf-family ignores the FILE* argument, so any readable

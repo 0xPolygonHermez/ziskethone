@@ -12,8 +12,7 @@
 //   * Branch                       -> StateRoot::branch_nodes_
 //   * Account / Storage            -> the Accounts / Storages row (the row
 //                                     owns its cached `NodeR`)
-//   * Hash / ExtensionHash /
-//     PhantomLeaf                  -> StateRoot::aux_ (a fixed, always
+//   * Hash / PhantomLeaf           -> StateRoot::aux_ (a fixed, always
 //                                     read-only `NodeR`, built once)
 //   * Chain                        -> StateRoot::chains_
 //   * PoolHash                     -> the witness stream (offset in words)
@@ -165,7 +164,6 @@ enum class NodeType : uint8_t {
     Account,
     Storage,
     Hash,
-    ExtensionHash,
     PhantomLeaf,
     PoolHash,  // a branch's Hash child; idx = its offset in the witness, in words
     Chain,     // a run of single-child branches; idx = slot in StateRoot::chains_

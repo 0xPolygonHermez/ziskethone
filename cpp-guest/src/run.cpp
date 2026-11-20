@@ -24,6 +24,7 @@
 #include "zeg/new_payload_request.hpp"
 #include "zeg/consensus_info.hpp"
 #include "zeg/contracts.hpp"
+#include "zeg/debug_env.hpp"
 #include "zeg/fake_exponential.hpp"
 #include "zeg/fatal.hpp"
 #include "zeg/heap_stats.hpp"
@@ -280,7 +281,7 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
     //    `consensus.parent_hash()` carries the parent state root, so it is
     //    the expected old root — checked here so a bad witness is rejected
     //    before any execution happens. `cursor` is advanced past the section.
-    if (std::getenv("ZEG_DUMP_SROOT_OFFSET") != nullptr) {
+    if (zeg::debug_env("ZEG_DUMP_SROOT_OFFSET") != nullptr) {
         std::fprintf(stderr, "SROOT_OFFSET=%zu\n", (size_t)(cursor - file_base));
     }
     zeg::StateRoot state_root(cursor, accounts, storages);
@@ -315,7 +316,7 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
     //   txs   → pre + process_transactions (no withdrawals / requests).
     //   post  → pre + post  (no txs).
     //   full  → everything (default; same as unset).
-    const char* stage = std::getenv("ZEG_STAGE");
+    const char* stage = zeg::debug_env("ZEG_STAGE");
     const bool stage_set = stage != nullptr;
     const bool skip_exec = stage_set && std::strcmp(stage, "none") == 0;
     if (!stage_set || std::strcmp(stage, "full") == 0) {
@@ -333,7 +334,7 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
     }
 
     // DEBUG: full dump of post-execution state for Python MPT reference.
-    if (std::getenv("ZEG_DUMP_ALL") != nullptr) {
+    if (zeg::debug_env("ZEG_DUMP_ALL") != nullptr) {
         for (uint64_t i = 0; i < accounts.size(); ++i) {
             const auto& a = accounts.address_at(i);
             std::fprintf(stderr, "ACCT %llu addr=", (unsigned long long)i);
@@ -433,7 +434,7 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
         .fork_id                  = consensus.fork_id(),
     };
     // DEBUG: dump every header field so we can compare against chain.
-    if (std::getenv("ZEG_DUMP_HEADER") != nullptr) {
+    if (zeg::debug_env("ZEG_DUMP_HEADER") != nullptr) {
         auto dump32 = [](const char* name, const evmc::bytes32& v) {
             std::fprintf(stderr, "HDR %-25s 0x", name);
             for (int i = 0; i < 32; ++i) std::fprintf(stderr, "%02x", v.bytes[i]);
@@ -503,7 +504,7 @@ int run(const uint8_t* input, size_t len, uint8_t out[32], uint8_t block_hash_ou
     //    payload of — what the proof attests.
     const evmc::bytes32 npr_root = zeg::new_payload_request_root(
         header, execution_block_hash, transactions, consensus, state);
-    if (std::getenv("ZEG_DUMP_NPR") != nullptr) {  // DEBUG: inputs for scripts/npr_root_ref.py
+    if (zeg::debug_env("ZEG_DUMP_NPR") != nullptr) {  // DEBUG: inputs for scripts/npr_root_ref.py
         auto dump = [](const char* name, std::span<const uint8_t> b) {
             std::fprintf(stderr, "NPR %s 0x", name);
             for (auto c : b) std::fprintf(stderr, "%02x", c);

@@ -341,7 +341,9 @@ impl Decoder<'_> {
     /// The chain ends in whatever the extension's child resolves to — a
     /// revealed subtree, or an `Op::Hash` when the witness only references it.
     ///
-    /// We deliberately never emit an opaque `Op::ExtensionHash`: it can't be
+    /// We never emit an opaque `Op::ExtensionHash`, and the guest rejects it
+    /// (an empty-path one let a witness forge a non-canonical post-state root,
+    /// audit 2026-11-17 Z-2). Besides, it can't be
     /// split, so a key whose path diverges inside the extension's nibbles
     /// (an absent key placed here, or a created key) couldn't be placed. The
     /// chain exposes every nibble as a branch with a free slot at the

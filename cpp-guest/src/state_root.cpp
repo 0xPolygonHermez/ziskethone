@@ -35,7 +35,8 @@ enum class TreeKind : uint8_t { State, Storage };
 enum class Op : uint64_t {
     Empty         = 0,
     Hash          = 1,
-    ExtensionHash = 2,
+    // 2 was ExtensionHash (an opaque extension), never emitted by input-gen
+    // and now rejected: see build_node.
     Leaf          = 3,
     Branch        = 4,
     PhantomLeaf   = 5,
@@ -671,7 +672,6 @@ const NodeR* result_ptr(const Child& c,
         case NodeType::Account:      return accounts.cached_at(c.idx);
         case NodeType::Storage:      return storages.cached_at(c.idx);
         case NodeType::Hash:
-        case NodeType::ExtensionHash:
         case NodeType::PhantomLeaf:  return &aux[c.idx];
         case NodeType::PoolHash:     break;  // no NodeR; read the stream
     }
@@ -691,7 +691,7 @@ uint32_t aux_emplace(BuildCtx& ctx, Args&&... args) {
 }
 
 // Leaf and PhantomLeaf are the heavyweight cases (account decode, an RLP walk, a
-// nested storage subtree). Out of line, so the common Hash/ExtensionHash calls
+// nested storage subtree). Out of line, so the common Hash calls
 // don't pay a frame sized for them. `noinline` is what survives -O2.
 __attribute__((noinline)) Child build_phantom_leaf_node(const uint8_t*& cursor,
                                                         BuildCtx& ctx,
@@ -731,20 +731,6 @@ Child build_node(const uint8_t*& cursor,
             return Child{NodeType::Hash, aux_emplace<HashR>(ctx, h)};
         }
 
-        case Op::ExtensionHash: {
-            PackedPath ext = read_nibbles(cursor);
-            // The hashed child still needs a nibble of the key below it.
-            if (walked.size() + ext.size() >= 64) {
-                fatal("state_root: extension path reaches past a 64-nibble key");
-            }
-            evmc::bytes32 h;
-            require_bytes(cursor, sizeof(h.bytes));
-            zeg::zisk::zisk_xmemcpy<sizeof(h.bytes)>(h.bytes, cursor);
-            cursor += sizeof(h.bytes);
-            return Child{NodeType::ExtensionHash,
-                         aux_emplace<ExtR>(ctx, std::move(ext), h)};
-        }
-
         case Op::PhantomLeaf:
             return build_phantom_leaf_node(cursor, ctx, walked);
 
@@ -755,6 +741,13 @@ Child build_node(const uint8_t*& cursor,
             return build_branch_node(cursor, ctx, kind, walked, owning_address);
     }
 
+    // Includes op 2, the opaque ExtensionHash input-gen never emits (it spells
+    // an extension as a chain of single-child branches). Accepting it let a
+    // witness pass an empty-path extension: the branch above it folds it back
+    // into the real extension in the old-root pass, but once a sibling key is
+    // created it hashes as rlp([0x00, H]), a non-canonical post-state root
+    // (audit 2026-11-17, Z-2). A non-empty one could likewise stand for shapes
+    // the trie never has, such as an extension whose child is not a branch.
     fatal("state_root: invalid opcode in stream");
 }
 
@@ -1009,7 +1002,6 @@ std::pair<const NodeR*, bool> eval_node(const Child& c, EvalCtx& ctx, std::size_
             return {&empty_result(), true};
 
         case NodeType::Hash:
-        case NodeType::ExtensionHash:
         case NodeType::PhantomLeaf:
             // Untouched subtree/leaf — fixed result, always read-only.
             return {&ctx.aux[c.idx], true};
@@ -1040,7 +1032,6 @@ std::pair<const NodeR*, bool> eval_node(const Child& c, EvalCtx& ctx, std::size_
             switch (ch.child.type) {
                 case NodeType::Empty:
                 case NodeType::Hash:
-                case NodeType::ExtensionHash:
                 case NodeType::PhantomLeaf:
                 case NodeType::PoolHash:
                     return {&ch.cached, true};  // a fixed child
@@ -1072,7 +1063,6 @@ std::pair<const NodeR*, bool> eval_node(const Child& c, EvalCtx& ctx, std::size_
                 switch (child.type) {
                     case NodeType::Empty:
                     case NodeType::Hash:
-                    case NodeType::ExtensionHash:
                     case NodeType::PhantomLeaf:
                     case NodeType::PoolHash:
                         continue;
