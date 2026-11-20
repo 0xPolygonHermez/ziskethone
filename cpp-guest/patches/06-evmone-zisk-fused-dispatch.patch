@@ -1,25 +1,38 @@
 diff --git a/lib/evmone/baseline_execution.cpp b/lib/evmone/baseline_execution.cpp
-index 907449f9..3692f531 100644
+index 39b4473b..a46dc3a4 100644
 --- a/lib/evmone/baseline_execution.cpp
 +++ b/lib/evmone/baseline_execution.cpp
-@@ -214,6 +214,16 @@ int64_t dispatch(const CostTable& cost_table, ExecutionState& state, int64_t gas
+@@ -214,6 +214,23 @@ int64_t dispatch(const CostTable& cost_table, ExecutionState& state, int64_t gas
  }
  
  #if EVMONE_CGOTO_SUPPORTED
 +
-+// ZisK fused superinstructions (implementation lives in the guest tree; see
-+// cpp-guest/zisk/evm/fused_dispatch.inl). No-op for non-ZisK builds.
-+#if defined(ZEG_ZISK) || defined(ZEG_FUSE_TEST)
-+#include <evm/fused_dispatch.inl>
-+#else
++// ZisK dispatch hooks: fused superinstructions and the opcode-pair dispatch
++// table. The implementation lives in the guest tree (cpp-guest/zisk/evm/
++// dispatch.inl); every hook is a no-op for other builds.
++#if defined(ZEG_ZISK) || defined(ZEG_FUSE_TEST) || defined(ZEG_PAIR_STATS)
++#include <evm/dispatch.inl>
++#endif
++#ifndef ZEG_TRY_FUSE
 +#define ZEG_TRY_FUSE(OPCODE)
++#endif
++#ifndef ZEG_DISPATCH
++#define ZEG_DISPATCH() goto* cgoto_table[*position.code_it]
++#define ZEG_PAIR_INIT()
++#define ZEG_PAIR_TARGETS
 +#endif
 +
 +
  int64_t dispatch_cgoto(
      const CostTable& cost_table, ExecutionState& state, int64_t gas, const uint8_t* code) noexcept
  {
-@@ -239,6 +249,7 @@ int64_t dispatch_cgoto(
+@@ -235,10 +252,12 @@ int64_t dispatch_cgoto(
+     // Code iterator and stack top pointer for interpreter loop.
+     Position position{code, stack_bottom};
+ 
+-    goto* cgoto_table[*position.code_it];
++    ZEG_PAIR_INIT();
++    ZEG_DISPATCH();
  
  #define ON_OPCODE(OPCODE)                                                                 \
      TARGET_##OPCODE : ASM_COMMENT(OPCODE);                                                \
@@ -27,3 +40,18 @@ index 907449f9..3692f531 100644
      if (const auto next = invoke<OPCODE>(cost_table, stack_bottom, position, gas, state); \
          next.code_it == nullptr)                                                          \
      {                                                                                     \
+@@ -250,11 +269,13 @@ int64_t dispatch_cgoto(
+            this improves compiler optimization. */                                        \
+         position = next;                                                                  \
+     }                                                                                     \
+-    goto* cgoto_table[*position.code_it];
++    ZEG_DISPATCH();
+ 
+     MAP_OPCODES
+ #undef ON_OPCODE
+ 
++    ZEG_PAIR_TARGETS
++
+ TARGET_OP_UNDEFINED:
+     state.status = EVMC_UNDEFINED_INSTRUCTION;
+     return gas;

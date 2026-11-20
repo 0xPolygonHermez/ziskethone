@@ -133,7 +133,10 @@ not part of the proof.
 | `bls12_381/zkvm_marshal.hpp` | EIP-2537 ↔ EF BLS repacking; host test `bls12_381/test/zkvm_marshal_test.cpp` (`g++ -std=c++20 <file>`) |
 | `bn254/add_affine_spec.hpp` | the ECADD specialization, force-included into evmone's `precompiles.cpp` |
 | `bigint/backend.hpp` | portable 256-bit software for zevm's **host** build (the ZisK build uses the U256 ABI) |
-| `evm/fused_dispatch.inl` | evmone's fused opcode sequences (patch 06) |
+| `evm/dispatch.inl` | the hooks patch 06 includes into evmone's cgoto dispatch |
+| `evm/fused_dispatch.inl` | fused jump sequences, entered by a peek from JUMP and PUSH4 |
+| `evm/pair_dispatch.inl` | fused opcode pairs, entered through PUSH1's row or the first opcode's peeks |
+| `evm/pair_stats.inl` | host-only profile of executed opcode sequences (`-DZEG_PAIR_STATS=ON`), to choose the pairs |
 | `evm/jump_dest_bitmap.hpp` | JUMPDEST analysis through `zkvm_evm.h` |
 | `../include/zeg/zisk_io.hpp` | input/output through `zkvm_io.h`, and the UART debug output |
 | `../include/zeg/zisk_dma.hpp` | fixed-size memory operations through `zkvm_mem.h` (host: the standard functions) |

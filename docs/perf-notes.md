@@ -158,6 +158,23 @@ Ordered by measured size, not by how interesting they are.
 
 ## Done
 
+* **Fused opcode pairs** (`cpp-guest/zisk/evm/pair_dispatch.inl`, 2026-11-19):
+  -0.56% cost on 31 mainnet blocks (every block cheaper), **-39% on 27 Sepolia
+  blocks**. Half of every Sepolia block's gas is one gas-burner loop (`JUMPDEST
+  PUSH2 GAS LT PUSH1 JUMPI PUSH1 ADD PUSH2 POP PUSH1 JUMP`) that Nethermind's
+  zkVM guest ran at ~100 steps per iteration against our ~240; it now runs as
+  four fused steps. PUSH1 looks the opcode after its immediate up in a 256-entry
+  row of handlers (13 partners for one indexed jump); every other first opcode
+  peeks at its one to four partners, most frequent first. The pairs come from
+  the opcode sequences executed on 31 mainnet and 300 Sepolia blocks
+  (`-DZEG_PAIR_STATS=ON`); `cpp-guest/test/fused_dispatch_difffuzz.cpp` checks
+  them against evmone's switch dispatch.
+  The price is a few steps on the misses: PUSH1 followed by an opcode it has no
+  pair with pays the row lookup (+7 steps, 7 instructions before the generic
+  PUSH1), so 200M benchmark blocks that are almost entirely such a PUSH1
+  (`PUSH1 0 PUSH0 PUSH0 CODECOPY`, `PUSH1 x GAS CALLDATACOPY`) cost 3-6% more.
+  The costliest 200M blocks did not move (3.530G steps before and after).
+
 * **One hashmap probe per storage access instead of two** (-0.60% steps, -0.41%
   area over the eight blocks). `ZiskStateDB`'s three storage entry points each
   asked `Storages` the same question twice — `contains(addr, key)` to branch,
@@ -229,6 +246,24 @@ For scale, the static upper bound from adjacent dependent pairs was 20.5M and
 ## Tried, did not pay
 
 Keeping these so nobody spends the afternoon twice.
+
+* **Dispatching every opcode on the opcode pair** (Nethermind's zkVM guest: a
+  65,536-entry table indexed by the opcode and the byte after it): with no
+  fused entry at all, **+3.8% cost on mainnet, +13% on Sepolia**; with the
+  fused pairs, still +2.0% on mainnet. Reading two bytes and indexing a large
+  table on every dispatch costs more than it saves; a 16-bit `lhu` is worse
+  (+6.6%, misaligned), and 4-byte entries cost more than 8-byte ones.
+* **A row for every first opcode with a fused partner** (PUSH2, ISZERO, EQ,
+  LT, GT, POP, SWAPn, SHL, ...): +0.8% on mainnet. A row lookup is 8
+  instructions on a hit or a miss, a peek 3 per partner tested; only PUSH1,
+  with 13 partners, gains from one. The POP/SWAPn pairs (POP POP, SWAP1 POP,
+  SWAP2 SWAP1, ...) and `<cmp> ISZERO` save too little to pay for even a peek.
+* **A PUSH1 copy in front of every opcode PUSH1 has no pair with**, so a row
+  miss falls straight into "push, then run B" instead of the generic PUSH1 and
+  a second dispatch: a miss went from +7 steps over develop to +2, but the
+  extra entry points cost GCC register allocation in the handlers themselves.
+  Mainnet -0.50% against the plain row's -0.56%, Sepolia 0.608 against 0.606
+  (cost relative to develop); three variants, none better.
 
 * **Routing every explicit `mem*` call through the precompile** (`-fno-builtin-mem*`,
   so they all reach the ziskos thunk): **+29% steps, +13% area**. GCC inlines ~6.9M
