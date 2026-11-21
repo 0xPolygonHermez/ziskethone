@@ -54,9 +54,17 @@
 - **`make killer`**: the prover-killer sweep (`scripts/killer_sweep.sh`).
   - It runs the zkevm-benchmark 200M-gas worst-case blocks (`tests-zkevm-benchmark@v21.0.5`,
     `KILLER_GAS=0200M`) on the **ZisK ELF in ziskemu**.
+  - It also runs our own killer blocks, committed as `.json.gz` in
+    `cpp-guest/test/fixtures/killer/` next to the execution-specs test that fills them
+    (`KILLER_LOCAL_PATHS=` skips them). Today that is the audit Z-3 analysis-cache thrash block.
+    It PASSes, but it costs 1,401G on evmone and 941G on zevm, against 356G for the worst
+    zkevm-benchmark block. That stays so until Z-3 is fixed.
   - A block passes when the ELF output equals the host root and the block hash is right.
   - It prints the costliest blocks by steps. Results go to
     `build/killer-0200M-<backend>/results.log`.
+  - `COST=1` adds `ziskemu -X` and ranks by ZisK cost (`cost=` in `results.log`). It is several
+    times slower. Use it for blocks whose cost is in precompiles and memory, which steps
+    understate.
   - It needs `ziskemu` (`ZISKEMU=`) and the patched GCC (`make toolchain`, or `RISCV_GCC_BIN=`).
   - Expected: every block PASSes on both backends.
 - **`make unit`**: host unit tests for the guest's memory-discipline building blocks
