@@ -1,0 +1,44 @@
+diff --git a/src/ethereum/forks/amsterdam/vm/runtime.py b/src/ethereum/forks/amsterdam/vm/runtime.py
+index 0aa5ddd..4b700d8 100644
+--- a/src/ethereum/forks/amsterdam/vm/runtime.py
++++ b/src/ethereum/forks/amsterdam/vm/runtime.py
+@@ -19,7 +19,7 @@ from ethereum_types.numeric import Uint, ulen
+ from .instructions import Ops
+ 
+ 
+-def get_valid_jump_destinations(code: Bytes) -> Set[Uint]:
++def _get_valid_jump_destinations(code: Bytes) -> Set[Uint]:
+     """
+     Analyze the EVM code to obtain the set of valid jump destinations.
+ 
+@@ -67,3 +67,30 @@ def get_valid_jump_destinations(code: Bytes) -> Set[Uint]:
+         pc += Uint(1)
+ 
+     return valid_jump_destinations
++
++
++import functools as _ft
++
++
++class _JumpBitmap:
++    """Compact read-only stand-in for the Set[Uint] (local fill speedup)."""
++
++    __slots__ = ("bits", "n")
++
++    def __init__(self, dests: Set[Uint], n: int) -> None:
++        b = bytearray((n + 7) // 8)
++        for d in dests:
++            j = int(d)
++            b[j >> 3] |= 1 << (j & 7)
++        self.bits = bytes(b)
++        self.n = n
++
++    def __contains__(self, x: object) -> bool:
++        j = int(x)  # type: ignore[call-overload]
++        return 0 <= j < self.n and (self.bits[j >> 3] >> (j & 7)) & 1 == 1
++
++
++@_ft.lru_cache(maxsize=8192)
++def get_valid_jump_destinations(code: Bytes) -> Set[Uint]:
++    """Local fill speedup: cache the scan per code as a bitmap."""
++    return _JumpBitmap(_get_valid_jump_destinations(code), len(code))  # type: ignore[return-value]

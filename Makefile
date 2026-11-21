@@ -1,5 +1,6 @@
 .PHONY: all rust cpp input clean test unit help bridge guest-test elf-test elf heap-elf \
-        exex proof-engine eest killer heap-gate eest-fixtures killer-fixtures toolchain toolchain-check
+        exex proof-engine eest killer heap-gate eest-fixtures killer-fixtures \
+        killer-local-fixtures toolchain toolchain-check
 
 BLOCK ?= 0
 OUTPUT ?= build/block_input.bin
@@ -16,6 +17,10 @@ KILLER_RELEASE ?= tests-zkevm-benchmark@v21.0.5
 KILLER_GAS     ?= 0200M
 EEST_PATHS     ?= $(FIXTURES)/eest/fixtures/blockchain_tests cpp-guest/test/fixtures/eest
 KILLER_PATHS   ?= $(FIXTURES)/killer-$(KILLER_GAS)/fixtures/blockchain_tests
+# Our own killer blocks (committed .json.gz, e.g. the audit Z-3 cache thrash),
+# unpacked here and swept by `make killer` too. Set empty to skip them.
+KILLER_LOCAL       ?= cpp-guest/test/fixtures/killer
+KILLER_LOCAL_PATHS ?= $(FIXTURES)/killer-local
 KILLER_JOBS    ?= 4
 ZISKEMU        ?= $(shell command -v ziskemu || echo $(HOME)/.zisk/bin/ziskemu)
 RELEASES_URL   := https://github.com/ethereum/execution-specs/releases/download
@@ -155,8 +160,15 @@ $(FIXTURES)/killer-$(KILLER_GAS)/.done:
 	tar xzf $(@D)/fixtures.tar.gz -C $(@D) && rm $(@D)/fixtures.tar.gz
 	touch $@
 
+# Unpack the committed local killer fixtures (redone when one changes).
+$(FIXTURES)/killer-local/.done: $(wildcard $(KILLER_LOCAL)/*.json.gz)
+	rm -rf $(@D) && mkdir -p $(@D)
+	for f in $^; do gzip -dc "$$f" > $(@D)/$$(basename "$$f" .gz); done
+	touch $@
+
 eest-fixtures: $(FIXTURES)/eest/.done
 killer-fixtures: $(FIXTURES)/killer-$(KILLER_GAS)/.done
+killer-local-fixtures: $(if $(KILLER_LOCAL_PATHS),$(FIXTURES)/killer-local/.done)
 
 # ----- test suites -----------------------------------------------------------
 
@@ -166,9 +178,12 @@ eest: rust bridge guest-test eest-fixtures
 		-j $(JOBS) $(EEST_PATHS)
 
 # The zkevm-benchmark worst-case blocks ($(KILLER_GAS) gas) on the ZisK ELF in ziskemu.
-killer: rust bridge elf-test killer-fixtures
+# Plus our local killer blocks ($(KILLER_LOCAL)). COST=1 adds ziskemu's ZisK
+# cost (-X, much slower) to every block and ranks by it.
+killer: rust bridge elf-test killer-fixtures killer-local-fixtures
 	scripts/killer_sweep.sh -g $(TEST_HOST)/zisk_eth_guest -e $(TEST_ELF)/zisk_eth_guest.elf \
-		-z $(ZISKEMU) -o build/killer-$(KILLER_GAS)-$(EVM_BACKEND) -j $(KILLER_JOBS) $(KILLER_PATHS)
+		-z $(ZISKEMU) -o build/killer-$(KILLER_GAS)-$(EVM_BACKEND) -j $(KILLER_JOBS) \
+		$(KILLER_PATHS) $(KILLER_LOCAL_PATHS)
 
 # Heap regression gate (HEAP_BUDGET.md): the gate blocks on the heap-stats ELF,
 # each block's heap/arena checked against its baseline, the bound, and a hard

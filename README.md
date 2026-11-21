@@ -259,8 +259,26 @@ fill whole blocks with the worst case of one opcode or precompile: cold account 
 KECCAK, MODEXP, pairing, large RETURNs, deep call chains and so on. They come in
 30/60/100/150/200M-gas sets. `make killer` uses the 200M set (`KILLER_GAS=0200M`).
 
+`make killer` also sweeps our own killer blocks in
+[`cpp-guest/test/fixtures/killer/`](cpp-guest/test/fixtures/killer) (`KILLER_LOCAL`): each one
+is a committed `.json.gz` fixture next to the execution-specs test that fills it. Set
+`KILLER_LOCAL_PATHS=` to skip them. Today there is one:
+- **Z-3 analysis-cache thrash** (audit 2026-11-17), Amsterdam, 200M gas. The block warm-calls
+  1153 contracts of 64 KiB in a cycle. That is more than the 1152 slots of the guest's
+  JUMPDEST-analysis cache, so every call re-analyses a full code. It passes. Its steps look
+  ordinary, but its ZisK cost is several times the costliest zkevm-benchmark block (`exchange`,
+  356G), as measured on 2026-11-21 (see `COST=1` below):
+
+  | ELF | Steps | ZisK cost | Re-analyses |
+  |---|---|---|---|
+  | evmone | 2.36G | **1,401G** | 1.36M |
+  | zevm | 2.22G | **941G** | 1.36M |
+
+  It is the regression block for the Z-3 fix.
+
 `make killer` does the following:
-1. Downloads the set into `build/fixtures/killer-$(KILLER_GAS)`.
+1. Downloads the set into `build/fixtures/killer-$(KILLER_GAS)`, and unpacks the local blocks
+   into `build/fixtures/killer-local`.
 2. Builds the test host guest and the **ZisK ELF** (`ZEG_FORK_FROM_INPUT=ON`).
 3. Runs [`scripts/killer_sweep.sh`](scripts/killer_sweep.sh):
    - **Phase 1:** each fixture goes through the bridge and the host guest.
@@ -275,6 +293,11 @@ host's block hash equals the fixture's. The others are:
 
 The sweep prints a tally and the 20 costliest blocks by steps, and writes
 `build/killer-$(KILLER_GAS)-$(EVM_BACKEND)/results.log`. A full 200M run takes several hours.
+
+Steps understate blocks whose work is in precompiles and memory rather than in RISC-V
+instructions. `make killer COST=1` also runs `ziskemu -X` on every block. It records the ZisK
+cost (the report's `TOTAL`) as `cost=` in `results.log` and ranks the summary by cost. It is
+several times slower, so narrow it with `KILLER_PATHS=` when you only need a few blocks.
 
 **Current result (2026-10-29, 200M set):**
 - **200M set:** all 2,528 blocks pass on both the evmone and the zevm ELF.
