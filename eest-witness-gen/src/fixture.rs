@@ -133,8 +133,10 @@ pub struct Account {
 /// one or more named tests; we return them all keyed by test label.
 pub fn load_fixture(path: &std::path::Path) -> anyhow::Result<Fixture> {
     use anyhow::Context as _;
-    let bytes = std::fs::read(path)
+    // Streamed: a fixture can be several GB of hex (64 KiB codes), and
+    // holding the text next to the parsed codes would double the peak.
+    let file = std::fs::File::open(path)
         .with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_slice(&bytes)
+    serde_json::from_reader(std::io::BufReader::with_capacity(1 << 20, file))
         .with_context(|| format!("parsing EEST fixture {}", path.display()))
 }

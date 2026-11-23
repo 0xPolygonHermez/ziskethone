@@ -233,9 +233,14 @@ fn main() -> Result<()> {
         for (i, m) in manifests.iter().enumerate() {
             let Some(m) = m else { continue };
             let path = test_dir.join(format!("block-{i}.json"));
-            let json = serde_json::to_string(m)
+            // Streamed to the file: a manifest holds each code twice (as
+            // hex), so the string would be ~4x the block's code.
+            let file = std::fs::File::create(&path)
+                .with_context(|| format!("writing {}", path.display()))?;
+            let mut w = std::io::BufWriter::with_capacity(1 << 20, file);
+            serde_json::to_writer(&mut w, m)
                 .with_context(|| format!("serializing manifest {}", path.display()))?;
-            std::fs::write(&path, &json)
+            std::io::Write::flush(&mut w)
                 .with_context(|| format!("writing {}", path.display()))?;
             // Write a sidecar `block-{i}.expect` containing the EEST
             // fixture's expect_exception string (or empty if the block

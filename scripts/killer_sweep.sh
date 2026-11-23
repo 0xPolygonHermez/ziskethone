@@ -13,9 +13,16 @@
 # PASS = the ELF's 32-byte output equals the host's public output (the
 # EIP-8025 new_payload_request_root) and the host's block hash equals the
 # fixture's. Otherwise: EMU_DIFF (ELF != host), HASH_MISMATCH (both agree but
-# the hash is wrong), EMU_ERR, EMU_TIMEOUT, IG_FAIL; NEG_ prefix on
-# expect_exception blocks. Writes OUT/results.log (verdict rc steps secs
-# fixture block) and prints a tally plus the 20 costliest blocks by steps.
+# the hash is wrong), EMU_ERR, EMU_TIMEOUT, IG_FAIL, INPUT_TOO_BIG (the input
+# exceeds ZisK's 2 GiB input region, so no ELF can read it; checked before
+# ziskemu, which would need ~3x the input in RAM just to refuse it); NEG_
+# prefix on expect_exception blocks. Writes OUT/results.log (verdict rc steps secs cost
+# fixture block; the block name stays the last field) and prints a tally plus
+# the 20 costliest blocks by steps.
+# Steps understate blocks whose work sits in precompiles and memory (e.g. the
+# Z-3 cache-thrash block in cpp-guest/test/fixtures/killer): COST=1 also runs
+# ziskemu -X (several times slower), records the ZisK TOTAL cost as cost=N
+# (cost=- otherwise) and ranks the summary by cost.
 # Env: MAXSTEPS (default 2^36-1), TMO (per-block seconds, default 7200),
 # P1_JOBS (phase-1 jobs, default nproc/2), SKIP_P1=1 (rerun phase 2 only),
 # ONLY_BLOCKS=<file of "slug/block-i" lines> (the heap gate): process and
@@ -40,7 +47,7 @@ while getopts "g:e:z:o:j:" opt; do
     esac
 done
 shift $((OPTIND - 1))
-[ $# -ge 1 ] || { sed -n 2,20p "$0"; exit 2; }
+[ $# -ge 1 ] || { sed -n 2,30p "$0"; exit 2; }
 
 BRIDGE="$REPO/eest-witness-gen/target/release/eest-witness-gen"
 INPUTGEN="$REPO/target/release/input-gen-from-manifest"
@@ -54,8 +61,9 @@ TMO=${TMO:-7200}
 P1_JOBS=${P1_JOBS:-$(( ($(nproc) + 1) / 2 ))}
 ONLY_BLOCKS=${ONLY_BLOCKS:-}
 [ -n "$ONLY_BLOCKS" ] && ONLY_BLOCKS=$(realpath "$ONLY_BLOCKS")
+COST=${COST:-0}
 mkdir -p "$OUT/work" "$OUT/p1"
-export BRIDGE INPUTGEN HOST ELF ZISKEMU OUT MAXSTEPS TMO ONLY_BLOCKS
+export BRIDGE INPUTGEN HOST ELF ZISKEMU OUT MAXSTEPS TMO ONLY_BLOCKS COST
 
 # One fixture: one line per block in OUT/p1/<id>:
 #   status neg expected_hash host_hash host_output input_base fixture name
@@ -77,7 +85,19 @@ phase1() {
         # With an allowlist, a kept test's setup blocks are still written; run
         # only the listed blocks (b<i> numbering is unaffected — i already ++'d).
         [ -n "$ONLY_BLOCKS" ] && ! grep -qxF "$name" "$ONLY_BLOCKS" && continue
-        exp=$(jq -r '.current.hash // empty' "$m")
+        local big=0
+        [ "$(stat -c%s "$m")" -gt 1000000000 ] && big=1
+        if [ $big = 1 ]; then
+            # jq would load all of a multi-GB manifest (the input-limit
+            # block's is 9-17 GB); the block hash is its first field.
+            exp=$(head -c 200 "$m" | sed -n 's/^{"current":{"hash":"\(0x[0-9a-f]*\)".*/\1/p')
+            # It is also still dirty page cache, which counts against a
+            # memory-capped scope and can't be dropped until written back:
+            # flush it before input-gen needs the memory.
+            sync "$m"
+        else
+            exp=$(jq -r '.current.hash // empty' "$m")
+        fi
         [ -s "$base.expect" ] && neg=1
         if ! "$INPUTGEN" --manifest "$m" --output "$B.bin" >"$B.ig.log" 2>&1; then
             echo "IG_FAIL $neg $exp - - $B $FIX $name" >>"$P"; continue
@@ -88,9 +108,13 @@ phase1() {
         outl=$(timeout 600 prlimit --core=1 "$HOST" "$B.bin" 2>"$B.host.err" | grep '^0x')
         hh=$(echo "$outl" | head -1); hn=$(echo "$outl" | tail -1)
         [ -z "$hh" ] && { hh=-; hn=-; }
-        # ziskemu input: 8-byte little-endian length, then the input.
-        python3 -I -c "import struct,sys; d=open(sys.argv[1],'rb').read(); open(sys.argv[2],'wb').write(struct.pack('<Q',len(d))+d)" "$B.bin" "$B.zin"
+        # ziskemu input: 8-byte little-endian length, then the input (copied
+        # in chunks: an input can be GBs).
+        python3 -I -c "import os,shutil,struct,sys; o=open(sys.argv[2],'wb'); o.write(struct.pack('<Q',os.path.getsize(sys.argv[1]))); shutil.copyfileobj(open(sys.argv[1],'rb'),o,1<<20)" "$B.bin" "$B.zin"
         rm -f "$B.bin"
+        # A manifest holds every code twice as hex (~4x the input): drop the
+        # big ones (the input-limit block's is ~9 GB) once the input exists.
+        [ $big = 1 ] && rm -f "$m"
         echo "OK $neg $exp $hh $hn $B $FIX $name" >>"$P"
     done
     touch "$P"; mv "$P" "$OUT/p1/$ID"
@@ -99,15 +123,27 @@ phase1() {
 phase2() {
     local st neg exp hh hn B FIX name
     read -r st neg exp hh hn B FIX name <<<"$1"
-    [ "$st" = OK ] || { echo "IG_FAIL rc=- steps=- secs=0 $FIX $name"; return; }
-    local sz mem=() t0 t1 rc steps eo=-
+    [ "$st" = OK ] || { echo "IG_FAIL rc=- steps=- secs=0 cost=- $FIX $name"; return; }
+    local sz mem=() xs=() t0 t1 rc steps cost=- eo=-
     sz=$(stat -c%s "$B.zin")
+    # ZisK's input region is MAX_INPUT_SIZE = 2 GiB (zisk core/src/mem.rs) and
+    # ziskemu refuses a .zin larger than that minus 8. A wrong host hash
+    # still outranks it.
+    if [ "$sz" -gt $((2147483648 - 8)) ]; then
+        local v=INPUT_TOO_BIG
+        [ "$hh" = "$exp" ] || v=HASH_MISMATCH
+        [ "$neg" = 1 ] && v="NEG_$v"
+        echo "$v rc=- steps=- secs=0 cost=- $FIX $name"; return
+    fi
     # ziskemu's default input cap is 128 MiB; the ELF's input region is 2 GiB.
     [ "$sz" -gt 100000000 ] && mem=(--max-input-mem 2147483648)
+    [ "$COST" = 1 ] && xs=(-X)
     t0=$(date +%s.%N)
-    timeout "$TMO" "$ZISKEMU" -e "$ELF" -i "$B.zin" -o "$B.out" -m -n "$MAXSTEPS" "${mem[@]}" >"$B.emu.log" 2>&1
+    timeout "$TMO" "$ZISKEMU" -e "$ELF" -i "$B.zin" -o "$B.out" -m "${xs[@]}" -n "$MAXSTEPS" "${mem[@]}" >"$B.emu.log" 2>&1
     rc=$?; t1=$(date +%s.%N)
     steps=$(grep -o 'steps=[0-9]*' "$B.emu.log" | tail -1 | cut -d= -f2)
+    # -X report: "TOTAL   1,234,567 100.00%"
+    [ "$COST" = 1 ] && cost=$(awk '$1 == "TOTAL" {gsub(",", "", $2); c = $2} END {print (c == "" ? "-" : c)}' "$B.emu.log")
     [ -s "$B.out" ] && eo=0x$(head -c32 "$B.out" | xxd -p -c32)
     rm -f "$B.out"
     local verdict
@@ -118,8 +154,8 @@ phase2() {
     else verdict=HASH_MISMATCH          # ELF == host, both differ from the fixture
     fi
     [ "$neg" = 1 ] && verdict="NEG_$verdict"
-    printf '%s rc=%s steps=%s secs=%.1f %s %s\n' "$verdict" "$rc" "${steps:--}" \
-        "$(echo "$t1 - $t0" | bc)" "$FIX" "$name"
+    printf '%s rc=%s steps=%s secs=%.1f cost=%s %s %s\n' "$verdict" "$rc" "${steps:--}" \
+        "$(echo "$t1 - $t0" | bc)" "$cost" "$FIX" "$name"
 }
 export -f phase1 phase2
 
@@ -147,7 +183,14 @@ done <"$OUT/blocks.run" | sort -rn | cut -d' ' -f2- | tr '\n' '\0' \
 
 echo "== $(wc -l <"$OUT/results.log") blocks, ELF $ELF"
 awk '{print $1}' "$OUT/results.log" | sort | uniq -c
-echo "== costliest 20 by steps"
-awk '{s=$3; sub(/steps=/, "", s); if (s != "-") print s, $1, $6}' "$OUT/results.log" \
-    | sort -rn | head -20 | awk '{printf "%14d %-6s %s\n", $1, $2, $3}'
+if [ "$COST" = 1 ]; then
+    echo "== costliest 20 by ZisK cost (cost, steps)"
+    awk '{c=$5; s=$3; sub(/cost=/, "", c); sub(/steps=/, "", s); if (c != "-") print c, s, $1, $NF}' \
+        "$OUT/results.log" | sort -rn | head -20 \
+        | awk '{printf "%17d %14d %-6s %s\n", $1, $2, $3, $4}'
+else
+    echo "== costliest 20 by steps"
+    awk '{s=$3; sub(/steps=/, "", s); if (s != "-") print s, $1, $NF}' "$OUT/results.log" \
+        | sort -rn | head -20 | awk '{printf "%14d %-6s %s\n", $1, $2, $3}'
+fi
 echo "results: $OUT/results.log"

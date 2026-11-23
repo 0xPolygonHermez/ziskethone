@@ -49,10 +49,58 @@ pub struct AccountPrestate {
     pub balance: Option<U256>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nonce: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "code_interned"
+    )]
     pub code: Option<Bytes>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub storage: BTreeMap<B256, B256>,
+}
+
+// A manifest carries each code more than once (the prestate, the diff and
+// the witness). While `intern_codes` runs, every code is parsed into the one
+// buffer of its first copy, so a block with GBs of code (the input-limit
+// killer block) holds it once. Outside `intern_codes` this is a plain parse.
+std::thread_local! {
+    static CODES: std::cell::RefCell<Option<std::collections::HashMap<B256, Bytes>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` (a manifest parse) with code interning on.
+pub fn intern_codes<R>(f: impl FnOnce() -> R) -> R {
+    CODES.with(|c| *c.borrow_mut() = Some(Default::default()));
+    let r = f();
+    CODES.with(|c| *c.borrow_mut() = None);
+    r
+}
+
+fn intern(code: Bytes) -> Bytes {
+    CODES.with(|c| match c.borrow_mut().as_mut() {
+        Some(map) if !code.is_empty() => {
+            map.entry(alloy::primitives::keccak256(&code)).or_insert(code).clone()
+        }
+        _ => code,
+    })
+}
+
+/// One code, interned as soon as it is parsed (so a list never holds two
+/// copies of one code at once).
+struct InternedCode(Bytes);
+
+impl<'de> Deserialize<'de> for InternedCode {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Self(intern(Bytes::deserialize(d)?)))
+    }
+}
+
+fn code_interned<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Bytes>, D::Error> {
+    Ok(Option::<InternedCode>::deserialize(d)?.map(|c| c.0))
+}
+
+fn codes_interned<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Bytes>, D::Error> {
+    Ok(Vec::<InternedCode>::deserialize(d)?.into_iter().map(|c| c.0).collect())
 }
 
 pub type Prestate = BTreeMap<Address, AccountPrestate>;
@@ -77,6 +125,7 @@ pub struct PrestateDiff {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecutionWitness {
     pub state: Vec<Bytes>,
+    #[serde(deserialize_with = "codes_interned")]
     pub codes: Vec<Bytes>,
     pub keys: Vec<Bytes>,
     /// reth-specific: absent or null on nodes that don't populate it.
