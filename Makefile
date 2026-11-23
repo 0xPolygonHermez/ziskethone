@@ -17,10 +17,14 @@ KILLER_RELEASE ?= tests-zkevm-benchmark@v21.0.5
 KILLER_GAS     ?= 0200M
 EEST_PATHS     ?= $(FIXTURES)/eest/fixtures/blockchain_tests cpp-guest/test/fixtures/eest
 KILLER_PATHS   ?= $(FIXTURES)/killer-$(KILLER_GAS)/fixtures/blockchain_tests
-# Our own killer blocks (committed .json.gz, e.g. the audit Z-3 cache thrash),
-# unpacked here and swept by `make killer` too. Set empty to skip them.
+# Our own killer blocks (committed .json.gz/.json.xz: the audit Z-3 cache
+# thrash, the input-limit block), unpacked here and swept by `make killer` too.
+# Set empty to skip them. KILLER_LARGE=1 adds the big ones in $(KILLER_LOCAL)/large
+# (the full 200M input-limit block: 4.2 GB of input, phase 1 fits a 9 GB memory cap).
 KILLER_LOCAL       ?= cpp-guest/test/fixtures/killer
 KILLER_LOCAL_PATHS ?= $(FIXTURES)/killer-local
+KILLER_LARGE       ?= 0
+KILLER_LARGE_PATHS := $(if $(filter 1,$(KILLER_LARGE)),$(FIXTURES)/killer-large)
 KILLER_JOBS    ?= 4
 ZISKEMU        ?= $(shell command -v ziskemu || echo $(HOME)/.zisk/bin/ziskemu)
 RELEASES_URL   := https://github.com/ethereum/execution-specs/releases/download
@@ -161,14 +165,21 @@ $(FIXTURES)/killer-$(KILLER_GAS)/.done:
 	touch $@
 
 # Unpack the committed local killer fixtures (redone when one changes).
-$(FIXTURES)/killer-local/.done: $(wildcard $(KILLER_LOCAL)/*.json.gz)
+UNPACK_ONE = case "$$f" in *.xz) xz -dc "$$f" > $(@D)/$$(basename "$$f" .xz) ;; \
+	*) gzip -dc "$$f" > $(@D)/$$(basename "$$f" .gz) ;; esac || exit 1
+$(FIXTURES)/killer-local/.done: $(wildcard $(KILLER_LOCAL)/*.json.gz $(KILLER_LOCAL)/*.json.xz)
 	rm -rf $(@D) && mkdir -p $(@D)
-	for f in $^; do gzip -dc "$$f" > $(@D)/$$(basename "$$f" .gz); done
+	for f in $^; do $(UNPACK_ONE); done
+	touch $@
+$(FIXTURES)/killer-large/.done: $(wildcard $(KILLER_LOCAL)/large/*.json.xz)
+	rm -rf $(@D) && mkdir -p $(@D)
+	for f in $^; do $(UNPACK_ONE); done
 	touch $@
 
 eest-fixtures: $(FIXTURES)/eest/.done
 killer-fixtures: $(FIXTURES)/killer-$(KILLER_GAS)/.done
-killer-local-fixtures: $(if $(KILLER_LOCAL_PATHS),$(FIXTURES)/killer-local/.done)
+killer-local-fixtures: $(if $(KILLER_LOCAL_PATHS),$(FIXTURES)/killer-local/.done) \
+	$(if $(KILLER_LARGE_PATHS),$(FIXTURES)/killer-large/.done)
 
 # ----- test suites -----------------------------------------------------------
 
@@ -178,12 +189,12 @@ eest: rust bridge guest-test eest-fixtures
 		-j $(JOBS) $(EEST_PATHS)
 
 # The zkevm-benchmark worst-case blocks ($(KILLER_GAS) gas) on the ZisK ELF in ziskemu.
-# Plus our local killer blocks ($(KILLER_LOCAL)). COST=1 adds ziskemu's ZisK
-# cost (-X, much slower) to every block and ranks by it.
+# Plus our local killer blocks ($(KILLER_LOCAL); KILLER_LARGE=1 for the big ones).
+# COST=1 adds ziskemu's ZisK cost (-X, much slower) to every block and ranks by it.
 killer: rust bridge elf-test killer-fixtures killer-local-fixtures
 	scripts/killer_sweep.sh -g $(TEST_HOST)/zisk_eth_guest -e $(TEST_ELF)/zisk_eth_guest.elf \
 		-z $(ZISKEMU) -o build/killer-$(KILLER_GAS)-$(EVM_BACKEND) -j $(KILLER_JOBS) \
-		$(KILLER_PATHS) $(KILLER_LOCAL_PATHS)
+		$(KILLER_PATHS) $(KILLER_LOCAL_PATHS) $(KILLER_LARGE_PATHS)
 
 # Heap regression gate (HEAP_BUDGET.md): the gate blocks on the heap-stats ELF,
 # each block's heap/arena checked against its baseline, the bound, and a hard

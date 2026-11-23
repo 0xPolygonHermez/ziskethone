@@ -13,8 +13,10 @@
 # PASS = the ELF's 32-byte output equals the host's public output (the
 # EIP-8025 new_payload_request_root) and the host's block hash equals the
 # fixture's. Otherwise: EMU_DIFF (ELF != host), HASH_MISMATCH (both agree but
-# the hash is wrong), EMU_ERR, EMU_TIMEOUT, IG_FAIL; NEG_ prefix on
-# expect_exception blocks. Writes OUT/results.log (verdict rc steps secs cost
+# the hash is wrong), EMU_ERR, EMU_TIMEOUT, IG_FAIL, INPUT_TOO_BIG (the input
+# exceeds ZisK's 2 GiB input region, so no ELF can read it; checked before
+# ziskemu, which would need ~3x the input in RAM just to refuse it); NEG_
+# prefix on expect_exception blocks. Writes OUT/results.log (verdict rc steps secs cost
 # fixture block; the block name stays the last field) and prints a tally plus
 # the 20 costliest blocks by steps.
 # Steps understate blocks whose work sits in precompiles and memory (e.g. the
@@ -45,7 +47,7 @@ while getopts "g:e:z:o:j:" opt; do
     esac
 done
 shift $((OPTIND - 1))
-[ $# -ge 1 ] || { sed -n 2,28p "$0"; exit 2; }
+[ $# -ge 1 ] || { sed -n 2,30p "$0"; exit 2; }
 
 BRIDGE="$REPO/eest-witness-gen/target/release/eest-witness-gen"
 INPUTGEN="$REPO/target/release/input-gen-from-manifest"
@@ -83,7 +85,19 @@ phase1() {
         # With an allowlist, a kept test's setup blocks are still written; run
         # only the listed blocks (b<i> numbering is unaffected — i already ++'d).
         [ -n "$ONLY_BLOCKS" ] && ! grep -qxF "$name" "$ONLY_BLOCKS" && continue
-        exp=$(jq -r '.current.hash // empty' "$m")
+        local big=0
+        [ "$(stat -c%s "$m")" -gt 1000000000 ] && big=1
+        if [ $big = 1 ]; then
+            # jq would load all of a multi-GB manifest (the input-limit
+            # block's is 9-17 GB); the block hash is its first field.
+            exp=$(head -c 200 "$m" | sed -n 's/^{"current":{"hash":"\(0x[0-9a-f]*\)".*/\1/p')
+            # It is also still dirty page cache, which counts against a
+            # memory-capped scope and can't be dropped until written back:
+            # flush it before input-gen needs the memory.
+            sync "$m"
+        else
+            exp=$(jq -r '.current.hash // empty' "$m")
+        fi
         [ -s "$base.expect" ] && neg=1
         if ! "$INPUTGEN" --manifest "$m" --output "$B.bin" >"$B.ig.log" 2>&1; then
             echo "IG_FAIL $neg $exp - - $B $FIX $name" >>"$P"; continue
@@ -94,9 +108,13 @@ phase1() {
         outl=$(timeout 600 prlimit --core=1 "$HOST" "$B.bin" 2>"$B.host.err" | grep '^0x')
         hh=$(echo "$outl" | head -1); hn=$(echo "$outl" | tail -1)
         [ -z "$hh" ] && { hh=-; hn=-; }
-        # ziskemu input: 8-byte little-endian length, then the input.
-        python3 -I -c "import struct,sys; d=open(sys.argv[1],'rb').read(); open(sys.argv[2],'wb').write(struct.pack('<Q',len(d))+d)" "$B.bin" "$B.zin"
+        # ziskemu input: 8-byte little-endian length, then the input (copied
+        # in chunks: an input can be GBs).
+        python3 -I -c "import os,shutil,struct,sys; o=open(sys.argv[2],'wb'); o.write(struct.pack('<Q',os.path.getsize(sys.argv[1]))); shutil.copyfileobj(open(sys.argv[1],'rb'),o,1<<20)" "$B.bin" "$B.zin"
         rm -f "$B.bin"
+        # A manifest holds every code twice as hex (~4x the input): drop the
+        # big ones (the input-limit block's is ~9 GB) once the input exists.
+        [ $big = 1 ] && rm -f "$m"
         echo "OK $neg $exp $hh $hn $B $FIX $name" >>"$P"
     done
     touch "$P"; mv "$P" "$OUT/p1/$ID"
@@ -108,6 +126,15 @@ phase2() {
     [ "$st" = OK ] || { echo "IG_FAIL rc=- steps=- secs=0 cost=- $FIX $name"; return; }
     local sz mem=() xs=() t0 t1 rc steps cost=- eo=-
     sz=$(stat -c%s "$B.zin")
+    # ZisK's input region is MAX_INPUT_SIZE = 2 GiB (zisk core/src/mem.rs) and
+    # ziskemu refuses a .zin larger than that minus 8. A wrong host hash
+    # still outranks it.
+    if [ "$sz" -gt $((2147483648 - 8)) ]; then
+        local v=INPUT_TOO_BIG
+        [ "$hh" = "$exp" ] || v=HASH_MISMATCH
+        [ "$neg" = 1 ] && v="NEG_$v"
+        echo "$v rc=- steps=- secs=0 cost=- $FIX $name"; return
+    fi
     # ziskemu's default input cap is 128 MiB; the ELF's input region is 2 GiB.
     [ "$sz" -gt 100000000 ] && mem=(--max-input-mem 2147483648)
     [ "$COST" = 1 ] && xs=(-X)

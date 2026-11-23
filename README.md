@@ -261,8 +261,23 @@ KECCAK, MODEXP, pairing, large RETURNs, deep call chains and so on. They come in
 
 `make killer` also sweeps our own killer blocks in
 [`cpp-guest/test/fixtures/killer/`](cpp-guest/test/fixtures/killer) (`KILLER_LOCAL`): each one
-is a committed `.json.gz` fixture next to the execution-specs test that fills it. Set
-`KILLER_LOCAL_PATHS=` to skip them. Today there is one:
+is a committed `.json.gz` or `.json.xz` fixture next to the execution-specs test or script
+that builds it. Set `KILLER_LOCAL_PATHS=` to skip them. Today there are two:
+- **Input limit** (`input_limit_extcodesize_34k_200M`), Amsterdam, 200M gas. **It fails
+  (`INPUT_TOO_BIG`): ZisK can't prove it.** An account commits to its code only by hash, so a
+  stateless guest needs the whole code for every `EXTCODESIZE`. Amsterdam allows 64 KiB of
+  code (EIP-7954), and a cold `EXTCODESIZE` costs 3,100 gas whatever the code size
+  (EIP-8038). The block loads 34,000 distinct 64 KiB contracts, which makes a
+  2,234,400,712-byte input (2.08 GiB). ZisK's input region is 2 GiB (`MAX_INPUT_SIZE` in
+  `zisk/core/src/mem.rs`), and `ziskemu` refuses it (`input size too big`). The host guest
+  accepts it with the right block hash. 34,000 contracts is about the smallest block that
+  surely fails. A worst-case 200M block loads 64,206 contracts, a 4,219,490,456-byte input
+  (3.93 GiB): that one is in `large/` and runs only with `KILLER_LARGE=1`, because its phase 1
+  needs about 9 GB of RAM. EELS `fill` can't build blocks this size, so
+  [`gen_input_limit_block.py`](cpp-guest/test/fixtures/killer/gen_input_limit_block.py)
+  drives EELS directly. It holds the codes lazily, checks the block with `execute_block`, and
+  streams the fixture out. The 34k block needs about 7 GB of RAM in phase 1 and about 16 GB of
+  disk while it runs.
 - **Z-3 analysis-cache thrash** (audit 2026-11-17), Amsterdam, 200M gas. The block warm-calls
   1153 contracts of 64 KiB in a cycle. That is more than the 1152 slots of the guest's
   JUMPDEST-analysis cache, so every call re-analyses a full code. It passes. Its steps look
@@ -278,7 +293,7 @@ is a committed `.json.gz` fixture next to the execution-specs test that fills it
 
 `make killer` does the following:
 1. Downloads the set into `build/fixtures/killer-$(KILLER_GAS)`, and unpacks the local blocks
-   into `build/fixtures/killer-local`.
+   into `build/fixtures/killer-local` (and `killer-large` with `KILLER_LARGE=1`).
 2. Builds the test host guest and the **ZisK ELF** (`ZEG_FORK_FROM_INPUT=ON`).
 3. Runs [`scripts/killer_sweep.sh`](scripts/killer_sweep.sh):
    - **Phase 1:** each fixture goes through the bridge and the host guest.
@@ -290,6 +305,9 @@ host's block hash equals the fixture's. The others are:
 - `EMU_DIFF`: the ELF disagrees with the host.
 - `EMU_ERR` / `EMU_TIMEOUT`: the ELF halted, for example out of memory, or ran too long.
 - `HASH_MISMATCH`: the ELF and host agree, but the hash is wrong.
+- `INPUT_TOO_BIG`: the input exceeds ZisK's 2 GiB input region, so no ZisK program can read
+  it. The sweep checks this before starting `ziskemu`, which would need about three times the
+  input in RAM just to refuse it.
 
 The sweep prints a tally and the 20 costliest blocks by steps, and writes
 `build/killer-$(KILLER_GAS)-$(EVM_BACKEND)/results.log`. A full 200M run takes several hours.
@@ -471,7 +489,7 @@ Things to keep in mind:
 | `make exex` / `proof-engine` / `bridge` | Builds those crates. |
 | `make guest-test` / `elf-test` | Host guest and ELF with `ZEG_FORK_FROM_INPUT=ON`. |
 | `make eest [EEST_PATHS=]` | The EEST conformance sweep. |
-| `make killer [KILLER_GAS=] [KILLER_PATHS=]` | The prover-killer sweep on the ELF. |
+| `make killer [KILLER_GAS=] [KILLER_PATHS=] [KILLER_LARGE=1] [COST=1]` | The prover-killer sweep on the ELF. |
 | `make heap-gate CHAIN=mainnet [EVM_BACKEND=]` | The heap regression gate ([HEAP_BUDGET.md](HEAP_BUDGET.md)). |
 | `make help` | Lists the variables: `EVM_BACKEND`, `CHAIN`, `JOBS`, `KILLER_JOBS`, `FIXTURES`, `ZISKEMU`, `RISCV_GCC_BIN`. |
 

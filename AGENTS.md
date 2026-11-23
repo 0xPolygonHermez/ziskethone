@@ -54,11 +54,18 @@
 - **`make killer`**: the prover-killer sweep (`scripts/killer_sweep.sh`).
   - It runs the zkevm-benchmark 200M-gas worst-case blocks (`tests-zkevm-benchmark@v21.0.5`,
     `KILLER_GAS=0200M`) on the **ZisK ELF in ziskemu**.
-  - It also runs our own killer blocks, committed as `.json.gz` in
-    `cpp-guest/test/fixtures/killer/` next to the execution-specs test that fills them
-    (`KILLER_LOCAL_PATHS=` skips them). Today that is the audit Z-3 analysis-cache thrash block.
-    It PASSes, but it costs 1,401G on evmone and 941G on zevm, against 356G for the worst
-    zkevm-benchmark block. That stays so until Z-3 is fixed.
+  - It also runs our own killer blocks, committed as `.json.gz`/`.json.xz` in
+    `cpp-guest/test/fixtures/killer/` next to the execution-specs test or script that builds
+    them (`KILLER_LOCAL_PATHS=` skips them):
+    - The audit Z-3 analysis-cache thrash block. It PASSes, but it costs 1,401G on evmone and
+      941G on zevm, against 356G for the worst zkevm-benchmark block. That stays so until Z-3
+      is fixed.
+    - The input-limit block (`gen_input_limit_block.py`): cold `EXTCODESIZE` over 34,000
+      distinct 64 KiB contracts makes a 2.08 GiB input, over ZisK's 2 GiB input region.
+      **It fails (`INPUT_TOO_BIG`) until that limit is solved, so `make killer` is not clean
+      today.** The host guest accepts it. Phase 1 needs about 7 GB of RAM.
+      `KILLER_LARGE=1` adds the full 200M version (64,206 contracts, 3.93 GiB of input, about
+      9 GB of RAM).
   - A block passes when the ELF output equals the host root and the block hash is right.
   - It prints the costliest blocks by steps. Results go to
     `build/killer-0200M-<backend>/results.log`.
@@ -66,7 +73,7 @@
     times slower. Use it for blocks whose cost is in precompiles and memory, which steps
     understate.
   - It needs `ziskemu` (`ZISKEMU=`) and the patched GCC (`make toolchain`, or `RISCV_GCC_BIN=`).
-  - Expected: every block PASSes on both backends.
+  - Expected: every block PASSes on both backends, except the input-limit block above.
 - **`make unit`**: host unit tests for the guest's memory-discipline building blocks
   (`cpp-guest/test/*_test.cpp`: ChunkedVector, the tx arena / FrameScratch, the seeded hash,
   Contracts staging, state-root ChainNode folding). `make unit SANITIZE=1` runs them under

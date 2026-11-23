@@ -57,10 +57,15 @@ fn main() -> Result<()> {
         "loading manifest",
     );
 
-    let json = std::fs::read_to_string(&args.manifest)
+    // Streamed: a manifest holds every code twice as hex, so for a block
+    // with GBs of code the text alone would dwarf the parsed sources.
+    let file = std::fs::File::open(&args.manifest)
         .with_context(|| format!("reading manifest {}", args.manifest.display()))?;
-    let sources: OfflineSources = serde_json::from_str(&json)
-        .with_context(|| format!("parsing manifest {}", args.manifest.display()))?;
+    // Interned: the manifest repeats every code (prestate, diff, witness).
+    let sources: OfflineSources = rust_input_gen::rpc::intern_codes(|| {
+        serde_json::from_reader(std::io::BufReader::with_capacity(1 << 20, file))
+    })
+    .with_context(|| format!("parsing manifest {}", args.manifest.display()))?;
     info!(
         block_number = sources.current.header.number,
         block_hash = %sources.current.header.hash,
