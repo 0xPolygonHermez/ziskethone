@@ -21,13 +21,16 @@ It is enforced, not just written down:
 
 ## The allocator
 
-2 GiB of RAM, minus a 4 MiB stack and small reserved regions, leaves the heap
-(`cpp-guest/zisk/zisk.ld`, `_heap_start.._heap_end`):
+The RAM the guest is linked for, minus a 4 MiB stack and small reserved regions,
+leaves the heap (`cpp-guest/zisk/zisk.ld`, `_heap_start.._heap_end`). That is
+512 MiB by default, what a ZisK prover reserves; `-DZEG_RAM_2GB=ON` links with
+`zisk_ram2gb.ld` for 2 GiB, which only a prover built with ZisK's `ram_2gb` feature
+can run (the tx arena writes at the top of the RAM from the first transaction):
 
-| Backend | Heap |
-|---|---|
-| evmone | 2142.8 MB |
-| zevm | 1974.7 MB |
+| Backend | Heap (512 MiB, default) | Heap (2 GiB, `ZEG_RAM_2GB`) |
+|---|---|---|
+| evmone | 532.2 MB | 2142.8 MB |
+| zevm | 364.1 MB | 1974.7 MB |
 
 Two allocators share it (`cpp-guest/zisk/runtime.cpp`):
 

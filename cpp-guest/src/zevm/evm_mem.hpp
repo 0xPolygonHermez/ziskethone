@@ -24,7 +24,7 @@ namespace zevm {
 // must recycle dirty space (kMemBlockSize is the perf knob: bigger => less
 // cleaning). Both are zero-init BSS, so they cost address space, not real pages,
 // until actually touched -- but in the ZisK guest they come out of the same
-// 2 GiB RAM as the heap, so every MiB here is a MiB less heap.
+// RAM (512 MiB, or 2 GiB with ZEG_RAM_2GB) as the heap, so every MiB here is a MiB less heap.
 //
 // Why 64 MiB is enough: createMemory() starts a frame in clean space only below
 // kMemBlockSize - kMaxMemPerTx, else right above its same-parity parent, so a

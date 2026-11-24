@@ -260,6 +260,21 @@ endif()
 # blocks (<=~350 distinct contracts) never evict.
 set(ZEG_ANALYSIS_CACHE_SLOTS "1152" CACHE STRING "Analysis cache slots")
 
+# RAM the guest is linked for, from 0xC000_0000: the heap ends there and the tx
+# arena starts there, so the guest writes at the top of it from the first
+# transaction. A ZisK prover reserves 512 MB of RAM by default and 2 GB when built
+# with its `ram_2gb` feature, and faults on any access beyond what it reserved:
+# link for the RAM of the prover that runs the ELF. OFF links with zisk.ld (512
+# MB), ON with zisk_ram2gb.ld (2 GB), which includes zisk.ld.
+option(ZEG_RAM_2GB "Link for 2 GB of RAM (a ZisK prover built with ram_2gb) instead of 512 MB" OFF)
+if(ZEG_RAM_2GB)
+  set(ZEG_LINKER_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/zisk_ram2gb.ld)
+  set(ZEG_RAM_MB 2048)
+else()
+  set(ZEG_LINKER_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld)
+  set(ZEG_RAM_MB 512)
+endif()
+
 # Debug: print heap usage at the run() phase boundaries (zeg/heap_stats.hpp).
 option(ZEG_HEAP_STATS "Print guest heap usage per phase over the UART" OFF)
 
@@ -281,7 +296,7 @@ target_compile_options(zisk_eth_guest.elf PRIVATE $<$<CONFIG:Release>:${ZEG_GUES
 # grep ZEG_BUILD_FLAGS`; the exex logs and checks it). main.cpp places it in
 # .rodata.zeg_build_flags, which zisk.ld KEEPs; it costs no steps.
 set(ZEG_BUILD_FLAGS
-  "chain=${ZEG_CHAIN};backend=${EVM_BACKEND};fork_from_input=$<BOOL:${ZEG_FORK_FROM_INPUT}>;output=${ZEG_PUBLIC_OUTPUT};heap_stats=$<BOOL:${ZEG_HEAP_STATS}>;jumpdest_sw=$<BOOL:${ZEG_JUMPDEST_SW}>;bswap_builtin=$<BOOL:${ZEG_BSWAP_BUILTIN}>;zisk_dma=$<BOOL:${ZEG_ZISK_DMA}>;analysis_cache_slots=${ZEG_ANALYSIS_CACHE_SLOTS};build_type=${CMAKE_BUILD_TYPE}")
+  "chain=${ZEG_CHAIN};backend=${EVM_BACKEND};fork_from_input=$<BOOL:${ZEG_FORK_FROM_INPUT}>;output=${ZEG_PUBLIC_OUTPUT};heap_stats=$<BOOL:${ZEG_HEAP_STATS}>;jumpdest_sw=$<BOOL:${ZEG_JUMPDEST_SW}>;bswap_builtin=$<BOOL:${ZEG_BSWAP_BUILTIN}>;zisk_dma=$<BOOL:${ZEG_ZISK_DMA}>;analysis_cache_slots=${ZEG_ANALYSIS_CACHE_SLOTS};ram_mb=${ZEG_RAM_MB};build_type=${CMAKE_BUILD_TYPE}")
 file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/zeg_build_flags.h
   CONTENT "#define ZEG_BUILD_FLAGS \"${ZEG_BUILD_FLAGS}\"\n")
 target_include_directories(zisk_eth_guest.elf PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
@@ -314,11 +329,12 @@ target_include_directories(zisk_eth_guest.elf PRIVATE
 
 # Freestanding link: our linker script + no stdlib + dead-strip.
 target_link_options(zisk_eth_guest.elf PRIVATE
-  -T ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld
+  -L ${CMAKE_CURRENT_SOURCE_DIR}
+  -T ${ZEG_LINKER_SCRIPT}
   -nostdlib -nostartfiles
   -Wl,--gc-sections)
 set_target_properties(zisk_eth_guest.elf PROPERTIES LINK_DEPENDS
-  ${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld)
+  "${CMAKE_CURRENT_SOURCE_DIR}/zisk.ld;${CMAKE_CURRENT_SOURCE_DIR}/zisk_ram2gb.ld")
 
 # Strip sections the ZisK loader rejects.
 add_custom_command(TARGET zisk_eth_guest.elf POST_BUILD

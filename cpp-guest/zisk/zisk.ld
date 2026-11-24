@@ -7,7 +7,10 @@
  * 0xA800_0000 (128 MB), a 256 MB unmapped stack guard below RAM, and 2 GB of RAM
  * at 0xC000_0000, which ends at 0x1_4000_0000, above the 32-bit range. The float
  * and ZisK-library scratch regions are reserved at the bottom of RAM, right after
- * the output region, so the heap runs to the very end of RAM.
+ * the output region, so the heap runs to the end of the RAM the guest is linked
+ * for: 512 MB with this script (what a ZisK prover reserves by default), 2 GB with
+ * zisk_ram2gb.ld (a prover built with its `ram_2gb` feature), which sets
+ * ZISK_RAM_SIZE and includes this script.
  *
  * The code is linked with -mcmodel=medany, which reaches +-2 GiB from the ROM,
  * i.e. up to 0x1_2800_0000 (_pc_reach_end). .data and .bss must end below it (the
@@ -58,6 +61,15 @@ _zisklib_ram_data_size       = 0x30000;   /* 192 KB reserved (ZisK library scrat
    the system regions) must stay below this limit; the heap beyond it is reached through
    pointers. Keep in sync with PC_REACH_END in core/src/mem.rs. */
 _pc_reach_end                = ORIGIN(rom) + 0x80000000;
+
+/* RAM the guest uses, from ORIGIN(ram); the heap ends there, and the tx arena
+   (runtime.cpp) starts there and grows down, so the guest writes at the top of
+   this RAM from its first transaction. A ZisK prover reserves 512 MB of the 2 GB
+   window by default, the whole window with its `ram_2gb` feature, and any access
+   beyond it faults: link for the RAM of the prover that runs the ELF. */
+_zisk_ram_size               = DEFINED(ZISK_RAM_SIZE) ? ZISK_RAM_SIZE : 0x20000000;
+ASSERT(_zisk_ram_size == 0x20000000 || _zisk_ram_size == 0x80000000,
+       "ZISK_RAM_SIZE must be 512 MB (0x20000000) or 2 GB (0x80000000)")
 
 /*
 
@@ -192,8 +204,10 @@ SECTIONS
 
   ASSERT(. <= _pc_reach_end, "guest .data/.bss end beyond the PC-relative reach of the code (2GiB from the ROM)")
 
+  ASSERT(. < ORIGIN(ram) + _zisk_ram_size, "guest .data/.bss end beyond ZISK_RAM_SIZE")
+
   PROVIDE(_heap_bottom = .);
-  PROVIDE(_heap_top = ORIGIN(ram) + LENGTH(ram));
+  PROVIDE(_heap_top = ORIGIN(ram) + _zisk_ram_size);
   PROVIDE(_heap_size = _heap_top - _heap_bottom);
 
   /* EF zkVM standard §9 names the allocator bounds `_heap_start` / `_heap_end`.
@@ -209,7 +223,7 @@ SECTIONS
      are recomputed rather than aliased so they do not depend on the PROVIDEs above
      having materialized either. */
   _heap_start = .;
-  _heap_end = ORIGIN(ram) + LENGTH(ram);
+  _heap_end = ORIGIN(ram) + _zisk_ram_size;
 
   _end = .;
 }
